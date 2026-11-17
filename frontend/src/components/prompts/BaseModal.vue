@@ -7,7 +7,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 
 const emit = defineEmits(["closed"]);
 
@@ -34,12 +34,18 @@ const backgroundClick = (event: Event) => {
   }
 };
 
-window.addEventListener("keydown", (event) => {
+// Escape closes the dialog and nothing else: listen in the capture phase,
+// so this runs before the page's own Escape handlers (closing the editor or
+// preview, clearing the selection) and can stop them, and only while the
+// dialog is mounted.
+const onKeydown = (event: KeyboardEvent) => {
   if (event.key === "Escape") {
     event.stopImmediatePropagation();
     emit("closed");
   }
-});
+};
+onMounted(() => window.addEventListener("keydown", onKeydown, true));
+onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown, true));
 </script>
 
 <style scoped>
