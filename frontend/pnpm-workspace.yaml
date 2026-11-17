@@ -1,0 +1,11 @@
+# pnpm settings for the frontend (pnpm >= 11 no longer reads the "pnpm" field
+# of package.json, and .npmrc only carries auth/registry settings).
+
+# pnpm >= 11 fails the install (strictDepBuilds) when a dependency has an
+# install script that is not listed here. None of these scripts are needed:
+# core-js and es5-ext only print funding/protest messages, and esbuild gets its
+# platform binary from an optional dependency instead of its postinstall.
+allowBuilds:
+  core-js: false
+  es5-ext: false
+  esbuild: false
