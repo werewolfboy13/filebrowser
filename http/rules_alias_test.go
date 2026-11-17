@@ -289,9 +289,10 @@ func TestRulesApplyToLinksThatClimbOutOfALink(t *testing.T) {
 	}
 
 	// A visitor of a public share is bound by the same rules.
-	for _, shared := range []string{"/pub", "/"} {
+	// The shared path, and where /pub is inside the share.
+	for shared, pub := range map[string]string{"/pub": "", "/": "/pub"} {
 		hash := e.createShare(tok, shared, "{}")
-		prefix := hash + strings.TrimSuffix("/pub", shared)
+		prefix := hash + pub
 		for _, sub := range []string{"/alias", "/dalias", "/dalias/secret.txt"} {
 			for _, endpoint := range []string{"/api/public/dl/", "/api/public/share/"} {
 				code, _, body := e.do(http.MethodGet, endpoint+prefix+sub, "", nil, nil)
@@ -309,6 +310,36 @@ func TestRulesApplyToLinksThatClimbOutOfALink(t *testing.T) {
 				t.Errorf("the share of %s lists %s", shared, name)
 			}
 		}
+	}
+
+	// A path that cannot be followed at all is refused rather than waved
+	// through: where it leads cannot be checked against the rules.
+	for _, l := range [][2]string{{"pub/loop", "loop"}, {"pub/ping", "pong"}, {"pub/pong", "ping"}, {"pub/throughfile", "readme.txt/../../denied/secret.txt"}} {
+		if err := os.Symlink(l[1], filepath.Join(e.bobDir, filepath.FromSlash(l[0]))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []string{"/pub/loop", "/pub/ping", "/pub/loop/secret.txt", "/pub/throughfile", "/pub/readme.txt/child"} {
+		for _, rq := range []struct{ method, prefix, body string }{
+			{http.MethodGet, "/api/raw", ""},
+			{http.MethodGet, "/api/resources", ""},
+			{http.MethodPut, "/api/resources", "PWNED"},
+			{http.MethodPost, "/api/resources", "PWNED"},
+		} {
+			code, _, body := e.do(rq.method, rq.prefix+p, tok, strings.NewReader(rq.body), nil)
+			if code != http.StatusForbidden || strings.Contains(body, "TOP-SECRET") {
+				t.Errorf("%s %s%s = %d, want 403", rq.method, rq.prefix, p, code)
+			}
+		}
+	}
+	_, _, listing = e.do(http.MethodGet, "/api/resources/pub/", tok, nil, nil)
+	for _, name := range []string{`"loop"`, `"ping"`, `"throughfile"`} {
+		if strings.Contains(listing, `"name":`+name) {
+			t.Errorf("the listing of /pub names %s, which leads nowhere", name)
+		}
+	}
+	if !strings.Contains(listing, `"name":"readme.txt"`) {
+		t.Errorf("the listing of /pub lost readme.txt: %s", listing)
 	}
 
 	// What the rules allow still works, also through such a link.

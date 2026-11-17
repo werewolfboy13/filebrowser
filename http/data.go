@@ -108,12 +108,35 @@ func (d *data) CheckRules(path string) bool {
 		return true
 	}
 
-	if resolved, ok := d.resolvedRulePath(path); ok && resolved != rulePath {
-		return d.rulesAllow(resolved)
+	switch resolved, where := d.resolvedRulePath(path); where {
+	case leadsInside:
+		if resolved != rulePath {
+			return d.rulesAllow(resolved)
+		}
+	case leadsNowhere:
+		// Where the path leads cannot be told, so it cannot be told whether
+		// a rule denies that place. The kernel does not open such a path
+		// either (it goes through a loop of links, or through something that
+		// is not a directory), so nothing is lost by refusing it; should the
+		// two ever disagree, this is the side to err on.
+		return false
 	}
 
 	return true
 }
+
+// Where a path leads once symbolic links are followed, as far as the rules
+// are concerned.
+const (
+	// leadsInside: to a place inside the scope the rules are relative to.
+	leadsInside = iota
+	// leadsOutside: out of that scope, or the filesystem is not one on disk.
+	// The scoped filesystem refuses such a path on its own, and when
+	// external symlinks are allowed no rule can describe it.
+	leadsOutside
+	// leadsNowhere: it cannot be resolved.
+	leadsNowhere
+)
 
 // protected reports whether path names one of the server's own files that lie
 // inside the served directory (see settings.Server.Protect): the database,
@@ -191,14 +214,17 @@ func (d *data) rulesAllow(path string) bool {
 }
 
 // resolvedRulePath returns the path, in the form the rules are written in,
-// that path leads to once symbolic links are followed. It reports false when
-// that cannot be told or lies outside the scope the rules are relative to:
-// the scoped filesystem refuses such a path on its own, and when external
-// symlinks are allowed no rule can describe it.
-func (d *data) resolvedRulePath(path string) (string, bool) {
+// that path leads to once symbolic links are followed, and which of
+// leadsInside, leadsOutside and leadsNowhere it is. The path is only
+// meaningful for leadsInside.
+func (d *data) resolvedRulePath(path string) (resolved string, where int) {
+	if files.BasePath(d.user.Fs) == nil {
+		return "", leadsOutside
+	}
+
 	onDisk, ok := d.realPath(path)
 	if !ok {
-		return "", false
+		return "", leadsNowhere
 	}
 
 	root := d.scopeRoot
@@ -207,15 +233,15 @@ func (d *data) resolvedRulePath(path string) (string, bool) {
 	}
 	root, ok = d.resolvePath(root)
 	if !ok {
-		return "", false
+		return "", leadsNowhere
 	}
 
 	rel, err := filepath.Rel(root, onDisk)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", false
+		return "", leadsOutside
 	}
 
-	return slashClean(filepath.ToSlash(rel)), true
+	return slashClean(filepath.ToSlash(rel)), leadsInside
 }
 
 // realPath returns where path, a path in the user's filesystem, is on disk
