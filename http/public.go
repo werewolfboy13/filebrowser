@@ -142,7 +142,9 @@ func authenticateShareRequest(r *http.Request, l *share.Link) (int, error) {
 		return 0, nil
 	}
 
-	if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(l.Token)) == 1 {
+	// An empty stored token must never match: the query parameter is empty
+	// whenever the client does not send one.
+	if l.Token != "" && subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(l.Token)) == 1 {
 		return 0, nil
 	}
 

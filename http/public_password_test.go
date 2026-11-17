@@ -71,3 +71,43 @@ func TestPublicShareMalformedPasswordIsBadRequest(t *testing.T) {
 		t.Errorf("unusable stored hash = %d %q, want 500", code, body)
 	}
 }
+
+// The bypass token of a password-protected share is compared with the "token"
+// query parameter. A record with a password hash but no token (none is written
+// by the code today; it takes a hand-edited or imported database) compared ""
+// with "" and so served the share to anyone. An empty stored token must never
+// match.
+func TestPublicShareEmptyStoredTokenDoesNotBypassPassword(t *testing.T) {
+	e := newFullEnv(t)
+	e.writeBobFile("page.txt", "shared content")
+	tok := e.login("bob", fullEnvUserPassword)
+	hash := e.createShare(tok, "/page.txt", `{"password":"sharepw"}`)
+
+	link, err := e.st.Share.GetByHash(hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := link.Token
+	if token == "" {
+		t.Fatal("a password-protected share was created without a token")
+	}
+
+	// Control: the stored token opens the share without the password.
+	if code, _, body := e.do(http.MethodGet, "/api/public/dl/"+hash+"?token="+token, "", nil, nil); code != http.StatusOK || body != "shared content" {
+		t.Fatalf("download with the share token = %d %q", code, body)
+	}
+
+	link.Token = ""
+	if err := e.st.Share.Save(link); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"", "?token="} {
+		code, _, body := e.do(http.MethodGet, "/api/public/dl/"+hash+query, "", nil, nil)
+		if code != http.StatusUnauthorized || strings.Contains(body, "shared content") {
+			t.Errorf("no password, empty stored token, query %q = %d %q, want 401", query, code, body)
+		}
+	}
+	if code, _, _ := e.do(http.MethodGet, "/api/public/dl/"+hash, "", nil, map[string]string{"X-SHARE-PASSWORD": "sharepw"}); code != http.StatusOK {
+		t.Errorf("the password still has to work, got %d", code)
+	}
+}
