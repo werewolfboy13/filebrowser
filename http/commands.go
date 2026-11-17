@@ -111,6 +111,9 @@ var commandsHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *d
 			log.Print(err)
 		}
 	}
+	if err := s.Err(); err != nil {
+		log.Print(err)
+	}
 
 	if err := cmd.Wait(); err != nil {
 		wsErr(conn, r, http.StatusInternalServerError, err)
