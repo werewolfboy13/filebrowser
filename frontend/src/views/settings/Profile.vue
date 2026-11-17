@@ -164,25 +164,26 @@ const updatePassword = async (event: Event) => {
   if (
     password.value !== passwordConf.value ||
     password.value === "" ||
-    currentPassword.value === "" ||
+    // only JSON auth asks for (and shows a field for) the current password
+    (isCurrentPasswordRequired.value && currentPassword.value === "") ||
     authStore.user === null
   ) {
     return;
   }
 
   try {
-    const data = {
-      ...authStore.user,
-      id: authStore.user.id,
-      password: password.value,
-    };
-    await api.update(data, ["password"], currentPassword.value);
-    authStore.updateUser(data);
+    // Send only what changes, and never keep the plaintext password in the
+    // store (later updates used to spread the stored user into their body).
+    await api.update(
+      { id: authStore.user.id, password: password.value },
+      ["password"],
+      isCurrentPasswordRequired.value ? currentPassword.value : null
+    );
     $showSuccess(t("settings.passwordUpdated"));
   } catch (e: any) {
     $showError(e);
   } finally {
-    password.value = passwordConf.value = "";
+    password.value = passwordConf.value = currentPassword.value = "";
   }
 };
 const updateSettings = async (event: Event) => {
@@ -191,8 +192,9 @@ const updateSettings = async (event: Event) => {
   try {
     if (authStore.user === null) throw new Error("User is not set!");
 
+    // Only the fields listed in "which" below: none of them needs the
+    // current password.
     const data = {
-      ...authStore.user,
       id: authStore.user.id,
       locale: locale.value,
       hideDotfiles: hideDotfiles.value,

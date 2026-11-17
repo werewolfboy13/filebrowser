@@ -198,8 +198,14 @@ const send = async (currentPassword: string) => {
     } else {
       await api.update(user.value, ["all"], currentPassword);
 
-      if (user.value.id === authStore.user?.id) {
-        authStore.updateUser(user.value);
+      // Don't keep a new plaintext password around: neither in the auth
+      // store (when editing yourself) nor in the form, where a second save
+      // would send it again.
+      const saved: Partial<IUser> = { ...user.value };
+      delete saved.password;
+      user.value.password = "";
+      if (saved.id === authStore.user?.id) {
+        authStore.updateUser(saved);
       }
 
       $showSuccess(t("settings.userUpdated"));
