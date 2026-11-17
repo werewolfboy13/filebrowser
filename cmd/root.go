@@ -98,14 +98,9 @@ func init() {
 // addServerFlags adds server related flags to the given FlagSet. These flags are available
 // in both the root command, config set and config init commands.
 func addServerFlags(flags *pflag.FlagSet) {
-	flags.StringP("address", "a", "127.0.0.1", "address to listen on")
+	addListenFlags(flags)
 	flags.StringP("log", "l", "stdout", "log output")
-	flags.StringP("port", "p", "8080", "port to listen on")
-	flags.StringP("cert", "t", "", "tls certificate")
-	flags.StringP("key", "k", "", "tls key")
 	flags.StringP("root", "r", ".", "root to prepend to relative paths")
-	flags.String("socket", "", "socket to listen to (cannot be used with address, port, cert nor key flags)")
-	flags.StringP("baseURL", "b", "", "base url")
 	flags.String("tokenExpirationTime", "2h", "user session timeout")
 	flags.Bool("disableThumbnails", false, "disable image thumbnails")
 	flags.Bool("disablePreviewResize", false, "disable resize of image previews")
@@ -113,6 +108,17 @@ func addServerFlags(flags *pflag.FlagSet) {
 	flags.Bool("disableTypeDetectionByHeader", false, "disables type detection by reading file headers")
 	flags.Bool("disableImageResolutionCalc", false, "disables image resolution calculation by reading image files")
 	flags.Bool("followExternalSymlinks", false, "follow symlinks whose target is outside the user scope (unsafe)")
+}
+
+// addListenFlags adds the flags that say where the server listens. The health
+// command has them too, so that it looks for the server in the same place.
+func addListenFlags(flags *pflag.FlagSet) {
+	flags.StringP("address", "a", "127.0.0.1", "address to listen on")
+	flags.StringP("port", "p", "8080", "port to listen on")
+	flags.StringP("cert", "t", "", "tls certificate")
+	flags.StringP("key", "k", "", "tls key")
+	flags.String("socket", "", "socket to listen to (cannot be used with address, port, cert nor key flags)")
+	flags.StringP("baseURL", "b", "", "base url")
 }
 
 var rootCmd = &cobra.Command{
@@ -127,18 +133,22 @@ it. Don't worry: you don't need to setup a separate database server.
 We're using Bolt DB which is a single file database and all managed
 by ourselves.
 
-For this command, all flags are available as environmental variables,
-except for "--config", which specifies the configuration file to use.
+For this command, all flags are available as environmental variables.
 The environment variables are prefixed by "FB_" followed by the flag name in
 UPPER_SNAKE_CASE. For example, the flag "--disablePreviewResize" is available
 as FB_DISABLE_PREVIEW_RESIZE.
 
-If "--config" is not specified, File Browser will look for a configuration
-file named .filebrowser.{json, toml, yaml, yml} in the following directories:
+If neither "--config" nor FB_CONFIG is specified, File Browser will look for
+a configuration file named .filebrowser.{json, toml, yaml, yml} in the
+following directories:
 
 - ./
 - $HOME/
 - /etc/filebrowser/
+
+If FB_CONFIG names a file that does not exist and FB_CONFIG_TEMPLATE names
+one that does, the template is copied to the FB_CONFIG path first. The Docker
+image uses this to create its default configuration on the first start.
 
 **Note:** Only the options listed below can be set via the config file or
 environment variables. Other configuration options live exclusively in the
