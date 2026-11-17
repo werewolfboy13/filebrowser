@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/filebrowser/filebrowser/v2/files"
@@ -56,11 +57,62 @@ func keepUploadActive(cache UploadCache, filePath string) func() {
 	}
 }
 
+// tusBusy holds the uploads a request is currently working on, by the real
+// path of their destination.
+//
+// The TUS handlers read the state of an upload (does it exist, how much has
+// been written) and then act on it, which is only correct while nobody else
+// changes that state. Rather than making a second request for the same upload
+// wait, it is refused: a client that stalls in the middle of a chunk would
+// otherwise hold up everyone queued behind it for as long as it likes. The
+// mutex guards the set only and is never held while a request does its work.
+//
+// The set is local to this process. With several replicas sharing one upload
+// cache, two of them can still work on the same upload at once.
+var tusBusy = struct {
+	sync.Mutex
+	paths map[string]struct{}
+}{paths: map[string]struct{}{}}
+
+// tusAcquire marks the upload to the request path as being worked on. It
+// reports false, without waiting, when another request already is; otherwise
+// the returned function must be called when the work is done.
+func tusAcquire(d *data, r *http.Request) (release func(), ok bool) {
+	key := filepath.Clean(d.user.FullPath(r.URL.Path))
+
+	tusBusy.Lock()
+	defer tusBusy.Unlock()
+
+	if _, busy := tusBusy.paths[key]; busy {
+		return nil, false
+	}
+	tusBusy.paths[key] = struct{}{}
+
+	return func() {
+		tusBusy.Lock()
+		delete(tusBusy.paths, key)
+		tusBusy.Unlock()
+	}, true
+}
+
+// errTusBusy is the answer to a request for an upload another request is
+// working on. 423 is what the TUS protocol defines for it, and unlike 409 the
+// web interface retries it.
+var errTusBusy = errors.New("another request for this upload is in progress")
+
 func tusPostHandler(cache UploadCache) handleFunc {
 	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		if !d.user.Perm.Create || !d.Check(r.URL.Path) {
 			return http.StatusForbidden, nil
 		}
+
+		// Creating an upload truncates what a PATCH in progress is appending
+		// to, so it is serialised with the other requests for the upload.
+		release, ok := tusAcquire(d, r)
+		if !ok {
+			return http.StatusLocked, errTusBusy
+		}
+		defer release()
 
 		file, err := files.NewFileInfo(&files.FileOptions{
 			Fs:         d.user.Fs,
@@ -202,6 +254,16 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 		return http.StatusBadRequest, fmt.Errorf("invalid upload offset")
 	}
 
+	// One request at a time per upload: the check below that the file is as
+	// long as the offset says, and the append that follows it, must not
+	// interleave with those of another request. Two requests at the same
+	// offset would otherwise both pass the check and both append.
+	release, ok := tusAcquire(d, r)
+	if !ok {
+		return http.StatusLocked, errTusBusy
+	}
+	defer release()
+
 	file, err := files.NewFileInfo(&files.FileOptions{
 		Fs:         d.user.Fs,
 		Path:       r.URL.Path,
@@ -315,6 +377,12 @@ func tusDeleteHandler(cache UploadCache) handleFunc {
 		if err != nil {
 			return http.StatusNotFound, err
 		}
+
+		release, ok := tusAcquire(d, r)
+		if !ok {
+			return http.StatusLocked, errTusBusy
+		}
+		defer release()
 
 		err = d.user.Fs.RemoveAll(r.URL.Path)
 		if err != nil {
