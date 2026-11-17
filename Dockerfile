@@ -1,5 +1,6 @@
 # Use multi-stage builds to build File Browser from source and keep the final image small
-# All stages use Docker Hardened Images, which need a `docker login dhi.io` to pull.
+# All stages use Docker Hardened Images with floating tags, which need a `docker login dhi.io` to
+# pull. Build with --pull to get their latest security patches.
 
 # When the image's SBOM is generated, also scan the build context. It is declared before the first
 # FROM, so it applies to the final image's SBOM.
@@ -44,12 +45,6 @@ WORKDIR /opt/workdir
 # The runtime image has no C library, so the binary must not need one.
 ENV CGO_ENABLED=0
 
-# /etc/mime.types, which Go reads to tell a file's type from its extension, for the types that
-# File Browser's own list (files/mime.go) does not have. The runtime image has no such file.
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends media-types && \
-    rm -rf /var/lib/apt/lists/*
-
 # Download the Go modules, and check them against go.sum
 COPY go.mod go.sum ./
 RUN go mod download && \
@@ -85,7 +80,17 @@ RUN --network=none \
 # The runtime stage cannot run mkdir, so the empty directories for its volumes are made here.
 RUN mkdir -p /out/srv /out/config /out/database
 
-# Stage 3: Runtime
+# Stage 3: MIME types
+# /etc/mime.types, which Go reads to tell a file's type from its extension, for the types that
+# File Browser's own list (files/mime.go) does not have. The runtime image has no such file. It
+# comes from Alpine's mailcap package, as in the earlier File Browser images, so every file keeps
+# the type it had there. Debian's list, which the other stages could install, lacks some of them,
+# such as .3gp videos.
+FROM --platform=$BUILDPLATFORM dhi.io/alpine-base:3.23-dev AS mime
+
+RUN apk add --no-cache mailcap
+
+# Stage 4: Runtime
 # The static image has no shell, package manager or C library: only CA certificates, time zones and
 # the like. It has no `latest` tag, so the tag is the version of the image's definition, which
 # still gets rebuilt with security patches.
@@ -94,7 +99,7 @@ FROM dhi.io/static:20250419
 # Copy only the necessary files from the build stage. The binary and the default settings belong to
 # root, so the server cannot change them.
 COPY --from=build /out/filebrowser /bin/filebrowser
-COPY --from=build /etc/mime.types /etc/mime.types
+COPY --from=mime /etc/mime.types /etc/mime.types
 COPY docker/defaults/settings.json /defaults/settings.json
 
 # The directories for the files to serve, the settings and the database, which belong to the user
@@ -125,8 +130,9 @@ ARG GIT_SHA
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
 ENV GIT_SHA=${GIT_SHA}
 
-# Expose ports. The server runs as a regular user, and can listen on port 80 because Docker lets
-# every user in a container listen on the ports below 1024.
+# Expose ports. The server runs as a regular user without capabilities, and can listen on port 80
+# because Docker lets every user in a container listen on the ports below 1024. On a runtime that
+# does not, set FB_PORT to a higher port, which the health check then uses too.
 EXPOSE 80
 
 # The runtime image has no shell or wget, so the check is a command of the binary. It requests
