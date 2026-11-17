@@ -1,6 +1,7 @@
 package fbhttp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -15,6 +16,7 @@ import (
 	"github.com/filebrowser/filebrowser/v2/fileutils"
 	"github.com/filebrowser/filebrowser/v2/users"
 	"github.com/mholt/archives"
+	"github.com/spf13/afero"
 )
 
 func parseQueryFiles(r *http.Request, f *files.FileInfo, _ *users.User) ([]string, error) {
@@ -103,7 +105,63 @@ var rawHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) 
 	return rawDirHandler(w, r, d, file)
 })
 
-func getFiles(d *data, path, commonPath string) ([]archives.FileInfo, error) {
+// archiveWalk collects the files of an archive download.
+type archiveWalk struct {
+	ctx        context.Context
+	d          *data
+	commonPath string
+
+	// visited holds the real path of every directory that has been listed.
+	// Stat follows symlinks, so without it a link to an ancestor would be
+	// followed until the kernel gives up (40 levels), and two of them would
+	// make the walk exponential. Each real directory is archived once, under
+	// the first name it is reached by.
+	visited map[string]struct{}
+}
+
+func newArchiveWalk(ctx context.Context, d *data, commonPath string) *archiveWalk {
+	return &archiveWalk{ctx: ctx, d: d, commonPath: commonPath, visited: map[string]struct{}{}}
+}
+
+// enter reports whether the directory at path has not been listed yet, and
+// records it. A directory whose real location cannot be determined is not
+// entered through a symlink, which keeps the walk finite in that case too.
+func (w *archiveWalk) enter(path string) bool {
+	real := path
+	resolved := false
+	if files.BasePath(w.d.user.Fs) != nil {
+		if p, err := filepath.EvalSymlinks(w.d.user.FullPath(path)); err == nil {
+			real, resolved = p, true
+		}
+	}
+
+	if !resolved {
+		lstater, ok := w.d.user.Fs.(afero.Lstater)
+		if !ok {
+			return false
+		}
+		info, _, err := lstater.LstatIfPossible(path)
+		if err != nil || !info.IsDir() {
+			return false
+		}
+	}
+
+	if _, seen := w.visited[real]; seen {
+		return false
+	}
+	w.visited[real] = struct{}{}
+	return true
+}
+
+// files returns the archive entries for path and, when it is a directory,
+// everything below it. It stops with the context's error once the request is
+// done: collecting a large tree for a client that has left only costs memory.
+func (w *archiveWalk) files(path string) ([]archives.FileInfo, error) {
+	if err := w.ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	d := w.d
 	if !d.Check(path) {
 		return nil, nil
 	}
@@ -113,10 +171,14 @@ func getFiles(d *data, path, commonPath string) ([]archives.FileInfo, error) {
 		return nil, err
 	}
 
+	if info.IsDir() && !w.enter(path) {
+		return nil, nil
+	}
+
 	var archiveFiles []archives.FileInfo
 
-	if path != commonPath {
-		nameInArchive := strings.TrimPrefix(path, commonPath)
+	if path != w.commonPath {
+		nameInArchive := strings.TrimPrefix(path, w.commonPath)
 		nameInArchive = strings.TrimPrefix(nameInArchive, string(filepath.Separator))
 		nameInArchive = filepath.ToSlash(nameInArchive)
 		// A backslash is a legal filename character on POSIX hosts, so it can
@@ -156,8 +218,11 @@ func getFiles(d *data, path, commonPath string) ([]archives.FileInfo, error) {
 
 		for _, name := range names {
 			fPath := filepath.Join(path, name)
-			subFiles, err := getFiles(d, fPath, commonPath)
+			subFiles, err := w.files(fPath)
 			if err != nil {
+				if w.ctx.Err() != nil {
+					return nil, err
+				}
 				log.Printf("Failed to get files from %s: %v", fPath, err)
 				continue
 			}
@@ -181,10 +246,15 @@ func rawDirHandler(w http.ResponseWriter, r *http.Request, d *data, file *files.
 
 	commonDir := fileutils.CommonPrefix(filepath.Separator, filenames...)
 
+	walk := newArchiveWalk(r.Context(), d, commonDir)
 	var allFiles []archives.FileInfo
 	for _, fname := range filenames {
-		archiveFiles, err := getFiles(d, fname, commonDir)
+		archiveFiles, err := walk.files(fname)
 		if err != nil {
+			// Nobody is left to answer once the request is done.
+			if r.Context().Err() != nil {
+				return 0, err
+			}
 			log.Printf("Failed to get files from %s: %v", fname, err)
 			continue
 		}
