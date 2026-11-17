@@ -116,14 +116,14 @@
           :autoplay="autoPlay"
           @play="autoPlay = true"
         ></audio>
-        <VideoPlayer
+        <VideoViewer
           v-else-if="fileStore.req?.type == 'video'"
           ref="player"
           :source="previewUrl"
           :subtitles="subtitles"
-          :options="videoOptions"
+          :autoplay="autoPlay"
         >
-        </VideoPlayer>
+        </VideoViewer>
         <object v-else-if="isPdf" class="pdf" :data="previewUrl"></object>
         <div v-else-if="fileStore.req?.type == 'blob'" class="info">
           <div class="title">
@@ -192,7 +192,7 @@ import { throttle } from "lodash-es";
 import HeaderBar from "@/components/header/HeaderBar.vue";
 import Action from "@/components/header/Action.vue";
 import ExtendedImage from "@/components/files/ExtendedImage.vue";
-import VideoPlayer from "@/components/files/VideoPlayer.vue";
+import VideoViewer from "@/components/files/VideoViewer.vue";
 import CsvViewer from "@/components/files/CsvViewer.vue";
 import { VueReader } from "vue-reader";
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -205,7 +205,9 @@ import { useI18n } from "vue-i18n";
 // Prevents browser memory issues with large files
 const CSV_MAX_SIZE = 5 * 1024 * 1024;
 
-const location = useStorage("book-progress", 0, undefined, {
+// vue-reader reports the reading position as an EPUB CFI string; the initial
+// 0 means "start of the book".
+const location = useStorage<string | number>("book-progress", 0, undefined, {
   serializer: {
     read: (v) => JSON.parse(v),
     write: (v) => JSON.stringify(v),
@@ -218,7 +220,7 @@ const size = useStorage("book-size", 120, undefined, {
   },
 });
 
-const locationChange = (epubcifi: number) => {
+const locationChange = (epubcifi: string) => {
   location.value = epubcifi;
 };
 let rendition: Rendition | null = null;
@@ -325,10 +327,6 @@ const subtitles = computed(() => {
   return [];
 });
 
-const videoOptions = computed(() => {
-  return { autoplay: autoPlay.value };
-});
-
 watch(route, () => {
   updatePreview();
   toggleNavigation();
@@ -383,8 +381,15 @@ const key = (event: KeyboardEvent) => {
   if (layoutStore.currentPrompt !== null) {
     return;
   }
-  // When previewing a video, let arrow keys fall through to video.js for
-  // seeking instead of switching to the prev/next file. Enter still advances.
+  // Keys already handled inside the page must not also close the preview or
+  // switch files, e.g. Escape closing the video player's settings menu (the
+  // player's menus call preventDefault() on it).
+  if (event.defaultPrevented) {
+    return;
+  }
+  // When previewing a video, let arrow keys fall through to the video
+  // player's own shortcuts for seeking instead of switching to the prev/next
+  // file. Enter still advances.
   const isVideo = fileStore.req?.type === "video";
   if (event.which === 13) {
     // enter

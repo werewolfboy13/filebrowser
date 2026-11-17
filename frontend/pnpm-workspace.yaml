@@ -1,0 +1,40 @@
+# pnpm settings for the frontend (pnpm >= 11 no longer reads the "pnpm" field
+# of package.json, and .npmrc only carries auth/registry settings).
+
+# pnpm >= 11 fails the install (strictDepBuilds) when a dependency has an
+# install script that is not listed here. None of these scripts are needed:
+# core-js and es5-ext only print funding/protest messages, esbuild gets its
+# platform binary from an optional dependency instead of its postinstall, and
+# vue-reader >= 1.3.5 ships its repo-only "preinstall: npx only-allow pnpm"
+# (which would hit the network) by mistake.
+allowBuilds:
+  core-js: false
+  es5-ext: false
+  esbuild: false
+  vue-reader: false
+
+# @videojs/store (pulled in by @videojs/html) depends on react-compiler-runtime
+# for its React entry point only; that package's required peer on react would
+# make pnpm install React into this Vue app. Nothing here imports the React
+# entry point, so mark the peer optional.
+packageExtensions:
+  react-compiler-runtime:
+    peerDependenciesMeta:
+      react:
+        optional: true
+
+overrides:
+  # epubjs 0.3.93 (latest, unmaintained since 2023) pins @xmldom/xmldom ^0.7.5,
+  # which has many advisories fixed only in >= 0.8.15. 0.8 keeps the
+  # DOMParser/parseFromString API epubjs calls, and epubjs only falls back to
+  # xmldom when the browser has no native DOMParser/XMLSerializer (or on IE).
+  "epubjs>@xmldom/xmldom": ^0.8.15
+
+auditConfig:
+  ignoreGhsas:
+    # picomatch ReDoS via attacker-supplied extglob patterns. No patched
+    # release exists (all versions <= 4.0.7, the latest, are affected).
+    # picomatch is only used at build/lint time (eslint, vite plugins,
+    # vue-router's build plugin) on glob patterns written in this repo, and is
+    # not part of the browser bundle. Drop this once a fixed picomatch ships.
+    - GHSA-fc5q-39xc-vjpf

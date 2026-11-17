@@ -5,10 +5,20 @@ import VueI18nPlugin from "@intlify/unplugin-vue-i18n/vite";
 import legacy from "@vitejs/plugin-legacy";
 import { compression } from "vite-plugin-compression2";
 
+// Custom elements from @videojs/html used in templates (VideoPlayer.vue).
+// Vue must not try to resolve them as Vue components.
+const videoJsElements = new Set(["media-i18n", "video-player", "video-skin"]);
+
 const plugins = [
-  vue(),
+  vue({
+    template: {
+      compilerOptions: {
+        isCustomElement: (tag) => videoJsElements.has(tag),
+      },
+    },
+  }),
   VueI18nPlugin({
-    include: [path.resolve(__dirname, "./src/i18n/**/*.json")],
+    include: [path.resolve(import.meta.dirname, "./src/i18n/**/*.json")],
   }),
   legacy({
     // defaults already drop IE support
@@ -20,7 +30,7 @@ const plugins = [
 const resolve = {
   alias: {
     // vue: "@vue/compat",
-    "@/": `${path.resolve(__dirname, "src")}/`,
+    "@/": `${path.resolve(import.meta.dirname, "src")}/`,
   },
 };
 
@@ -49,7 +59,7 @@ export default defineConfig(({ command }) => {
       build: {
         rollupOptions: {
           input: {
-            index: path.resolve(__dirname, "./public/index.html"),
+            index: path.resolve(import.meta.dirname, "./public/index.html"),
           },
           output: {
             manualChunks: (id) => {
@@ -57,8 +67,9 @@ export default defineConfig(({ command }) => {
               // this avoids having small files for each locale
               if (id.includes("dayjs/")) {
                 return "dayjs";
-                // bundle i18n in a separate chunk
-              } else if (id.includes("i18n/")) {
+                // bundle i18n in a separate chunk, but leave the video
+                // player's locale packs to load on demand with the player
+              } else if (id.includes("i18n/") && !id.includes("@videojs/")) {
                 return "i18n";
               }
             },

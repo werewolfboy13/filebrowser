@@ -237,10 +237,6 @@ main .spinner .bounce2 {
   height: 100%;
 }
 
-#previewer .vjs-error-display {
-  margin-top: 40%;
-}
-
 #previewer .preview .info {
   position: absolute;
   top: 50%;
