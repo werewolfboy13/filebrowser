@@ -13,18 +13,22 @@ tasks:
     cmds:
       - go build -ldflags='-s -w -X "github.com/filebrowser/filebrowser/v2/version.Version={{.VERSION}}" -X "github.com/filebrowser/filebrowser/v2/version.CommitSHA={{.GIT_COMMIT}}"' -o filebrowser .
     vars:
+      # Seven characters, as in the released binaries and in the Docker image.
       GIT_COMMIT:
-        sh: git log -n 1 --format=%h
+        sh: git rev-parse --short=7 HEAD
       VERSION:
         sh: git describe --tags --abbrev=0 --match=v* | cut -c 2-
 
   build:docker:
     desc: Build the Docker image, which builds and tests frontend and backend itself
     cmds:
-      - docker build --build-arg VERSION={{.VERSION}} --build-arg GIT_SHA={{.GIT_COMMIT}} -t filebrowser .
+      # The image gets the name that compose.yaml runs, and the whole commit hash, as in CI: the
+      # Dockerfile cuts it to seven characters for the binary and keeps it whole in the image's
+      # label. --pull gets the base images' latest security patches.
+      - docker build --pull --build-arg VERSION={{.VERSION}} --build-arg GIT_SHA={{.GIT_SHA}} -t filebrowser:local .
     vars:
-      GIT_COMMIT:
-        sh: git log -n 1 --format=%h
+      GIT_SHA:
+        sh: git rev-parse HEAD
       VERSION:
         sh: git describe --tags --abbrev=0 --match=v* | cut -c 2-
 
