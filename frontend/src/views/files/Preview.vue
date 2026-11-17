@@ -116,14 +116,14 @@
           :autoplay="autoPlay"
           @play="autoPlay = true"
         ></audio>
-        <VideoPlayer
+        <VideoViewer
           v-else-if="fileStore.req?.type == 'video'"
           ref="player"
           :source="previewUrl"
           :subtitles="subtitles"
-          :options="videoOptions"
+          :autoplay="autoPlay"
         >
-        </VideoPlayer>
+        </VideoViewer>
         <object v-else-if="isPdf" class="pdf" :data="previewUrl"></object>
         <div v-else-if="fileStore.req?.type == 'blob'" class="info">
           <div class="title">
@@ -192,7 +192,7 @@ import { throttle } from "lodash-es";
 import HeaderBar from "@/components/header/HeaderBar.vue";
 import Action from "@/components/header/Action.vue";
 import ExtendedImage from "@/components/files/ExtendedImage.vue";
-import VideoPlayer from "@/components/files/VideoPlayer.vue";
+import VideoViewer from "@/components/files/VideoViewer.vue";
 import CsvViewer from "@/components/files/CsvViewer.vue";
 import { VueReader } from "vue-reader";
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -327,10 +327,6 @@ const subtitles = computed(() => {
   return [];
 });
 
-const videoOptions = computed(() => {
-  return { autoplay: autoPlay.value };
-});
-
 watch(route, () => {
   updatePreview();
   toggleNavigation();
@@ -385,8 +381,9 @@ const key = (event: KeyboardEvent) => {
   if (layoutStore.currentPrompt !== null) {
     return;
   }
-  // When previewing a video, let arrow keys fall through to video.js for
-  // seeking instead of switching to the prev/next file. Enter still advances.
+  // When previewing a video, let arrow keys fall through to the video
+  // player's own shortcuts for seeking instead of switching to the prev/next
+  // file. Enter still advances.
   const isVideo = fileStore.req?.type === "video";
   if (event.which === 13) {
     // enter
