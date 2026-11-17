@@ -21,11 +21,11 @@ type recordingUploadCache struct {
 	removal map[string]func() error
 }
 
-func (c *recordingUploadCache) Register(filePath string, fileSize int64, remove func() error) {
+func (c *recordingUploadCache) Register(filePath string, upload uploadInfo, remove func() error) {
 	c.mu.Lock()
 	c.removal[filePath] = remove
 	c.mu.Unlock()
-	c.UploadCache.Register(filePath, fileSize, remove)
+	c.UploadCache.Register(filePath, upload, remove)
 }
 
 func (c *recordingUploadCache) Complete(filePath string) {

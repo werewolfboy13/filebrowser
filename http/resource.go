@@ -156,9 +156,10 @@ func resourcePostHandler(fileCache FileCache) handleFunc {
 			ReadHeader: d.server.TypeDetectionByHeader,
 			Checker:    d,
 		})
+		override := r.URL.Query().Get("override") == "true"
 		if err == nil {
 			// An existing directory is never something an upload can replace.
-			if file.IsDir || r.URL.Query().Get("override") != "true" {
+			if file.IsDir || !override {
 				return http.StatusConflict, nil
 			}
 
@@ -175,8 +176,16 @@ func resourcePostHandler(fileCache FileCache) handleFunc {
 
 		sweepStaleUploads(d, r.URL.Path)
 
+		// What was checked above holds for the moment the request arrived.
+		// The content only reaches the destination when all of it is here,
+		// and by then a file can be there that was not before. It is
+		// replaced only by an upload that asked to, from a user who may:
+		// anything else ends in a conflict, as it would have if the file had
+		// been there from the start.
+		replace := override && d.user.Perm.Modify
+
 		err = d.RunHook(func() error {
-			info, writeErr := writeFile(d.user.Fs, r.URL.Path, r.Body, d.settings.FileMode, d.settings.DirMode)
+			info, writeErr := writeFile(d.user.Fs, r.URL.Path, r.Body, d.settings.FileMode, d.settings.DirMode, replace)
 			if writeErr != nil {
 				return writeErr
 			}
@@ -215,7 +224,7 @@ var resourcePutHandler = withUser(func(w http.ResponseWriter, r *http.Request, d
 	sweepStaleUploads(d, r.URL.Path)
 
 	err = d.RunHook(func() error {
-		info, writeErr := writeFile(d.user.Fs, r.URL.Path, r.Body, d.settings.FileMode, d.settings.DirMode)
+		info, writeErr := writeFile(d.user.Fs, r.URL.Path, r.Body, d.settings.FileMode, d.settings.DirMode, true)
 		if writeErr != nil {
 			return writeErr
 		}
@@ -358,15 +367,16 @@ func addVersionSuffix(source string, afs afero.Fs) string {
 
 // writeFile stores the content read from in at dst, creating the directories
 // leading to it. The content only takes the place of an existing file once it
-// has been received completely: see fileutils.WriteFileAtomic.
-func writeFile(afs afero.Fs, dst string, in io.Reader, fileMode, dirMode fs.FileMode) (os.FileInfo, error) {
+// has been received completely, and only with replace: see
+// fileutils.WriteFileAtomic.
+func writeFile(afs afero.Fs, dst string, in io.Reader, fileMode, dirMode fs.FileMode, replace bool) (os.FileInfo, error) {
 	dir, _ := path.Split(dst)
 	err := afs.MkdirAll(dir, dirMode)
 	if err != nil {
 		return nil, err
 	}
 
-	return fileutils.WriteFileAtomic(afs, dst, in, fileMode)
+	return fileutils.WriteFileAtomic(afs, dst, in, fileMode, replace)
 }
 
 // uploadSweeps remembers when the temporary files of a directory were last

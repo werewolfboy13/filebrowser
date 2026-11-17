@@ -2,6 +2,7 @@ package fileutils
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/spf13/afero"
+
+	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 )
 
 // brokenReader yields some data and then fails, like a request body whose
@@ -55,7 +58,7 @@ func TestWriteFileAtomicKeepsTheOriginalOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := WriteFileAtomic(afs, "/report.txt", &brokenReader{data: "new-partial"}, 0o640); err == nil {
+	if _, err := WriteFileAtomic(afs, "/report.txt", &brokenReader{data: "new-partial"}, 0o640, true); err == nil {
 		t.Fatal("an interrupted write reported success")
 	}
 	if data, err := os.ReadFile(target); err != nil || string(data) != "ORIGINAL" {
@@ -66,7 +69,7 @@ func TestWriteFileAtomicKeepsTheOriginalOnFailure(t *testing.T) {
 	}
 
 	// A failed write of a new file leaves nothing.
-	if _, err := WriteFileAtomic(afs, "/new.txt", &brokenReader{data: "partial"}, 0o640); err == nil {
+	if _, err := WriteFileAtomic(afs, "/new.txt", &brokenReader{data: "partial"}, 0o640, true); err == nil {
 		t.Fatal("an interrupted write reported success")
 	}
 	if _, err := os.Lstat(filepath.Join(root, "new.txt")); !os.IsNotExist(err) {
@@ -81,7 +84,7 @@ func TestWriteFileAtomicReplacesOnlyTheContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	info, err := WriteFileAtomic(afs, "/report.txt", strings.NewReader("replaced"), 0o644)
+	info, err := WriteFileAtomic(afs, "/report.txt", strings.NewReader("replaced"), 0o644, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +106,7 @@ func TestWriteFileAtomicReplacesOnlyTheContent(t *testing.T) {
 	}
 
 	// A new file gets the requested mode.
-	if _, err := WriteFileAtomic(afs, "/new.txt", strings.NewReader("x"), 0o640); err != nil {
+	if _, err := WriteFileAtomic(afs, "/new.txt", strings.NewReader("x"), 0o640, true); err != nil {
 		t.Fatal(err)
 	}
 	created, err := os.Stat(filepath.Join(root, "new.txt"))
@@ -132,7 +135,7 @@ func TestWriteFileAtomicKeepsLinks(t *testing.T) {
 		t.Skipf("hard links unavailable: %v", err)
 	}
 
-	if _, err := WriteFileAtomic(afs, "/link.txt", strings.NewReader("via symlink"), 0o644); err != nil {
+	if _, err := WriteFileAtomic(afs, "/link.txt", strings.NewReader("via symlink"), 0o644, true); err != nil {
 		t.Fatal(err)
 	}
 	if fi, err := os.Lstat(filepath.Join(root, "link.txt")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
@@ -142,7 +145,7 @@ func TestWriteFileAtomicKeepsLinks(t *testing.T) {
 		t.Errorf("the link target holds %q", data)
 	}
 
-	if _, err := WriteFileAtomic(afs, "/real.txt", strings.NewReader("via name"), 0o644); err != nil {
+	if _, err := WriteFileAtomic(afs, "/real.txt", strings.NewReader("via name"), 0o644, true); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(filepath.Join(root, "hard.txt")); string(data) != "via name" {
@@ -150,7 +153,7 @@ func TestWriteFileAtomicKeepsLinks(t *testing.T) {
 	}
 
 	// A failure while writing through a link still leaves the content alone.
-	if _, err := WriteFileAtomic(afs, "/real.txt", &brokenReader{data: "partial"}, 0o644); err == nil {
+	if _, err := WriteFileAtomic(afs, "/real.txt", &brokenReader{data: "partial"}, 0o644, true); err == nil {
 		t.Fatal("an interrupted write reported success")
 	}
 	if runtime.GOOS != "windows" {
@@ -199,7 +202,7 @@ func TestWriteFileAtomicFallsBackToWritingInPlace(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if _, err := WriteFileAtomic(&faults, "/config.json", strings.NewReader("updated"), 0o644); err != nil {
+			if _, err := WriteFileAtomic(&faults, "/config.json", strings.NewReader("updated"), 0o644, true); err != nil {
 				t.Fatalf("the write failed instead of falling back: %v", err)
 			}
 			if data, _ := os.ReadFile(target); string(data) != "updated" {
@@ -212,7 +215,7 @@ func TestWriteFileAtomicFallsBackToWritingInPlace(t *testing.T) {
 			// When the content went to a temporary file first, an interrupted
 			// write still cannot damage the destination.
 			if faults.noRename {
-				if _, err := WriteFileAtomic(&faults, "/config.json", &brokenReader{data: "partial"}, 0o644); err == nil {
+				if _, err := WriteFileAtomic(&faults, "/config.json", &brokenReader{data: "partial"}, 0o644, true); err == nil {
 					t.Fatal("an interrupted write reported success")
 				}
 				if data, _ := os.ReadFile(target); string(data) != "updated" {
@@ -232,7 +235,7 @@ func TestWriteFileAtomicRemovesItsOwnPartialFile(t *testing.T) {
 	// Refuses the temporary file, but not the destination.
 	noTemp := &tempRefusingFs{Fs: base}
 
-	if _, err := WriteFileAtomic(noTemp, "/new.txt", &brokenReader{data: "partial"}, 0o644); err == nil {
+	if _, err := WriteFileAtomic(noTemp, "/new.txt", &brokenReader{data: "partial"}, 0o644, true); err == nil {
 		t.Fatal("an interrupted write reported success")
 	}
 	if _, err := os.Lstat(filepath.Join(root, "new.txt")); !os.IsNotExist(err) {
@@ -240,7 +243,7 @@ func TestWriteFileAtomicRemovesItsOwnPartialFile(t *testing.T) {
 	}
 
 	// A complete write of a new file still works that way.
-	if _, err := WriteFileAtomic(noTemp, "/new.txt", strings.NewReader("complete"), 0o644); err != nil {
+	if _, err := WriteFileAtomic(noTemp, "/new.txt", strings.NewReader("complete"), 0o644, true); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(filepath.Join(root, "new.txt")); string(data) != "complete" {
@@ -249,7 +252,7 @@ func TestWriteFileAtomicRemovesItsOwnPartialFile(t *testing.T) {
 
 	// And a failed overwrite in place does not remove the file that was
 	// there before it.
-	if _, err := WriteFileAtomic(noTemp, "/new.txt", &brokenReader{data: "partial"}, 0o644); err == nil {
+	if _, err := WriteFileAtomic(noTemp, "/new.txt", &brokenReader{data: "partial"}, 0o644, true); err == nil {
 		t.Fatal("an interrupted write reported success")
 	}
 	if _, err := os.Lstat(filepath.Join(root, "new.txt")); err != nil {
@@ -270,12 +273,176 @@ func (f *tempRefusingFs) OpenFile(name string, flag int, perm os.FileMode) (afer
 	return f.Fs.OpenFile(name, flag, perm)
 }
 
+// duringReader yields its data, runs during, and ends: a write during which
+// something else happens.
+type duringReader struct {
+	data   string
+	during func()
+	step   int
+}
+
+func (r *duringReader) Read(p []byte) (int, error) {
+	r.step++
+	switch r.step {
+	case 1:
+		return copy(p, r.data), nil
+	case 2:
+		r.during()
+	}
+	return 0, io.EOF
+}
+
+// noLinkFs hides what the filesystem under it is, so that no hard link can be
+// made through it: a filesystem without hard links (FAT, exFAT, some network
+// and FUSE mounts).
+type noLinkFs struct {
+	afero.Fs
+}
+
+func (f noLinkFs) LstatIfPossible(name string) (os.FileInfo, bool, error) {
+	return f.Fs.(afero.Lstater).LstatIfPossible(name)
+}
+
+// A write that may not replace a file must not replace one that appears while
+// the content is on its way either. The check made when the write starts says
+// nothing about the moment the content is put in place.
+func TestWriteFileAtomicWithoutReplacing(t *testing.T) {
+	// With "no temporary file" the content is written in place: the
+	// destination is created, exclusively, before the content arrives, so
+	// nothing can appear there meanwhile.
+	const inPlace = "no temporary file"
+	filesystems := map[string]func(afero.Fs) afero.Fs{
+		"hard link":                    func(afs afero.Fs) afero.Fs { return afs },
+		"no hard links: check, rename": func(afs afero.Fs) afero.Fs { return noLinkFs{afs} },
+		"no hard links, no rename":     func(afs afero.Fs) afero.Fs { return &faultyFs{Fs: afs, noRename: true} },
+		inPlace:                        func(afs afero.Fs) afero.Fs { return &tempRefusingFs{Fs: afs} },
+	}
+	for name, wrap := range filesystems {
+		t.Run(name, func(t *testing.T) {
+			base, root := newAtomicFs(t)
+			afs := wrap(base)
+			target := filepath.Join(root, "report.txt")
+
+			// Nothing in the way: the file is created.
+			info, err := WriteFileAtomic(afs, "/report.txt", strings.NewReader("first"), 0o640, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if data, _ := os.ReadFile(target); string(data) != "first" || info.Size() != 5 {
+				t.Errorf("content = %q, reported size %d", data, info.Size())
+			}
+			created, err := os.Stat(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runtime.GOOS != "windows" && created.Mode().Perm()&^0o640 != 0 {
+				t.Errorf("new file has mode %o, want at most 640", created.Mode().Perm())
+			}
+
+			// It is there now, and is not replaced.
+			if _, err := WriteFileAtomic(afs, "/report.txt", strings.NewReader("second"), 0o640, false); !errors.Is(err, fberrors.ErrExist) {
+				t.Errorf("writing onto an existing file without replacing = %v, want ErrExist", err)
+			}
+			if data, _ := os.ReadFile(target); string(data) != "first" {
+				t.Errorf("the existing file was replaced: %q", data)
+			}
+
+			// Not even a dangling link: the write would go through it.
+			if err := os.Symlink("elsewhere.txt", filepath.Join(root, "dangling.txt")); err == nil {
+				if _, err := WriteFileAtomic(afs, "/dangling.txt", strings.NewReader("mine"), 0o640, false); !errors.Is(err, fberrors.ErrExist) {
+					t.Errorf("writing onto a dangling link without replacing = %v, want ErrExist", err)
+				}
+				if _, err := os.Lstat(filepath.Join(root, "elsewhere.txt")); err == nil {
+					t.Error("the write went through the dangling link")
+				}
+			}
+
+			if name != inPlace {
+				// A file that appears while the content is on its way is not
+				// replaced either.
+				appears := filepath.Join(root, "appears.txt")
+				during := &duringReader{data: "mine", during: func() {
+					if err := os.WriteFile(appears, []byte("theirs"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}}
+				if _, err := WriteFileAtomic(afs, "/appears.txt", during, 0o640, false); !errors.Is(err, fberrors.ErrExist) {
+					t.Errorf("writing over a file created meanwhile = %v, want ErrExist", err)
+				}
+				if data, _ := os.ReadFile(appears); string(data) != "theirs" {
+					t.Errorf("the file created meanwhile was replaced: %q", data)
+				}
+
+				// With permission to replace, it is.
+				during = &duringReader{data: "mine", during: func() {
+					if err := os.WriteFile(filepath.Join(root, "replace.txt"), []byte("theirs"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}}
+				if _, err := WriteFileAtomic(afs, "/replace.txt", during, 0o640, true); err != nil {
+					t.Errorf("writing over a file created meanwhile, with permission = %v", err)
+				}
+				if data, _ := os.ReadFile(filepath.Join(root, "replace.txt")); string(data) != "mine" {
+					t.Errorf("replace.txt = %q", data)
+				}
+			}
+
+			if temps := tempsIn(t, root); len(temps) != 0 {
+				t.Errorf("temporary files left behind: %v", temps)
+			}
+		})
+	}
+}
+
+// CommitTemp without permission to replace puts the complete temporary file
+// in place only where nothing is, and removes it otherwise.
+func TestCommitTempWithoutReplacing(t *testing.T) {
+	for name, wrap := range map[string]func(afero.Fs) afero.Fs{
+		"hard link":     func(afs afero.Fs) afero.Fs { return afs },
+		"no hard links": func(afs afero.Fs) afero.Fs { return noLinkFs{afs} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			base, root := newAtomicFs(t)
+			afs := wrap(base)
+			tmp := "/" + TempPrefix + "tus-" + strings.Repeat("a", 32)
+			writeTemp := func() {
+				if err := os.WriteFile(filepath.Join(root, tmp), []byte("uploaded"), 0o640); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			writeTemp()
+			if err := CommitTemp(afs, tmp, "/free.bin", 0o640, false); err != nil {
+				t.Fatal(err)
+			}
+			if data, _ := os.ReadFile(filepath.Join(root, "free.bin")); string(data) != "uploaded" {
+				t.Errorf("free.bin = %q", data)
+			}
+
+			writeTemp()
+			if err := CommitTemp(afs, tmp, "/free.bin", 0o640, false); !errors.Is(err, fberrors.ErrExist) {
+				t.Errorf("CommitTemp onto an existing file without replacing = %v, want ErrExist", err)
+			}
+			if err := os.Mkdir(filepath.Join(root, "dir"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeTemp()
+			if err := CommitTemp(afs, tmp, "/dir", 0o640, false); err == nil {
+				t.Error("CommitTemp onto a directory succeeded")
+			}
+			if temps := tempsIn(t, root); len(temps) != 0 {
+				t.Errorf("temporary files left behind: %v", temps)
+			}
+		})
+	}
+}
+
 func TestWriteFileAtomicRefusesADirectory(t *testing.T) {
 	afs, root := newAtomicFs(t)
 	if err := os.MkdirAll(filepath.Join(root, "dir", "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := WriteFileAtomic(afs, "/dir", strings.NewReader("x"), 0o644); err == nil {
+	if _, err := WriteFileAtomic(afs, "/dir", strings.NewReader("x"), 0o644, true); err == nil {
 		t.Fatal("writing onto a directory succeeded")
 	}
 	if _, err := os.Stat(filepath.Join(root, "dir", "sub")); err != nil {

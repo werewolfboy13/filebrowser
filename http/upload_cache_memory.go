@@ -2,6 +2,7 @@ package fbhttp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,19 +11,35 @@ import (
 
 const uploadCacheTTL = 3 * time.Minute
 
+var errNoActiveUpload = errors.New("no active upload found for the given path")
+
+// uploadInfo is what is kept about an upload in progress.
+type uploadInfo struct {
+	// Length is the size the upload was announced with.
+	Length int64
+
+	// Override tells whether the upload was created asking to replace what
+	// is at its destination. The requests that carry the data do not say, and
+	// the destination is only written when the last of them arrives.
+	Override bool
+}
+
 // UploadCache is an interface for tracking active uploads.
 // Allows for different backends (e.g. in-memory or redis)
 // to support both single instance and multi replica deployments.
 type UploadCache interface {
-	// Register stores an upload with its expected file size. remove is called if
-	// the upload expires before completion, to delete the partial file; it must
-	// route through the uploading user's scoped filesystem so that eviction
-	// cannot follow a symlink out of the user's scope. It is nil when the
-	// upload has nothing of its own to delete.
-	Register(filePath string, fileSize int64, remove func() error)
+	// Register stores an upload. remove is called if the upload expires
+	// before completion, to delete the partial file; it must route through
+	// the uploading user's scoped filesystem so that eviction cannot follow a
+	// symlink out of the user's scope. It is nil when the upload has nothing
+	// of its own to delete.
+	Register(filePath string, upload uploadInfo, remove func() error)
 
 	// Complete removes an upload from the cache
 	Complete(filePath string)
+
+	// Get returns what was registered for an active upload.
+	Get(filePath string) (uploadInfo, error)
 
 	// GetLength returns the expected file size for an active upload
 	GetLength(filePath string) (int64, error)
@@ -36,7 +53,7 @@ type UploadCache interface {
 
 // memoryUploadEntry is the value stored for each active upload.
 type memoryUploadEntry struct {
-	size   int64
+	upload uploadInfo
 	remove func() error
 }
 
@@ -66,20 +83,25 @@ func newMemoryUploadCache() *memoryUploadCache {
 	return &memoryUploadCache{cache: cache}
 }
 
-func (c *memoryUploadCache) Register(filePath string, fileSize int64, remove func() error) {
-	c.cache.Set(filePath, memoryUploadEntry{size: fileSize, remove: remove}, uploadCacheTTL)
+func (c *memoryUploadCache) Register(filePath string, upload uploadInfo, remove func() error) {
+	c.cache.Set(filePath, memoryUploadEntry{upload: upload, remove: remove}, uploadCacheTTL)
 }
 
 func (c *memoryUploadCache) Complete(filePath string) {
 	c.cache.Delete(filePath)
 }
 
-func (c *memoryUploadCache) GetLength(filePath string) (int64, error) {
+func (c *memoryUploadCache) Get(filePath string) (uploadInfo, error) {
 	item := c.cache.Get(filePath)
 	if item == nil {
-		return 0, fmt.Errorf("no active upload found for the given path")
+		return uploadInfo{}, errNoActiveUpload
 	}
-	return item.Value().size, nil
+	return item.Value().upload, nil
+}
+
+func (c *memoryUploadCache) GetLength(filePath string) (int64, error) {
+	upload, err := c.Get(filePath)
+	return upload.Length, err
 }
 
 func (c *memoryUploadCache) Touch(filePath string) {

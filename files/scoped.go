@@ -156,6 +156,29 @@ func (s *ScopedFs) within(p string) (bool, error) {
 	return resolved == root || strings.HasPrefix(resolved, prefix), nil
 }
 
+// Link makes newname a hard link to oldname, both inside the scope. Like
+// os.Link it fails when newname exists, without replacing it, which is what
+// makes it the way to put a finished upload in place only where nothing is:
+// see fileutils.CommitTemp. afero has no such operation.
+func (s *ScopedFs) Link(oldname, newname string) error {
+	if err := s.guard(oldname); err != nil {
+		return err
+	}
+	if err := s.guard(newname); err != nil {
+		return err
+	}
+
+	oldReal, err := s.base.RealPath(oldname)
+	if err != nil {
+		return err
+	}
+	newReal, err := s.base.RealPath(newname)
+	if err != nil {
+		return err
+	}
+	return os.Link(oldReal, newReal)
+}
+
 func (s *ScopedFs) Create(name string) (afero.File, error) {
 	if err := s.guard(name); err != nil {
 		return nil, err

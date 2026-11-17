@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 	"github.com/filebrowser/filebrowser/v2/files"
 	"github.com/filebrowser/filebrowser/v2/fileutils"
 	"github.com/spf13/afero"
@@ -175,6 +176,8 @@ func tusPostHandler(cache UploadCache) handleFunc {
 			return errToStatus(err), err
 		}
 
+		override := r.URL.Query().Get("override") == "true"
+
 		// if file exists
 		exists := file != nil
 		if exists {
@@ -183,7 +186,7 @@ func tusPostHandler(cache UploadCache) handleFunc {
 			}
 
 			// Existing files will remain untouched unless explicitly instructed to override
-			if r.URL.Query().Get("override") != "true" {
+			if !override {
 				return http.StatusConflict, nil
 			}
 
@@ -204,7 +207,7 @@ func tusPostHandler(cache UploadCache) handleFunc {
 		// start the first one over; without override it is a conflict, as it
 		// was when the destination was created up front.
 		uploadKey := tusUploadKey(d, r.URL.Path)
-		if !exists && r.URL.Query().Get("override") != "true" {
+		if !exists && !override {
 			if _, cacheErr := cache.GetLength(uploadKey); cacheErr == nil {
 				if _, temp, _ := tusWritePath(d, r.URL.Path); temp {
 					return http.StatusConflict, nil
@@ -267,7 +270,7 @@ func tusPostHandler(cache UploadCache) handleFunc {
 		// An empty upload is complete as it is: no PATCH follows.
 		if uploadLength == 0 {
 			if !direct {
-				if err := fileutils.ReplaceWithTemp(d.user.Fs, tmp, r.URL.Path, d.settings.FileMode); err != nil {
+				if err := fileutils.CommitTemp(d.user.Fs, tmp, r.URL.Path, d.settings.FileMode, override && d.user.Perm.Modify); err != nil {
 					return errToStatus(err), err
 				}
 			}
@@ -287,7 +290,7 @@ func tusPostHandler(cache UploadCache) handleFunc {
 			uploadPath := r.URL.Path
 			remove = func() error { return d.user.Fs.Remove(uploadPath) }
 		}
-		cache.Register(uploadKey, uploadLength, remove)
+		cache.Register(uploadKey, uploadInfo{Length: uploadLength, Override: override}, remove)
 
 		return http.StatusCreated, nil
 	})
@@ -372,10 +375,11 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 	}
 
 	uploadKey := tusUploadKey(d, r.URL.Path)
-	uploadLength, err := cache.GetLength(uploadKey)
+	upload, err := cache.Get(uploadKey)
 	if err != nil {
 		return http.StatusNotFound, err
 	}
+	uploadLength := upload.Length
 
 	if uploadOffset > uploadLength {
 		return http.StatusBadRequest, fmt.Errorf("upload offset %d exceeds declared length %d", uploadOffset, uploadLength)
@@ -449,7 +453,23 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 			if err := openFile.Close(); err != nil {
 				return http.StatusInternalServerError, fmt.Errorf("could not close file: %w", err)
 			}
-			if err := fileutils.ReplaceWithTemp(d.user.Fs, writePath, r.URL.Path, d.settings.FileMode); err != nil {
+
+			// What the creation of the upload checked was true then. A file
+			// can be at the destination now that was not, and the user's
+			// permissions can have changed: an upload can take as long as
+			// its client likes. The destination is replaced only by an
+			// upload that asked to, from a user who may now. Otherwise the
+			// upload ends here, as a second upload to a path in use always
+			// did, and its data is discarded.
+			err := fileutils.CommitTemp(d.user.Fs, writePath, r.URL.Path, d.settings.FileMode, upload.Override && d.user.Perm.Modify)
+			switch {
+			case errors.Is(err, fberrors.ErrExist):
+				cache.Complete(uploadKey)
+				if upload.Override {
+					return http.StatusForbidden, nil
+				}
+				return http.StatusConflict, nil
+			case err != nil:
 				return http.StatusInternalServerError, fmt.Errorf("could not store the upload: %w", err)
 			}
 		}

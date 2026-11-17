@@ -43,7 +43,12 @@ func NewTempPath(dst string) (string, error) {
 // WriteFileAtomic writes the content read from in to dst so that a failure on
 // the way (the client going away, a full disk, a crash) leaves whatever was at
 // dst untouched: the content goes to a temporary file in the same directory,
-// which replaces dst only once it is complete and synced.
+// which takes the place of dst only once it is complete and synced.
+//
+// replace says whether the content may take the place of a file that is at
+// dst. Without it, dst is only ever created: ErrExist is returned when
+// something is there, whether it was there from the start or appeared while
+// the content was on its way. See CommitTemp for how that is made sure of.
 //
 // Replacing a file with another one must not change anything but its content,
 // so dst is written in place instead, as it was before, when that cannot be
@@ -59,11 +64,15 @@ func NewTempPath(dst string) (string, error) {
 // pipe, a socket, a device) is refused with ErrNotRegular.
 //
 // It returns the FileInfo of the written file.
-func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMode) (os.FileInfo, error) {
+func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMode, replace bool) (os.FileInfo, error) {
 	old, err := lstat(afs, dst)
 	switch {
 	case err == nil && old.IsDir():
 		return nil, fberrors.ErrIsDirectory
+	case err == nil && !replace:
+		// Also a symbolic link whose target does not exist: the write would
+		// go through it.
+		return nil, fberrors.ErrExist
 	case err == nil && !old.Mode().IsRegular():
 		// A symbolic link is written through, to keep the link; anything
 		// else that is not a regular file cannot take content.
@@ -74,6 +83,9 @@ func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMod
 	case err != nil && !errors.Is(err, fs.ErrNotExist):
 		// dst cannot be examined (it is out of bounds, for instance). Let the
 		// write itself report why.
+		if !replace {
+			return writeNewInPlace(afs, dst, in, fileMode, false)
+		}
 		return writeInPlace(afs, dst, in, fileMode)
 	}
 
@@ -90,7 +102,7 @@ func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMod
 		// The directory does not take a new file. Writing in place either
 		// works (an existing, writable file) or reports the real problem.
 		if !exists {
-			return writeNewInPlace(afs, dst, in, fileMode)
+			return writeNewInPlace(afs, dst, in, fileMode, replace)
 		}
 		return writeInPlace(afs, dst, in, fileMode)
 	}
@@ -101,7 +113,7 @@ func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMod
 		return nil, err
 	}
 
-	if err := ReplaceWithTemp(afs, tmp, dst, fileMode); err != nil {
+	if err := CommitTemp(afs, tmp, dst, fileMode, replace); err != nil {
 		return nil, err
 	}
 
@@ -133,11 +145,16 @@ func fillFile(file afero.File, in io.Reader) (os.FileInfo, error) {
 	return info, nil
 }
 
-// ReplaceWithTemp makes the complete temporary file tmp the content of dst,
-// and removes tmp. It renames tmp over dst when that changes nothing but the
+// CommitTemp makes the complete temporary file tmp the content of dst, and
+// removes tmp. fileMode is used when dst does not exist yet.
+//
+// With replace, it renames tmp over dst when that changes nothing but the
 // content, and otherwise copies the content into dst in place; see
-// WriteFileAtomic. fileMode is used when dst does not exist yet.
-func ReplaceWithTemp(afs afero.Fs, tmp, dst string, fileMode fs.FileMode) error {
+// WriteFileAtomic.
+//
+// Without replace, dst is created and never replaced: when something is at
+// dst, tmp is removed and ErrExist returned. See placeNew.
+func CommitTemp(afs afero.Fs, tmp, dst string, fileMode fs.FileMode, replace bool) error {
 	old, err := lstat(afs, dst)
 	exists := err == nil
 
@@ -146,6 +163,11 @@ func ReplaceWithTemp(afs afero.Fs, tmp, dst string, fileMode fs.FileMode) error 
 	case exists && old.IsDir():
 		_ = afs.Remove(tmp)
 		return fberrors.ErrIsDirectory
+	case exists && !replace:
+		_ = afs.Remove(tmp)
+		return fberrors.ErrExist
+	case !replace:
+		return placeNew(afs, tmp, dst, fileMode)
 	case exists && !old.Mode().IsRegular():
 		if err := requireRegular(afs, dst, old.Mode()&os.ModeSymlink != 0); err != nil {
 			_ = afs.Remove(tmp)
@@ -172,6 +194,87 @@ func ReplaceWithTemp(afs afero.Fs, tmp, dst string, fileMode fs.FileMode) error 
 	return err
 }
 
+// placeNew puts the complete temporary file tmp at dst if, and only if,
+// nothing is there, and removes tmp either way.
+//
+// Looking first and renaming then would leave a moment in which a file can
+// appear at dst and be replaced, and a rename replaces without asking. A hard
+// link does not: creating one fails when the name is taken, and the check and
+// the creation are one step in the kernel. So dst is made a second name of
+// tmp, and the first name is removed.
+//
+// A filesystem without hard links (FAT, exFAT, some network and FUSE mounts)
+// leaves only the look and the rename, immediately after one another. On
+// those, a file created at dst in the instant between the two is still
+// replaced.
+func placeNew(afs afero.Fs, tmp, dst string, fileMode fs.FileMode) error {
+	err := link(afs, tmp, dst)
+	switch {
+	case err == nil:
+		// Should removing the first name fail, it stays behind as a stale
+		// temporary file and is swept up later.
+		_ = afs.Remove(tmp)
+		syncDir(afs, dst)
+		return nil
+	case errors.Is(err, fs.ErrExist):
+		_ = afs.Remove(tmp)
+		return fberrors.ErrExist
+	}
+
+	if _, statErr := lstat(afs, dst); statErr == nil {
+		_ = afs.Remove(tmp)
+		return fberrors.ErrExist
+	}
+	if err := afs.Rename(tmp, dst); err == nil {
+		syncDir(afs, dst)
+		return nil
+	}
+
+	// Neither a link nor a rename: copy the content into a file created for
+	// it, which fails as well when the name is taken.
+	in, err := afs.Open(tmp)
+	if err == nil {
+		_, err = writeNewInPlace(afs, dst, in, fileMode, false)
+		_ = in.Close()
+	}
+	_ = afs.Remove(tmp)
+	return err
+}
+
+// hardLinker is implemented by the filesystems that can give a file a second
+// name. afero has no such operation, so the ones in use here are known by
+// type: see link.
+type hardLinker interface {
+	Link(oldname, newname string) error
+}
+
+// errNoHardLinks is returned by link for a filesystem it cannot make a hard
+// link on.
+var errNoHardLinks = errors.New("hard links are not available on this filesystem")
+
+// link makes newname a hard link to oldname. It fails, with an error that is
+// fs.ErrExist, when newname exists, and never replaces it.
+func link(afs afero.Fs, oldname, newname string) error {
+	switch f := afs.(type) {
+	case hardLinker:
+		// The scoped filesystem of a user.
+		return f.Link(oldname, newname)
+	case *afero.BasePathFs:
+		oldReal, err := f.RealPath(oldname)
+		if err != nil {
+			return err
+		}
+		newReal, err := f.RealPath(newname)
+		if err != nil {
+			return err
+		}
+		return os.Link(oldReal, newReal)
+	case *afero.OsFs:
+		return os.Link(oldname, newname)
+	}
+	return errNoHardLinks
+}
+
 // copyInPlace overwrites dst with the content of the file at src.
 func copyInPlace(afs afero.Fs, src, dst string, fileMode fs.FileMode) error {
 	in, err := afs.Open(src)
@@ -188,13 +291,17 @@ func copyInPlace(afs afero.Fs, src, dst string, fileMode fs.FileMode) error {
 // moment ago. It creates dst itself, which is how it knows that a file it
 // could not complete is its own to remove: a caller cannot tell such a file
 // from one that someone else put there in the meantime.
-func writeNewInPlace(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMode) (os.FileInfo, error) {
+//
+// When dst was created in the meantime, it is overwritten with replace, and
+// left alone, with ErrExist, without.
+func writeNewInPlace(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMode, replace bool) (os.FileInfo, error) {
 	file, err := afs.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_EXCL, fileMode)
-	if errors.Is(err, fs.ErrExist) {
-		// It was created in the meantime.
+	switch {
+	case errors.Is(err, fs.ErrExist) && replace:
 		return writeInPlace(afs, dst, in, fileMode)
-	}
-	if err != nil {
+	case errors.Is(err, fs.ErrExist):
+		return nil, fberrors.ErrExist
+	case err != nil:
 		return nil, err
 	}
 
