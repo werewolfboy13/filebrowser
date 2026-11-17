@@ -114,6 +114,12 @@ COPY --from=build --chown=1000:1000 /out/database /database
 ENV FB_CONFIG=/config/settings.json \
     FB_CONFIG_TEMPLATE=/defaults/settings.json
 
+# Once it listens, the server writes down where in this file, for the health check below, and
+# removes the file when it stops (cmd/health_record.go). /dev/shm is the one directory that Docker
+# keeps writable for every user when the root filesystem is read-only and nothing is mounted for
+# the purpose, and it is empty again each time the container starts.
+ENV FB_HEALTH_FILE=/dev/shm/filebrowser-health.json
+
 # The static image's own user is 65532. File Browser's image has always run as 1000, and the
 # volumes and bind mounts of existing installations belong to that user.
 USER 1000:1000
@@ -136,7 +142,11 @@ ENV GIT_SHA=${GIT_SHA}
 EXPOSE 80
 
 # The runtime image has no shell or wget, so the check is a command of the binary. It requests
-# /health on the address and port in FB_ADDRESS and FB_PORT, or else in the settings file.
+# /health where the running server wrote down that it listens, so it follows the flags given to
+# the server as well as the environment, the settings file and the database. In a container
+# without /dev/shm (--ipc=none), where the server cannot write that down, the check goes by
+# FB_ADDRESS, FB_PORT and the settings file alone, and misses a server started with other flags:
+# point FB_HEALTH_FILE at a directory that the server can write to.
 HEALTHCHECK --start-period=2s --interval=5s --timeout=3s \
   CMD [ "/bin/filebrowser", "health" ]
 

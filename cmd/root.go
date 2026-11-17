@@ -263,6 +263,8 @@ user created with the credentials from options "username" and "password".`,
 		defer listener.Close()
 
 		log.Println("Listening on", listener.Addr().String())
+		// For the health command, which cannot see this process's flags.
+		defer recordListenAddress(server, listener)()
 		srv := newServer(handler)
 
 		go func() {

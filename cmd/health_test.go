@@ -194,9 +194,10 @@ func TestHealthTargetPrecedence(t *testing.T) {
 }
 
 func TestHealthCommand(t *testing.T) {
-	// Not the machine's own configuration.
+	// Not the machine's own configuration, nor a server that runs on it.
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv(envConfig, "")
+	t.Setenv(envHealthFile, "")
 
 	t.Run("succeeds against a healthy server", func(t *testing.T) {
 		srv := httptest.NewServer(healthyHandler("/health"))
