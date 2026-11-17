@@ -2,6 +2,7 @@ import * as tus from "tus-js-client";
 import { baseURL, tusEndpoint, tusSettings, origin } from "@/utils/constants";
 import { useAuthStore } from "@/stores/auth";
 import { removePrefix } from "@/api/utils";
+import { renew } from "@/utils/auth";
 
 const RETRY_BASE_DELAY = 1000;
 const RETRY_MAX_DELAY = 20000;
@@ -36,6 +37,20 @@ export async function upload(
       storeFingerprintForResuming: false,
       headers: {
         "X-Auth": authStore.jwt,
+      },
+      // An upload can outlive the token it started with: send the current
+      // one with every request (create, HEAD, PATCH, terminate)...
+      onBeforeRequest: function (req) {
+        if (authStore.jwt) req.setHeader("X-Auth", authStore.jwt);
+      },
+      // ...and renew it when the server says it is about to expire, as
+      // fetchURL does for other API calls.
+      onAfterResponse: async function (_req, res) {
+        if (res.getHeader("X-Renew-Token") === "true" && authStore.jwt) {
+          await renew(authStore.jwt).catch((e) =>
+            console.warn("could not renew the session during an upload", e)
+          );
+        }
       },
       onShouldRetry: function (err) {
         const status = err.originalResponse

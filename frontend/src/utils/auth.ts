@@ -75,7 +75,21 @@ export async function login(
   }
 }
 
-export async function renew(jwt: string) {
+// One renewal at a time per token: every response carrying X-Renew-Token
+// (API calls, tus upload requests) asks for one, often concurrently.
+let pendingRenew: { jwt: string; promise: Promise<void> } | null = null;
+
+export function renew(jwt: string): Promise<void> {
+  if (pendingRenew?.jwt === jwt) return pendingRenew.promise;
+
+  const promise = requestRenew(jwt).finally(() => {
+    if (pendingRenew?.promise === promise) pendingRenew = null;
+  });
+  pendingRenew = { jwt, promise };
+  return promise;
+}
+
+async function requestRenew(jwt: string) {
   const res = await fetch(`${baseURL}/api/renew`, {
     method: "POST",
     headers: {
