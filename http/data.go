@@ -48,6 +48,10 @@ type data struct {
 	// resolved caches, for the length of the request, where paths on disk
 	// lead once symbolic links are followed. See resolvePath.
 	resolved map[string]string
+
+	// protectedInfo caches the identities of the server's own files. See
+	// protectedFiles.
+	protectedInfo []os.FileInfo
 }
 
 // Check implements rules.Checker.
@@ -78,6 +82,12 @@ func (d *data) Check(path string) bool {
 // links that stay inside the scope: without the second check, a link to a
 // denied file or directory would open it under a name no rule mentions.
 func (d *data) CheckRules(path string) bool {
+	// The server's own files are refused before any rule is looked at: no
+	// rule, and no user, is meant to open them.
+	if d.protected(path) {
+		return false
+	}
+
 	rulePath := d.rulePath(path)
 	if !d.rulesAllow(rulePath) {
 		return false
@@ -94,6 +104,61 @@ func (d *data) CheckRules(path string) bool {
 	}
 
 	return true
+}
+
+// protected reports whether path names one of the server's own files that lie
+// inside the served directory (see settings.Server.Protect): the database,
+// which holds the key that signs sessions and every password hash, the
+// configuration file, the cache directory, the TLS key and the log.
+//
+// A file can be reached by more names than the one it was registered under,
+// so the path is compared as written, with symbolic links followed, and, for
+// an existing file, by identity, which covers hard links.
+//
+// It costs nothing when nothing is registered, which is the case whenever
+// those files are kept outside the served directory.
+func (d *data) protected(path string) bool {
+	if !d.server.HasProtectedPaths() || files.BasePath(d.user.Fs) == nil {
+		return false
+	}
+
+	lexical := filepath.Clean(d.user.FullPath(slashClean(path)))
+	if d.server.IsProtected(lexical) {
+		return true
+	}
+
+	real, ok := d.resolvePath(lexical)
+	if !ok {
+		real = lexical
+	} else if real != lexical && d.server.IsProtected(real) {
+		return true
+	}
+
+	info, err := os.Stat(real)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	for _, other := range d.protectedFiles() {
+		if os.SameFile(info, other) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// protectedFiles returns the FileInfo of the registered paths that exist, for
+// comparing identities. It is looked up once per request.
+func (d *data) protectedFiles() []os.FileInfo {
+	if d.protectedInfo == nil {
+		d.protectedInfo = []os.FileInfo{}
+		for _, p := range d.server.ProtectedPaths() {
+			if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() {
+				d.protectedInfo = append(d.protectedInfo, info)
+			}
+		}
+	}
+	return d.protectedInfo
 }
 
 // rulesAllow evaluates the global and user rules against a path that is

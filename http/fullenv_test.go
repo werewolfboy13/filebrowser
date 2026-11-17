@@ -52,6 +52,21 @@ func newFullEnv(t *testing.T) *fullEnv {
 // (and prepare the root directory) before the handler is built.
 func newFullEnvWith(t *testing.T, configure func(root string, server *settings.Server)) *fullEnv {
 	t.Helper()
+	return newFullEnvOpts(t, fullEnvOptions{configure: configure})
+}
+
+type fullEnvOptions struct {
+	// database is the path of the database below the root. Left empty, the
+	// database lives outside the root, as in the official container layout.
+	database string
+
+	// configure can adjust the server settings, and prepare the root
+	// directory, before the handler is built. Root is already set.
+	configure func(root string, server *settings.Server)
+}
+
+func newFullEnvOpts(t *testing.T, opts fullEnvOptions) *fullEnv {
+	t.Helper()
 
 	// Resolve symlinks in the temporary directory itself (macOS keeps it under
 	// a symlinked /var), so real paths compare equal in tests.
@@ -64,7 +79,14 @@ func newFullEnvWith(t *testing.T, configure func(root string, server *settings.S
 		t.Fatal(err)
 	}
 
-	db, err := storm.Open(filepath.Join(t.TempDir(), "db"))
+	dbPath := filepath.Join(t.TempDir(), "db")
+	if opts.database != "" {
+		dbPath = filepath.Join(root, filepath.FromSlash(opts.database))
+		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := storm.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,8 +112,8 @@ func newFullEnvWith(t *testing.T, configure func(root string, server *settings.S
 		t.Fatal(err)
 	}
 	server := &settings.Server{Root: root, EnableThumbnails: true, ResizePreview: true}
-	if configure != nil {
-		configure(root, server)
+	if opts.configure != nil {
+		opts.configure(root, server)
 	}
 	if err := st.Settings.SaveServer(server); err != nil {
 		t.Fatal(err)

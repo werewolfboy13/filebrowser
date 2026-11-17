@@ -294,11 +294,15 @@ func resourcePatchHandler(fileCache FileCache) handleFunc {
 
 // checkDescendants reports an error if the rules deny any path inside the src
 // tree or, when dst is not empty, the location that tree would land on. The
+// same goes for the server's own files (see data.protected): a directory that
+// holds one cannot be deleted, moved or copied as a whole. The
 // handlers only authorize the root of the operation, but copy, rename and
 // delete then recurse through the whole subtree, so a rule denying a descendant
 // of an allowed directory would be bypassed by operating on the parent instead.
 func checkDescendants(d *data, src, dst string) error {
-	if len(d.settings.Rules) == 0 && len(d.user.Rules) == 0 {
+	// The walk is only needed when something can be refused below the root of
+	// the operation: a rule, or one of the server's own files.
+	if len(d.settings.Rules) == 0 && len(d.user.Rules) == 0 && !d.server.HasProtectedPaths() {
 		return nil
 	}
 

@@ -68,6 +68,11 @@ type Server struct {
 	// configured, and tells the rule checker to match paths case-insensitively.
 	// It is never persisted.
 	CaseInsensitiveFs bool `json:"-"`
+
+	// protected holds the server's own files that lie inside Root and must
+	// not be served. Like CaseInsensitiveFs, it is worked out at startup and
+	// never persisted. See Protect.
+	protected []protectedPath
 }
 
 // Clean cleans any variables that might need cleaning.
