@@ -62,8 +62,8 @@ services:
     user: '65532:65532'
     pids_limit: 64
     # The image has no shell, so the password is an argument instead of a file written at start.
-    # The image's own configuration file comes first, and the cache is not saved to disk: an
-    # upload that was in progress when Redis restarts starts over.
+    # The image's own configuration file comes first. Nothing is written to disk, neither the
+    # cache nor a PID file: an upload that was in progress when Redis restarts starts over.
     command:
       [
         'redis-server',
@@ -74,12 +74,15 @@ services:
         '',
         '--appendonly',
         'no',
+        '--pidfile',
+        '',
       ]
     environment:
       # Read by redis-cli in the health check below.
       REDISCLI_AUTH: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    # With -e, redis-cli fails when Redis answers with an error, such as a refused password.
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      test: ['CMD', 'redis-cli', '-e', 'ping']
       interval: 10s
       timeout: 3s
       retries: 3
