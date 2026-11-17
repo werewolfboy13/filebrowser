@@ -19,10 +19,20 @@ import (
 // it will replace. See WriteFileAtomic.
 const TempPrefix = ".fbtmp-"
 
-var tempName = regexp.MustCompile(`^\.fbtmp-(tus-)?[0-9a-f]{32}$`)
+var (
+	// ownTempName matches the names this package gives its temporary files.
+	ownTempName = regexp.MustCompile(`^\.fbtmp-(tus-)?[0-9a-f]{32}$`)
 
-// IsTempName reports whether name, the last element of a path, is the name of
-// one of the temporary files this package creates.
+	// tempName matches them in any spelling.
+	tempName = regexp.MustCompile(`(?i)^\.fbtmp-(tus-)?[0-9a-f]{32}$`)
+)
+
+// IsTempName reports whether name, the last element of a path, names one of
+// the temporary files this package creates, or would on a filesystem that
+// does not tell upper from lower case (the default on macOS and Windows):
+// there, ".FBTMP-..." opens the file that was created as ".fbtmp-...". The
+// spelling is ignored everywhere rather than only where the filesystem is
+// known to fold case, so that nothing depends on that being found out right.
 func IsTempName(name string) bool {
 	return tempName.MatchString(name)
 }
@@ -368,7 +378,9 @@ func RemoveStaleTemps(afs afero.Fs, dir string, stale func(os.FileInfo) bool) er
 	}
 
 	for _, name := range names {
-		if !IsTempName(name) {
+		// Only the names as this package writes them: a file under another
+		// spelling was not created here, and is not ours to remove.
+		if !ownTempName.MatchString(name) {
 			continue
 		}
 

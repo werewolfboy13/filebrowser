@@ -462,7 +462,8 @@ func TestRemoveStaleTemps(t *testing.T) {
 		TempPrefix + "tus-" + strings.Repeat("b", 32): false, // stale
 		TempPrefix + strings.Repeat("c", 32):          true,  // recent
 		TempPrefix + "notes":                          true,  // a user's own file
-		".fbtmp-" + strings.Repeat("A", 32):           true,  // not our naming
+		".fbtmp-" + strings.Repeat("g", 32):           true,  // not our naming
+		".fbtmp-" + strings.Repeat("A", 32):           true,  // refused by name, but not written by us
 		"regular.txt":                                 true,
 	}
 	for name := range files {
@@ -499,6 +500,25 @@ func TestRemoveStaleTemps(t *testing.T) {
 
 	if IsTempName("report.txt") || !IsTempName(TempPrefix+strings.Repeat("0", 32)) {
 		t.Error("IsTempName misjudges a name")
+	}
+
+	// On a filesystem that does not tell upper from lower case (the default
+	// on macOS and Windows) a temporary file answers to every spelling of its
+	// name, so every spelling is one.
+	for _, name := range []string{
+		".FBTMP-" + strings.Repeat("a", 32),
+		".fbtmp-" + strings.Repeat("A", 32),
+		".FbTmp-TUS-" + strings.Repeat("aB", 16),
+		".fbtmp-Tus-" + strings.Repeat("0", 32),
+	} {
+		if !IsTempName(name) {
+			t.Errorf("IsTempName(%q) = false", name)
+		}
+	}
+	for _, name := range []string{".fbtmp-" + strings.Repeat("a", 31), ".fbtmp-" + strings.Repeat("a", 33), "fbtmp-" + strings.Repeat("a", 32), ".FBTMP-NOTES"} {
+		if IsTempName(name) {
+			t.Errorf("IsTempName(%q) = true", name)
+		}
 	}
 	p, err := NewTempPath("/a/b/file.txt")
 	if err != nil || filepath.ToSlash(filepath.Dir(p)) != "/a/b" || !IsTempName(filepath.Base(p)) {
