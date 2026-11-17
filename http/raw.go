@@ -124,11 +124,11 @@ func newArchiveWalk(ctx context.Context, d *data, commonPath string) *archiveWal
 // records it. A directory whose real location cannot be determined is not
 // entered through a symlink, which keeps the walk finite in that case too.
 func (w *archiveWalk) enter(path string) bool {
-	real := path
+	onDisk := path
 	resolved := false
 	if files.BasePath(w.d.user.Fs) != nil {
 		if p, err := filepath.EvalSymlinks(w.d.user.FullPath(path)); err == nil {
-			real, resolved = p, true
+			onDisk, resolved = p, true
 		}
 	}
 
@@ -143,10 +143,10 @@ func (w *archiveWalk) enter(path string) bool {
 		}
 	}
 
-	if _, seen := w.visited[real]; seen {
+	if _, seen := w.visited[onDisk]; seen {
 		return false
 	}
-	w.visited[real] = struct{}{}
+	w.visited[onDisk] = struct{}{}
 	return true
 }
 

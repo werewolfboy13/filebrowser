@@ -48,7 +48,6 @@ func palettedBMP(w, h int, index byte) []byte {
 // a colour map of two entries and pixels that all carry the given index.
 func palettedTIFF(w, h int, index byte) []byte {
 	const (
-		tByte  = 1
 		tShort = 3
 		tLong  = 4
 	)
@@ -96,7 +95,6 @@ func palettedTIFF(w, h int, index byte) []byte {
 	_ = binary.Write(&out, binary.LittleEndian, uint32(0)) // no further IFD
 	out.Write(pixels)
 	out.Write(colorMap)
-	_ = tByte
 	return out.Bytes()
 }
 

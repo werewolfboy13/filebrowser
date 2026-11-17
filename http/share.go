@@ -181,12 +181,12 @@ func sharesUnder(d *data, path string, fn func(link *share.Link, owner *users.Us
 			continue
 		}
 
-		real := filepath.Clean(owner.FullPath(link.Path))
+		onDisk := filepath.Clean(owner.FullPath(link.Path))
 		switch {
-		case fold(real) == fold(target):
+		case fold(onDisk) == fold(target):
 			errs = errors.Join(errs, fn(link, owner, ""))
-		case strings.HasPrefix(fold(real), prefix) && len(real) >= len(target):
-			rel := strings.TrimPrefix(real[len(target):], string(filepath.Separator))
+		case strings.HasPrefix(fold(onDisk), prefix) && len(onDisk) >= len(target):
+			rel := strings.TrimPrefix(onDisk[len(target):], string(filepath.Separator))
 			errs = errors.Join(errs, fn(link, owner, rel))
 		}
 	}

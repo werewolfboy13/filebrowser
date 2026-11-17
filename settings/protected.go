@@ -91,16 +91,16 @@ func (s *Server) ProtectedPaths() []string {
 	return paths
 }
 
-// IsProtected reports whether real, an absolute path on disk, is one of the
+// IsProtected reports whether path, an absolute path on disk, is one of the
 // registered paths, lies inside one, or is a rotated copy of the log file.
-func (s *Server) IsProtected(real string) bool {
-	real = filepath.Clean(real)
+func (s *Server) IsProtected(path string) bool {
+	path = filepath.Clean(path)
 
 	for _, p := range s.protected {
-		if samePath(real, p.path, s.CaseInsensitiveFs) || strictlyInside(real, p.path, s.CaseInsensitiveFs) {
+		if samePath(path, p.path, s.CaseInsensitiveFs) || strictlyInside(path, p.path, s.CaseInsensitiveFs) {
 			return true
 		}
-		if p.log && isRotatedLog(real, p.path, s.CaseInsensitiveFs) {
+		if p.log && isRotatedLog(path, p.path, s.CaseInsensitiveFs) {
 			return true
 		}
 	}

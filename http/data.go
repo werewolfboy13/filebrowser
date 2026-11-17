@@ -133,14 +133,14 @@ func (d *data) protected(path string) bool {
 		return true
 	}
 
-	real, ok := d.resolvePath(lexical)
+	resolved, ok := d.resolvePath(lexical)
 	if !ok {
-		real = lexical
-	} else if real != lexical && d.server.IsProtected(real) {
+		resolved = lexical
+	} else if resolved != lexical && d.server.IsProtected(resolved) {
 		return true
 	}
 
-	info, err := os.Stat(real)
+	info, err := os.Stat(resolved)
 	if err != nil || !info.Mode().IsRegular() {
 		return false
 	}
@@ -192,7 +192,7 @@ func (d *data) rulesAllow(path string) bool {
 // the scoped filesystem refuses such a path on its own, and when external
 // symlinks are allowed no rule can describe it.
 func (d *data) resolvedRulePath(path string) (string, bool) {
-	real, ok := d.realPath(path)
+	onDisk, ok := d.realPath(path)
 	if !ok {
 		return "", false
 	}
@@ -206,7 +206,7 @@ func (d *data) resolvedRulePath(path string) (string, bool) {
 		return "", false
 	}
 
-	rel, err := filepath.Rel(root, real)
+	rel, err := filepath.Rel(root, onDisk)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", false
 	}

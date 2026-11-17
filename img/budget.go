@@ -30,11 +30,13 @@ func decodeCost(cfg image.Config, format string, header []byte) int64 {
 		// is held as well.
 		samples, progressive := jpegSampling(header)
 		if samples == 0 {
-			samples = 3
-			if cfg.ColorModel == color.GrayModel {
+			switch cfg.ColorModel {
+			case color.GrayModel:
 				samples = 1
-			} else if cfg.ColorModel == color.CMYKModel {
+			case color.CMYKModel:
 				samples = 4
+			default:
+				samples = 3
 			}
 		}
 		cost := float64(pixels) * samples
