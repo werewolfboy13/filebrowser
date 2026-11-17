@@ -64,6 +64,9 @@ type fullEnvOptions struct {
 	// configure can adjust the server settings, and prepare the root
 	// directory, before the handler is built. Root is already set.
 	configure func(root string, server *settings.Server)
+
+	// assets replaces the embedded frontend build.
+	assets fstest.MapFS
 }
 
 func newFullEnvOpts(t *testing.T, opts fullEnvOptions) *fullEnv {
@@ -138,8 +141,11 @@ func newFullEnvOpts(t *testing.T, opts fullEnvOptions) *fullEnv {
 		t.Fatal(err)
 	}
 
-	assets := fstest.MapFS{
-		"public/index.html": &fstest.MapFile{Data: []byte("<html><script>window.FileBrowser = [{[ .Json ]}];</script></html>")},
+	assets := opts.assets
+	if assets == nil {
+		assets = fstest.MapFS{
+			"public/index.html": &fstest.MapFile{Data: []byte("<html><script>window.FileBrowser = [{[ .Json ]}];</script></html>")},
+		}
 	}
 	cache := newMemoryUploadCache()
 	t.Cleanup(cache.Close)
