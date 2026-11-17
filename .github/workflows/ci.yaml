@@ -8,16 +8,22 @@ on:
       - "v*"
   pull_request:
 
+# What the token of every job may do, unless the job says otherwise: read the repository.
+permissions:
+  contents: read
+
+# Actions are pinned to a commit, with the version it belongs to after it, so that a tag that is
+# moved later does not change what runs here.
 jobs:
   lint-frontend:
     name: Lint Frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           package_json_file: "frontend/package.json"
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "26.x"
           cache: "pnpm"
@@ -31,11 +37,11 @@ jobs:
     name: Test Frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           package_json_file: "frontend/package.json"
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "26.x"
           cache: "pnpm"
@@ -49,11 +55,11 @@ jobs:
     name: Lint Backend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: "1.27.x"
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: "latest"
 
@@ -61,8 +67,8 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: "1.27.x"
       - run: go test --race ./...
@@ -71,75 +77,120 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.27'
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           package_json_file: "frontend/package.json"
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "26.x"
           cache: "pnpm"
           cache-dependency-path: "frontend/pnpm-lock.yaml"
       - name: Install Task
-        uses: go-task/setup-task@v2
+        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
       - run: task build
 
   release:
     name: Release
-    needs: ["lint-frontend", "lint-backend", "test", "build"]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: ["lint-frontend", "test-frontend", "lint-backend", "test", "build"]
+    # Only for a version tag, and only in a repository that says where its images go: the
+    # repository variable IMAGE_NAME (Settings, Secrets and variables, Actions, Variables), such as
+    # ghcr.io/OWNER/filebrowser, or OWNER/filebrowser for Docker Hub, in lower case. Without it
+    # nothing is released, so a tag pushed to a fork that was not set up publishes nothing.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.IMAGE_NAME != ''
     runs-on: ubuntu-latest
+    permissions:
+      # GoReleaser creates the GitHub release.
+      contents: write
+      # The image is pushed with this job's token when IMAGE_NAME is on ghcr.io.
+      packages: write
     steps:
-      - uses: actions/checkout@v6
+      # The name is checked before anything is built. File Browser's own images and those of
+      # this build are different things, so only the organization that owns them may publish
+      # under its names.
+      - name: Docker image name and tags
+        id: image
+        env:
+          IMAGE_NAME: ${{ vars.IMAGE_NAME }}
+        run: |
+          case "$IMAGE_NAME" in
+            filebrowser/* | docker.io/filebrowser/* | index.docker.io/filebrowser/* | ghcr.io/filebrowser/*)
+              if [ "$GITHUB_REPOSITORY_OWNER" != "filebrowser" ]; then
+                echo "::error::IMAGE_NAME is $IMAGE_NAME, which belongs to the File Browser project. Use a name of your own."
+                exit 1
+              fi
+              ;;
+          esac
+
+          # For the tag v2.63.23, the version is 2.63.23 and the major tag is v2. A tag with a
+          # hyphen, such as v3.0.0-rc.1, is a prerelease: it gets its own tag only, and neither the
+          # major tag nor `latest` moves to it.
+          {
+            echo "version=${GITHUB_REF_NAME#v}"
+            echo "tags<<END_OF_TAGS"
+            echo "$IMAGE_NAME:$GITHUB_REF_NAME"
+            case "$GITHUB_REF_NAME" in
+              *-*) ;;
+              *)
+                echo "$IMAGE_NAME:${GITHUB_REF_NAME%%.*}"
+                echo "$IMAGE_NAME:latest"
+                ;;
+            esac
+            echo "END_OF_TAGS"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.27'
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           package_json_file: "frontend/package.json"
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "26.x"
           cache: "pnpm"
           cache-dependency-path: "frontend/pnpm-lock.yaml"
       - name: Install Task
-        uses: go-task/setup-task@v2
+        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
       - run: task build:frontend
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # For an image on Docker Hub.
       - name: Login to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       # The Dockerfile's base images are Docker Hardened Images. Their registry takes the same
       # Docker Hub account.
       - name: Login to Docker Hardened Images
-        uses: docker/login-action@v4
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: dhi.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      # For the tag v2.63.23, the version is 2.63.23 and the major tag is v2.
-      - name: Docker image version
-        id: image
-        run: |
-          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          echo "major=${GITHUB_REF_NAME%%.*}" >> "$GITHUB_OUTPUT"
+      # For an image on GitHub's registry, which takes this job's own token.
+      - name: Login to GitHub Container Registry
+        if: startsWith(vars.IMAGE_NAME, 'ghcr.io/')
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       # The Dockerfile builds File Browser from source and runs the tests itself, so an image that
       # fails them is never pushed. It comes before GoReleaser, so that a failed image build leaves
       # no release behind, and the job can simply run again.
       - name: Build and push Docker image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -154,14 +205,13 @@ jobs:
             org.opencontainers.image.title=filebrowser
             org.opencontainers.image.version=${{ steps.image.outputs.version }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          tags: |
-            filebrowser/filebrowser:${{ github.ref_name }}
-            filebrowser/filebrowser:${{ steps.image.outputs.major }}
-            filebrowser/filebrowser:latest
+          tags: ${{ steps.image.outputs.tags }}
+      # The release is created in this repository, with this job's token. A v2 release of
+      # GoReleaser, which is what .goreleaser.yml is written for.
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
-          version: latest
+          version: "~> v2"
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
