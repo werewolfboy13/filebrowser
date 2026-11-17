@@ -12,6 +12,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/filebrowser/filebrowser/v2/users"
 )
 
 // useFakeClock puts the limiters of the environment on a clock the test moves.
@@ -19,6 +23,7 @@ func (e *fullEnv) useFakeClock() *fakeClock {
 	clock := newFakeClock()
 	e.limits.login.now = clock.Now
 	e.limits.share.now = clock.Now
+	e.limits.password.now = clock.Now
 	return clock
 }
 
@@ -213,6 +218,164 @@ func stalledRequest(t *testing.T, e *fullEnv, head, firstBytes string, patience 
 
 	_, err = io.Copy(io.Discard, reader)
 	return status, err == nil // nil means EOF: the server closed the connection
+}
+
+// renew trades a token for a renewed one.
+func (e *fullEnv) renew(token string) string {
+	e.t.Helper()
+	code, _, renewed := e.do(http.MethodPost, "/api/renew", token, nil, nil)
+	if code != http.StatusOK {
+		e.t.Fatalf("renewal = %d %q", code, renewed)
+	}
+	return renewed
+}
+
+// changeOwnPassword sends a password change for the user id with the given
+// guess at the current password.
+func (e *fullEnv) changeOwnPassword(token string, id uint, guess, addr string) (int, http.Header) {
+	e.t.Helper()
+	payload := `{"what":"user","which":["password"],"current_password":"` + guess + `","data":{"id":` +
+		strconv.FormatUint(uint64(id), 10) + `,"password":"the-new-password-123"}}`
+	var hdr map[string]string
+	if addr != "" {
+		hdr = map[string]string{"X-Forwarded-For": addr}
+	}
+	code, h, _ := e.do(http.MethodPut, "/api/users/"+strconv.FormatUint(uint64(id), 10), token, strings.NewReader(payload), hdr)
+	return code, h
+}
+
+// The users API confirms the current password before it changes anything
+// that matters, and answered every wrong one as fast as the hash can be
+// computed. Whoever holds a session token (a stolen one) could guess the
+// password of the account that way, past the limiter on the login, and then
+// change it. The guesses are now counted per account.
+func TestCurrentPasswordGuessesAreSlowedDown(t *testing.T) {
+	e := newFullEnv(t)
+	clock := e.useFakeClock()
+	const attacker, elsewhere = "198.51.100.7", "203.0.113.9"
+
+	// The token an attacker holds: renewed since the login, as a token is
+	// after at most two hours.
+	stolen := e.renew(e.login("bob", fullEnvUserPassword))
+
+	for i := 1; i <= limiterFreeFailures; i++ {
+		if code, _ := e.changeOwnPassword(stolen, 2, "wrong-guess-"+strconv.Itoa(i), attacker); code != http.StatusBadRequest {
+			t.Fatalf("wrong password %d = %d, want 400", i, code)
+		}
+	}
+
+	// The next guess has to wait, and so does the right password.
+	code, h := e.changeOwnPassword(stolen, 2, "wrong-guess-6", attacker)
+	if code != http.StatusTooManyRequests {
+		t.Fatalf("guess after %d failures = %d, want 429", limiterFreeFailures, code)
+	}
+	if retry, err := strconv.Atoi(h.Get("Retry-After")); err != nil || retry < 1 {
+		t.Errorf("Retry-After = %q, want the seconds to wait", h.Get("Retry-After"))
+	}
+	if code, _ := e.changeOwnPassword(stolen, 2, fullEnvUserPassword, attacker); code != http.StatusTooManyRequests {
+		t.Errorf("the right password while waiting = %d, want 429", code)
+	}
+
+	// Neither another address nor another renewal of the token gets around
+	// it: the count belongs to the account.
+	if code, _ := e.changeOwnPassword(stolen, 2, "wrong-guess-7", elsewhere); code != http.StatusTooManyRequests {
+		t.Errorf("a guess from another address = %d, want 429", code)
+	}
+	time.Sleep(1100 * time.Millisecond) // a renewal in the same second is the same token
+	if code, _ := e.changeOwnPassword(e.renew(stolen), 2, "wrong-guess-8", elsewhere); code != http.StatusTooManyRequests {
+		t.Errorf("a guess with the token renewed once more = %d, want 429", code)
+	}
+
+	// The other routes that confirm the password count on the same account.
+	if code, _, _ := e.do(http.MethodDelete, "/api/users/2", stolen, strings.NewReader(`{"current_password":"wrong-guess-9"}`), nil); code != http.StatusTooManyRequests {
+		t.Errorf("a guess through the deletion of the account = %d, want 429", code)
+	}
+	if u := e.user(2); u == nil || !users.CheckPwd(fullEnvUserPassword, u.Password) {
+		t.Fatal("the account was changed by a guess")
+	}
+
+	// Other accounts are not affected.
+	admin := e.login("admin", fullEnvAdminPassword)
+	if code, body := e.putUser(admin, 2, `{"what":"user","which":["locale"],"current_password":"`+fullEnvAdminPassword+`","data":{"id":2,"locale":"fr"}}`); code != http.StatusOK {
+		t.Errorf("an administrator confirming their own password = %d %q", code, body)
+	}
+
+	// The wait doubles with every further failure.
+	clock.Advance(limiterBaseDelay + time.Second)
+	if code, _ := e.changeOwnPassword(stolen, 2, "wrong-guess-10", attacker); code != http.StatusBadRequest {
+		t.Errorf("a guess after the wait = %d, want 400", code)
+	}
+	clock.Advance(limiterBaseDelay + time.Second/2)
+	if code, _ := e.changeOwnPassword(stolen, 2, "wrong-guess-11", attacker); code != http.StatusTooManyRequests {
+		t.Errorf("a guess after the first wait only = %d, want 429", code)
+	}
+
+	// The user is not locked out by this: a session that comes straight
+	// from a login with the password is counted on its own, and such a
+	// session is what the attacker cannot get. The user logs in again and
+	// changes the password, which ends the stolen session.
+	own := e.login("bob", fullEnvUserPassword)
+	code, h = e.changeOwnPassword(own, 2, fullEnvUserPassword, elsewhere)
+	if code != http.StatusOK || h.Get("X-Auth-Token") == "" {
+		t.Fatalf("the user's own password change from a fresh login = %d, want 200 and a new token", code)
+	}
+	if e.works(stolen) {
+		t.Error("the stolen session survived the password change")
+	}
+}
+
+// A session straight from a login is counted on its own, but not without
+// limit, and not for longer than the token it came with: a renewal puts it
+// back on the count of the account.
+func TestCurrentPasswordGuessesWithALoginToken(t *testing.T) {
+	e := newFullEnv(t)
+	e.useFakeClock()
+
+	fresh := e.login("bob", fullEnvUserPassword)
+	var claims authToken
+	if _, _, err := jwt.NewParser().ParseUnverified(fresh, &claims); err != nil || !claims.PasswordLogin {
+		t.Fatalf("a token from a login is not marked as one: %+v, %v", claims, err)
+	}
+	renewed := e.renew(fresh)
+	claims = authToken{}
+	if _, _, err := jwt.NewParser().ParseUnverified(renewed, &claims); err != nil || claims.PasswordLogin {
+		t.Fatalf("a renewed token is marked as coming from a login: %+v, %v", claims, err)
+	}
+
+	for i := 1; i <= limiterFreeFailures; i++ {
+		if code, _ := e.changeOwnPassword(fresh, 2, "wrong-guess-"+strconv.Itoa(i), ""); code != http.StatusBadRequest {
+			t.Fatalf("wrong password %d = %d, want 400", i, code)
+		}
+	}
+	if code, _ := e.changeOwnPassword(fresh, 2, "wrong-guess-6", ""); code != http.StatusTooManyRequests {
+		t.Errorf("guess %d with a login token = %d, want 429", limiterFreeFailures+1, code)
+	}
+
+	// The renewed token is on the count of the account, which is untouched
+	// so far, and which every further renewal shares.
+	for i := 1; i <= limiterFreeFailures; i++ {
+		if code, _ := e.changeOwnPassword(renewed, 2, "other-guess-"+strconv.Itoa(i), ""); code != http.StatusBadRequest {
+			t.Fatalf("wrong password %d with the renewed token = %d, want 400", i, code)
+		}
+	}
+	time.Sleep(1100 * time.Millisecond)
+	for _, token := range []string{renewed, e.renew(renewed), e.renew(fresh)} {
+		if code, _ := e.changeOwnPassword(token, 2, "other-guess-6", ""); code != http.StatusTooManyRequests {
+			t.Errorf("a further guess with a renewed token = %d, want 429", code)
+		}
+	}
+
+	// A request without a password is not a guess: it is refused without
+	// being counted, and without computing a hash.
+	admin := e.login("admin", fullEnvAdminPassword)
+	for i := 0; i < 3*limiterFreeFailures; i++ {
+		if code, _ := e.changeOwnPassword(admin, 1, "", ""); code != http.StatusBadRequest {
+			t.Fatalf("request %d without a password = %d, want 400", i, code)
+		}
+	}
+	if code, _ := e.changeOwnPassword(admin, 1, fullEnvAdminPassword, ""); code != http.StatusOK {
+		t.Errorf("the right password after requests without one = %d, want 200", code)
+	}
 }
 
 // Only the request header had a time limit. A client could send the first

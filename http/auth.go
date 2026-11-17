@@ -43,6 +43,14 @@ type userInfo struct {
 
 type authToken struct {
 	User userInfo `json:"user"`
+
+	// PasswordLogin marks a token that was issued in answer to a login with
+	// the account's password. A token that comes from a renewal does not
+	// carry it, so it says that whoever got this token knew the password at
+	// the time, which holding a session alone does not. See confirmPassword
+	// for what it is used for.
+	PasswordLogin bool `json:"pwl,omitempty"`
+
 	jwt.RegisteredClaims
 }
 
@@ -148,6 +156,7 @@ func withUser(fn handleFunc) handleFunc {
 			}
 		}
 		d.token = token.Raw
+		d.loginToken = tk.PasswordLogin
 
 		// Only a session that is still good is told to renew its token. Set
 		// before the checks above, the header went out with the 401 that
@@ -227,7 +236,11 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 		}
 		done(attemptSucceeded)
 
-		return printToken(w, r, d, user, tokenExpireTime)
+		signed, err := signSessionToken(d, user, tokenExpireTime, d.settings.AuthMethod == fbAuth.MethodJSONAuth)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		return writeToken(w, signed)
 	}
 }
 
@@ -331,7 +344,7 @@ const newTokenHeader = "X-Auth-Token"
 // marked as not to be stored. The client is also told not to renew: the
 // only token it could renew with is the one that was just revoked.
 func replaceSessionToken(w http.ResponseWriter, d *data, user *users.User, tokenExpirationTime time.Duration) error {
-	signed, err := signSessionToken(d, user, tokenExpirationTime)
+	signed, err := signSessionToken(d, user, tokenExpirationTime, false)
 	if err != nil {
 		return err
 	}
@@ -342,12 +355,17 @@ func replaceSessionToken(w http.ResponseWriter, d *data, user *users.User, token
 	return nil
 }
 
+// printToken answers with a token for user that does not say how the session
+// began: what a renewal hands out.
 func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.User, tokenExpirationTime time.Duration) (int, error) {
-	signed, err := signSessionToken(d, user, tokenExpirationTime)
+	signed, err := signSessionToken(d, user, tokenExpirationTime, false)
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
+	return writeToken(w, signed)
+}
 
+func writeToken(w http.ResponseWriter, signed string) (int, error) {
 	w.Header().Set("Content-Type", "text/plain")
 	if _, err := w.Write([]byte(signed)); err != nil {
 		return http.StatusInternalServerError, err
@@ -355,9 +373,11 @@ func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.Use
 	return 0, nil
 }
 
-// signSessionToken issues a session token for user.
-func signSessionToken(d *data, user *users.User, tokenExpirationTime time.Duration) (string, error) {
+// signSessionToken issues a session token for user. passwordLogin marks it as
+// the answer to a login with the account's password.
+func signSessionToken(d *data, user *users.User, tokenExpirationTime time.Duration, passwordLogin bool) (string, error) {
 	claims := &authToken{
+		PasswordLogin: passwordLogin,
 		User: userInfo{
 			ID:                    user.ID,
 			Locale:                user.Locale,

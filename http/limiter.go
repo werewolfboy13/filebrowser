@@ -206,10 +206,15 @@ func (l *failureLimiter) makeRoom(now time.Time) {
 type limits struct {
 	login *failureLimiter
 	share *failureLimiter
+
+	// password counts wrong answers to "what is your current password", the
+	// question the users API asks before it changes an account: see
+	// confirmPassword.
+	password *failureLimiter
 }
 
 func newLimits() *limits {
-	return &limits{login: newFailureLimiter(), share: newFailureLimiter()}
+	return &limits{login: newFailureLimiter(), share: newFailureLimiter(), password: newFailureLimiter()}
 }
 
 // tooManyAttempts answers a request that has to wait.

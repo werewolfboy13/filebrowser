@@ -33,6 +33,10 @@ type data struct {
 	// token is the session token the request was authenticated with.
 	token string
 
+	// loginToken tells that token was issued by a login that presented the
+	// password, and not by a renewal: see authToken.PasswordLogin.
+	loginToken bool
+
 	// limits holds the limiters for failed logins and share passwords.
 	limits *limits
 
