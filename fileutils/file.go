@@ -1,6 +1,7 @@
 package fileutils
 
 import (
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -17,16 +18,34 @@ func MoveFile(afs afero.Fs, src, dst string, fileMode, dirMode fs.FileMode) erro
 	if afs.Rename(src, dst) == nil {
 		return nil
 	}
+
+	// Whatever is at dst before the fallback runs is not this move's to
+	// remove: the cleanup below is only for a partial copy it created.
+	_, statErr := lstat(afs, dst)
+	created := errors.Is(statErr, fs.ErrNotExist)
+
 	// fallback
 	err := Copy(afs, src, dst, fileMode, dirMode)
 	if err != nil {
-		_ = afs.Remove(dst)
+		if created {
+			_ = afs.Remove(dst)
+		}
 		return err
 	}
 	if err := afs.RemoveAll(src); err != nil {
 		return err
 	}
 	return nil
+}
+
+// lstat stats name without following a final symlink where the filesystem
+// allows it.
+func lstat(afs afero.Fs, name string) (os.FileInfo, error) {
+	if lstater, ok := afs.(afero.Lstater); ok {
+		info, _, err := lstater.LstatIfPossible(name)
+		return info, err
+	}
+	return afs.Stat(name)
 }
 
 // CopyFile copies a file from source to dest and returns
