@@ -22,7 +22,9 @@ var ErrUnsupportedFormat = errors.New("unsupported image format")
 // ErrImageTooLarge means the image is too large to create a thumbnail.
 var ErrImageTooLarge = errors.New("image too large for thumbnail generation")
 
-// Maximum dimensions for thumbnail generation to prevent server crashes
+// Maximum dimensions for thumbnail generation to prevent server crashes. An
+// image within them can still be refused for the memory it needs: see
+// MaxDecodeMemory.
 const (
 	MaxImageWidth  = 10000
 	MaxImageHeight = 10000
@@ -150,6 +152,11 @@ func (s *Service) Resize(ctx context.Context, in io.Reader, width, height int, o
 	}
 	defer s.sem.Release(1)
 
+	// The wait for a worker can outlast the request.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	format, wrappedReader, err := s.detectFormat(in)
 	if err != nil {
 		return err
@@ -205,6 +212,13 @@ func (s *Service) detectFormat(in io.Reader) (Format, io.Reader, error) {
 	if imgConfig.Width > MaxImageWidth || imgConfig.Height > MaxImageHeight {
 		return 0, nil, fmt.Errorf("image dimensions %dx%d exceed maximum %dx%d: %w",
 			imgConfig.Width, imgConfig.Height, MaxImageWidth, MaxImageHeight, ErrImageTooLarge)
+	}
+
+	// The dimensions alone do not bound the memory decoding needs: the pixel
+	// size and the format matter as much.
+	if cost := decodeCost(imgConfig, imgFormat, buf.Bytes()); cost > MaxDecodeMemory {
+		return 0, nil, fmt.Errorf("decoding a %dx%d %s image needs about %d MiB, more than the %d MiB allowed: %w",
+			imgConfig.Width, imgConfig.Height, imgFormat, cost>>20, MaxDecodeMemory>>20, ErrImageTooLarge)
 	}
 
 	format, err := ParseFormat(imgFormat)
