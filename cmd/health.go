@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,14 @@ import (
 // that runs into its timeout, and then has nothing to show for it.
 const healthTimeout = 2 * time.Second
 
+const (
+	// healthAnswerStatus is the status in the answer of a healthy server:
+	// {"status":"OK"} (healthHandler in the http package).
+	healthAnswerStatus = "OK"
+	// healthAnswerMaxSize is how much of an answer is read.
+	healthAnswerMaxSize = 1024
+)
+
 func init() {
 	rootCmd.AddCommand(healthCmd)
 	addListenFlags(healthCmd.Flags())
@@ -33,7 +42,7 @@ var healthCmd = &cobra.Command{
 	Use:   "health",
 	Short: "Check that a running File Browser answers",
 	Long: `Requests /health from a running File Browser and fails when the
-answer is not 200 OK. It is meant for health checks, such as the one of the
+answer is not 200 OK with the status "OK" in it. It is meant for health checks, such as the one of the
 Docker image, where there is no shell and no HTTP client to do it with.
 
 Where the server listens is looked up in this order:
@@ -202,10 +211,24 @@ func checkHealth(ctx context.Context, target healthTarget, timeout time.Duration
 		return err
 	}
 	defer res.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1024))
 
 	if res.StatusCode != http.StatusOK {
 		return fmt.Errorf("%s answered %s", target.url, res.Status)
+	}
+
+	// The server answers 200 with the web client's page for a path it does
+	// not know, so the status alone does not say that this is the health
+	// endpoint. Its answer is short: more than this is something else.
+	answer := struct {
+		Status string `json:"status"`
+	}{}
+	body, err := io.ReadAll(io.LimitReader(res.Body, healthAnswerMaxSize))
+	if err != nil {
+		return fmt.Errorf("%s answered %s, and reading the answer failed: %w", target.url, res.Status, err)
+	}
+	if err := json.Unmarshal(body, &answer); err != nil || answer.Status != healthAnswerStatus {
+		return fmt.Errorf("%s answered %s, but not with the status %q of File Browser's health endpoint",
+			target.url, res.Status, healthAnswerStatus)
 	}
 
 	return nil

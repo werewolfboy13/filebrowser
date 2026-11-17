@@ -9,10 +9,16 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	fbhttp "github.com/filebrowser/filebrowser/v2/http"
+	"github.com/filebrowser/filebrowser/v2/settings"
+	"github.com/filebrowser/filebrowser/v2/storage"
 )
 
 // newHealthTestCmd returns a command that runs the health check with its own
@@ -259,6 +265,50 @@ func TestHealthCommand(t *testing.T) {
 
 		if err := runHealthTestCmd("--address", host, "--port", port); err == nil {
 			t.Error("expected an error")
+		}
+	})
+
+	// The server answers 200 with the web client's page for every path it
+	// does not know, so a check that only looked at the status passed
+	// against anything that was not the health endpoint.
+	t.Run("fails when the answer is 200 but not the health endpoint's", func(t *testing.T) {
+		answers := map[string]string{
+			"the web client's page": "<!doctype html><html><body>File Browser</body></html>",
+			"nothing":               "",
+			"another status":        `{"status":"starting"}`,
+			"other JSON":            `{"ok":true}`,
+			"a long page":           strings.Repeat("<p>File Browser</p>", 1000),
+		}
+
+		for name, answer := range answers {
+			t.Run(name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = w.Write([]byte(answer))
+				}))
+				defer srv.Close()
+				host, port := hostAndPort(t, srv)
+
+				if err := runHealthTestCmd("--address", host, "--port", port); err == nil {
+					t.Error("expected an error")
+				}
+			})
+		}
+	})
+
+	t.Run("succeeds against the answer of the server's own health endpoint", func(t *testing.T) {
+		server := &settings.Server{Root: t.TempDir()}
+		handler, err := fbhttp.NewHandler(nil, nil, nil, &storage.Storage{}, server, fstest.MapFS{
+			"index.html": &fstest.MapFile{Data: []byte("<html></html>")},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := httptest.NewServer(handler)
+		defer srv.Close()
+		host, port := hostAndPort(t, srv)
+
+		if err := runHealthTestCmd("--address", host, "--port", port); err != nil {
+			t.Errorf("unexpected error: %v", err)
 		}
 	})
 
