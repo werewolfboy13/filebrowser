@@ -78,6 +78,14 @@ func handleWithStaticData(w http.ResponseWriter, _ *http.Request, d *data, fSys 
 			data["ReCaptchaHost"] = auther.ReCaptcha.Host
 			data["ReCaptchaKey"] = auther.ReCaptcha.Key
 		}
+
+		// reCAPTCHA checks the site it is embedded in against the key's
+		// domains, and needs to be told the origin for that. Everywhere else
+		// the referrer stays within the site (see securityHeaders); here the
+		// origin alone, without path or query, goes to the reCAPTCHA host.
+		if data["ReCaptcha"] == true {
+			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		}
 	}
 
 	b, err := json.Marshal(data)

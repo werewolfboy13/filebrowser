@@ -32,7 +32,9 @@ func NewHandler(
 	r := mux.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Security-Policy", `default-src 'self'; style-src 'unsafe-inline';`)
+			// Replaces the policy securityHeaders set, so it repeats its
+			// frame-ancestors directive.
+			w.Header().Set("Content-Security-Policy", `default-src 'self'; style-src 'unsafe-inline'; `+frameAncestorsPolicy+`;`)
 			next.ServeHTTP(w, r)
 		})
 	})
@@ -93,5 +95,32 @@ func NewHandler(
 	public.PathPrefix("/dl").Handler(monkey(publicDlHandler, "/api/public/dl/")).Methods("GET")
 	public.PathPrefix("/share").Handler(monkey(publicShareHandler, "/api/public/share/")).Methods("GET")
 
-	return stripPrefix(server.BaseURL, r), nil
+	return securityHeaders(stripPrefix(server.BaseURL, r)), nil
+}
+
+// frameAncestorsPolicy only lets pages of the same origin embed a response.
+const frameAncestorsPolicy = `frame-ancestors 'self'`
+
+// securityHeaders sets, on every response, the headers that do not depend on
+// what is being served:
+//
+//   - other sites may not show a response in a frame (clickjacking of the
+//     application, or of a shared file, under the real address);
+//   - the address of a page is not passed on to other sites in the Referer
+//     header: share links can carry a token in their query string.
+//
+// It wraps the whole router rather than being one of its middlewares, because
+// those do not run for the NotFoundHandler, which is what serves the
+// application page.
+//
+// The frame-ancestors policy restricts nothing else, so it is safe for the
+// application page, whose own scripts and styles no policy describes yet.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Frame-Options", "SAMEORIGIN")
+		h.Set("Content-Security-Policy", frameAncestorsPolicy)
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
 }
