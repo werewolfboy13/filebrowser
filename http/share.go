@@ -163,6 +163,12 @@ var sharePostHandler = withPermShare(func(w http.ResponseWriter, r *http.Request
 	// d.user.Fs is scoped, so Stat also refuses to follow a symlink whose target
 	// escapes the user's scope: that returns a permission error here and so
 	// blocks creating a share that points out of scope.
+	//
+	// The rules are consulted first: answering 404 or 200 for a path they deny
+	// would tell the user whether it exists.
+	if !d.Check(r.URL.Path) {
+		return http.StatusForbidden, nil
+	}
 	if _, err := d.user.Fs.Stat(r.URL.Path); err != nil {
 		return errToStatus(err), err
 	}
