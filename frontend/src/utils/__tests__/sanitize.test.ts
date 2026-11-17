@@ -172,6 +172,21 @@ describe("markdown preview sanitiser removes", () => {
     expect(out).toContain("<p>abc");
   });
 
+  // Links stay links, but cannot ask for the opener (rel=opener) or leak
+  // the preview's URL (referrer), nor turn into a download of an app URL
+  // under a name of the file author's choosing.
+  it("download, referrerpolicy and rel from links, then sets rel=noopener noreferrer", () => {
+    const out = clean(
+      '<a href="/api/raw/x?inline=true" download="invoice.pdf" rel="opener" ' +
+        'referrerpolicy="unsafe-url">x</a> <a href="https://example.org">y</a>'
+    );
+    console.log(out);
+    expect(out).not.toMatch(/download|opener"|referrerpolicy|unsafe-url/);
+    const rels = [...out.matchAll(/<a [^>]*>/g)].map((m) => m[0]);
+    expect(rels).toHaveLength(2);
+    for (const a of rels) expect(a).toContain('rel="noopener noreferrer"');
+  });
+
   it("keeps the checkboxes marked renders for task lists", async () => {
     const out = await render("- [x] done\n- [ ] todo");
     expect([...out.matchAll(/<input[^>]*>/g)]).toHaveLength(2);

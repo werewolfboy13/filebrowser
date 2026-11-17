@@ -48,6 +48,13 @@ purifier.addHook("uponSanitizeAttribute", (_node, data) => {
 const CHECKBOX_ATTRS = new Set(["type", "checked", "disabled"]);
 
 purifier.addHook("afterSanitizeAttributes", (node) => {
+  // Links never hand the opened page a reference to this one, nor the
+  // preview's URL as referrer (rel, download and referrerpolicy from the
+  // file are dropped, see FORBID_ATTR).
+  if (node.nodeName === "A") {
+    node.setAttribute("rel", "noopener noreferrer");
+  }
+
   // GFM task lists render <input type="checkbox" disabled>. Keep those,
   // inert and with nothing else; drop every other input.
   if (node.nodeName === "INPUT") {
@@ -134,6 +141,13 @@ const HTML_TAGS = [
 ];
 
 // The MathML elements DOMPurify allows by default (what KaTeX renders).
+//
+// Their presentational attributes (mathcolor, mathbackground, mathsize,
+// mpadded's width/height/depth/lspace/voffset, mspace's sizes) are kept:
+// KaTeX uses them for colours (\color, \colorbox, the error colour) and
+// spacing. They can make a formula large or shift it, but only within the
+// preview: #preview-container (css/mdPreview.css) has overflow: auto and
+// clips it, so it cannot cover the rest of the app.
 const MATHML_TAGS = [
   "math",
   "menclose",
@@ -192,6 +206,11 @@ export function sanitizeMarkdownHtml(html: string): string {
       "action",
       "contenteditable",
       "draggable",
+      // links: no opener, no referrer leak, no forced download of an app
+      // URL under a name the file's author picked (rel is set above)
+      "rel",
+      "download",
+      "referrerpolicy",
     ],
     ALLOW_DATA_ATTR: false,
   });
