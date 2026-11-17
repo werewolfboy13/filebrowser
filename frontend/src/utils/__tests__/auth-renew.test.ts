@@ -26,9 +26,11 @@ const b64url = (o: object) =>
     .replace(/=+$/, "")
     .replace(/\+/g, "-")
     .replace(/\//g, "_");
+// fixed expiry, so the same n always gives the same token
+const exp = Math.floor(Date.now() / 1000) + 3600;
 const jwt = (n: number) =>
   `${b64url({ alg: "HS256" })}.${b64url({
-    exp: Math.floor(Date.now() / 1000) + 3600,
+    exp,
     user: { id: 1, locale: "en", n },
   })}.sig`;
 
