@@ -111,7 +111,7 @@ func handleImagePreview(
 			// viewer asked for something to show, and has the original one
 			// click away in any case. A thumbnail is not worth sending a
 			// whole file for, one per entry of a listing, so that stays an
-			// error (413), which leaves the entry with its icon.
+			// error (413).
 			if errors.Is(err, img.ErrImageTooLarge) && previewSize == PreviewSizeBig {
 				return rawFileHandler(w, r, file)
 			}

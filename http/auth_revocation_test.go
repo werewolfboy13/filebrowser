@@ -53,8 +53,8 @@ func TestPasswordChangeEndsOtherSessions(t *testing.T) {
 	if strings.Count(fresh, ".") != 2 || fresh == mine {
 		t.Fatalf("the password change did not hand out a new token (X-Auth-Token %q)", fresh)
 	}
-	if cc := h.Get("Cache-Control"); !strings.Contains(cc, "no-store") {
-		t.Errorf("the answer carrying a token may be stored: Cache-Control %q", cc)
+	if cc := h.Get("Cache-Control"); !strings.Contains(cc, "no-store") || len(h.Values("Cache-Control")) != 1 {
+		t.Errorf("the answer carrying a token may be stored: Cache-Control %q", h.Values("Cache-Control"))
 	}
 	if strings.Contains(body, fresh) {
 		t.Error("the new token is in the response body")

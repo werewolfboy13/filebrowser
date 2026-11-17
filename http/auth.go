@@ -341,9 +341,10 @@ const newTokenHeader = "X-Auth-Token"
 // token goes out with the answer to the change instead, which only the
 // client that made the change receives.
 //
-// The token is a credential in a response to a PUT, so the response is
-// marked as not to be stored. The client is also told not to renew: the
-// only token it could renew with is the one that was just revoked.
+// The token is a credential, so the response must not be stored. Every
+// response of the API already says so (see globalHeaders); it is said here
+// as well in case that is ever relaxed. The client is also told not to renew:
+// the only token it could renew with is the one that was just revoked.
 func replaceSessionToken(w http.ResponseWriter, d *data, user *users.User, tokenExpirationTime time.Duration) error {
 	signed, err := signSessionToken(d, user, tokenExpirationTime, false)
 	if err != nil {
@@ -351,7 +352,9 @@ func replaceSessionToken(w http.ResponseWriter, d *data, user *users.User, token
 	}
 
 	w.Header().Set(newTokenHeader, signed)
-	w.Header().Set("Cache-Control", "no-store")
+	if !strings.Contains(w.Header().Get("Cache-Control"), "no-store") {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	w.Header().Set("X-Renew-Token", "false")
 	return nil
 }
