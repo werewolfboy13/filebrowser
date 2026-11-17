@@ -3,9 +3,12 @@
 
 # pnpm >= 11 fails the install (strictDepBuilds) when a dependency has an
 # install script that is not listed here. None of these scripts are needed:
-# core-js and es5-ext only print funding/protest messages, and esbuild gets its
-# platform binary from an optional dependency instead of its postinstall.
+# core-js and es5-ext only print funding/protest messages, esbuild gets its
+# platform binary from an optional dependency instead of its postinstall, and
+# vue-reader >= 1.3.5 ships its repo-only "preinstall: npx only-allow pnpm"
+# (which would hit the network) by mistake.
 allowBuilds:
   core-js: false
   es5-ext: false
   esbuild: false
+  vue-reader: false

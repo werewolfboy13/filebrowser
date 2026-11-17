@@ -8,7 +8,7 @@ import { compression } from "vite-plugin-compression2";
 const plugins = [
   vue(),
   VueI18nPlugin({
-    include: [path.resolve(__dirname, "./src/i18n/**/*.json")],
+    include: [path.resolve(import.meta.dirname, "./src/i18n/**/*.json")],
   }),
   legacy({
     // defaults already drop IE support
@@ -20,7 +20,7 @@ const plugins = [
 const resolve = {
   alias: {
     // vue: "@vue/compat",
-    "@/": `${path.resolve(__dirname, "src")}/`,
+    "@/": `${path.resolve(import.meta.dirname, "src")}/`,
   },
 };
 
@@ -49,7 +49,7 @@ export default defineConfig(({ command }) => {
       build: {
         rollupOptions: {
           input: {
-            index: path.resolve(__dirname, "./public/index.html"),
+            index: path.resolve(import.meta.dirname, "./public/index.html"),
           },
           output: {
             manualChunks: (id) => {
