@@ -1,25 +1,16 @@
-# Builds the image from this repository and runs it next to the Redis that the upload cache uses
-# when there is more than one File Browser instance. Redis needs a password, in the environment or
-# in a .env file next to this one:
+# Builds the image from this repository and runs it:
 #
-#   REDIS_PASSWORD=change-me docker compose up --build
+#   docker compose up --build
 #
-# Both images are Docker Hardened Images, which need a `docker login dhi.io` to pull.
+# The image is built on Docker Hardened Images, which need a `docker login dhi.io` to pull.
+#
+# This is all that one File Browser instance needs. compose.redis.yaml adds the Redis that
+# several instances share.
 
 name: filebrowser
 
-# Neither container needs any capability, any new privilege or a writable root filesystem: what
-# they write goes to the volumes and tmpfs mounts below.
-x-security: &security
-  cap_drop:
-    - ALL
-  read_only: true
-  security_opt:
-    - no-new-privileges:true
-
 services:
   filebrowser:
-    <<: *security
     build:
       context: .
       args:
@@ -28,6 +19,13 @@ services:
         GIT_SHA: ${GIT_SHA:-}
     image: ${FILEBROWSER_IMAGE:-filebrowser:local}
     restart: unless-stopped
+    # The container needs no capability, no new privilege and no writable root filesystem: what it
+    # writes goes to the volumes and the tmpfs mount below.
+    cap_drop:
+      - ALL
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
     # The image's own user. Bind mounts used instead of the volumes below must be writable by it.
     user: '1000:1000'
     # Go starts a thread for each file operation that blocks, so this is not as low as it could be
@@ -35,10 +33,6 @@ services:
     pids_limit: 256
     tmpfs:
       - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
-    environment:
-      # A password with characters that are special in a URL must be percent-encoded here. Use
-      # rediss:// for TLS.
-      FB_REDIS_CACHE_URL: redis://default:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379
     # Only reachable from this machine: put a reverse proxy with TLS in front of it, or change the
     # address to publish it as it is.
     ports:
@@ -48,53 +42,6 @@ services:
       - data:/srv
       - config:/config
       - database:/database
-    # The server connects to Redis when it starts, and stops when it cannot.
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - default
-      - redis
-
-  redis:
-    <<: *security
-    image: dhi.io/redis:8
-    restart: unless-stopped
-    user: '65532:65532'
-    pids_limit: 64
-    # The image has no shell, so the password is an argument instead of a file written at start.
-    # The image's own configuration file comes first. Nothing is written to disk, neither the
-    # cache nor a PID file: an upload that was in progress when Redis restarts starts over.
-    command:
-      [
-        'redis-server',
-        '/etc/redis/redis.conf',
-        '--requirepass',
-        '${REDIS_PASSWORD:?REDIS_PASSWORD is required}',
-        '--save',
-        '',
-        '--appendonly',
-        'no',
-        '--pidfile',
-        '',
-      ]
-    environment:
-      # Read by redis-cli in the health check below.
-      REDISCLI_AUTH: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
-    # With -e, redis-cli fails when Redis answers with an error, such as a refused password.
-    healthcheck:
-      test: ['CMD', 'redis-cli', '-e', 'ping']
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 5s
-    networks:
-      - redis
-
-networks:
-  # Redis is reachable from File Browser only, and reaches nothing outside this network.
-  redis:
-    internal: true
 
 # With the project name at the top, Docker names these filebrowser_data, filebrowser_config and
 # filebrowser_database. Those are the volumes of the `docker run` command in File Browser's own

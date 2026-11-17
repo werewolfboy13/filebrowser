@@ -193,7 +193,7 @@ user created with the credentials from options "username" and "password".`,
 		redisCacheURL := v.GetString("redisCacheUrl")
 		uploadCache, err := fbhttp.NewUploadCache(redisCacheURL)
 		if err != nil {
-			return fmt.Errorf("failed to initialize upload cache: %w", err)
+			return uploadCacheError(err, redisCacheURL)
 		}
 
 		server, err := getServerSettings(v, st.Storage)
