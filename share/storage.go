@@ -36,16 +36,7 @@ func (s *Storage) All() ([]*Link, error) {
 		return nil, err
 	}
 
-	for i, link := range links {
-		if link.Expire != 0 && link.Expire <= time.Now().Unix() {
-			if err := s.Delete(link.Hash); err != nil {
-				return nil, err
-			}
-			links = append(links[:i], links[i+1:]...)
-		}
-	}
-
-	return links, nil
+	return s.pruneExpired(links)
 }
 
 // FindByUserID wraps a StorageBackend.FindByUserID.
@@ -56,16 +47,28 @@ func (s *Storage) FindByUserID(id uint) ([]*Link, error) {
 		return nil, err
 	}
 
-	for i, link := range links {
-		if link.Expire != 0 && link.Expire <= time.Now().Unix() {
+	return s.pruneExpired(links)
+}
+
+// pruneExpired deletes the expired links among links from the backend and
+// returns the remaining ones, in their original order.
+func (s *Storage) pruneExpired(links []*Link) ([]*Link, error) {
+	now := time.Now().Unix()
+
+	// Filter into a new slice: removing elements from the slice being ranged
+	// over skips the element after each removal and runs past its end.
+	kept := make([]*Link, 0, len(links))
+	for _, link := range links {
+		if link.Expire != 0 && link.Expire <= now {
 			if err := s.Delete(link.Hash); err != nil {
 				return nil, err
 			}
-			links = append(links[:i], links[i+1:]...)
+			continue
 		}
+		kept = append(kept, link)
 	}
 
-	return links, nil
+	return kept, nil
 }
 
 // GetByHash wraps a StorageBackend.GetByHash.
@@ -98,16 +101,7 @@ func (s *Storage) Gets(path string, id uint) ([]*Link, error) {
 		return nil, err
 	}
 
-	for i, link := range links {
-		if link.Expire != 0 && link.Expire <= time.Now().Unix() {
-			if err := s.Delete(link.Hash); err != nil {
-				return nil, err
-			}
-			links = append(links[:i], links[i+1:]...)
-		}
-	}
-
-	return links, nil
+	return s.pruneExpired(links)
 }
 
 // Save wraps a StorageBackend.Save
