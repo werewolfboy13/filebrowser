@@ -134,6 +134,10 @@ func withUser(fn handleFunc) handleFunc {
 		}
 
 		d.user, err = d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, tk.User.ID)
+		if errors.Is(err, fberrors.ErrNotExist) {
+			// The account was deleted after the token was issued.
+			return http.StatusUnauthorized, nil
+		}
 		if err != nil {
 			return http.StatusInternalServerError, err
 		}
