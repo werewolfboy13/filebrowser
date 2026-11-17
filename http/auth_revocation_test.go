@@ -279,3 +279,60 @@ func TestRevocationSurvivesARewriteOfTheRecord(t *testing.T) {
 		t.Error("a revoked session works again after the record was rewritten")
 	}
 }
+
+// The answer to a token that has been revoked, or whose account is gone, used
+// to carry X-Renew-Token: true: the header was set before either was checked.
+// The web interface renews when it sees the header, before it looks at the
+// status; the renewal of such a token is refused, and the page was left with
+// an error instead of being sent to the login.
+func TestEndedSessionsAreNotToldToRenew(t *testing.T) {
+	e := newFullEnv(t)
+	session := e.login("bob", fullEnvUserPassword)
+	admin := e.distinctLogin("admin", fullEnvAdminPassword)
+
+	// Control: a session whose account was updated without being revoked is
+	// told to renew, and can.
+	if code, body := e.putUser(admin, 2, `{"what":"user","which":["locale"],"data":{"id":2,"locale":"fr"}}`); code != http.StatusOK {
+		t.Fatalf("locale change = %d %q", code, body)
+	}
+	time.Sleep(1100 * time.Millisecond) // the update is dated to the second
+	code, h, _ := e.do(http.MethodGet, "/api/resources/", session, nil, nil)
+	if code != http.StatusOK || h.Get("X-Renew-Token") != "true" {
+		t.Fatalf("control: request after an update of the account = %d, X-Renew-Token %q; want 200 and true", code, h.Get("X-Renew-Token"))
+	}
+	code, h, renewed := e.do(http.MethodPost, "/api/renew", session, nil, nil)
+	if code != http.StatusOK || h.Get("X-Renew-Token") == "true" {
+		t.Fatalf("control: renewal = %d, X-Renew-Token %q", code, h.Get("X-Renew-Token"))
+	}
+
+	// The account's sessions are ended.
+	change := `{"what":"user","which":["password"],"current_password":"` + fullEnvAdminPassword + `","data":{"id":2,"password":"brand-new-password-77"}}`
+	if code, body := e.putUser(admin, 2, change); code != http.StatusOK {
+		t.Fatalf("password change = %d %q", code, body)
+	}
+	for _, token := range []string{session, renewed} {
+		for _, rq := range []struct{ method, path string }{
+			{http.MethodGet, "/api/resources/"},
+			{http.MethodPost, "/api/renew"},
+			{http.MethodGet, "/api/users/2"},
+		} {
+			code, h, _ := e.do(rq.method, rq.path, token, nil, nil)
+			if code != http.StatusUnauthorized {
+				t.Errorf("%s %s with a revoked token = %d, want 401", rq.method, rq.path, code)
+			}
+			if got := h.Get("X-Renew-Token"); got == "true" {
+				t.Errorf("%s %s with a revoked token: X-Renew-Token = %q on a 401", rq.method, rq.path, got)
+			}
+		}
+	}
+
+	// The account is deleted.
+	fresh := e.login("bob", "brand-new-password-77")
+	if code, _, body := e.do(http.MethodDelete, "/api/users/2", admin, strings.NewReader(`{"current_password":"`+fullEnvAdminPassword+`"}`), nil); code != http.StatusOK {
+		t.Fatalf("deleting the account = %d %q", code, body)
+	}
+	code, h, _ = e.do(http.MethodGet, "/api/resources/", fresh, nil, nil)
+	if code != http.StatusUnauthorized || h.Get("X-Renew-Token") == "true" {
+		t.Errorf("request for a deleted account = %d, X-Renew-Token %q; want 401 without the header", code, h.Get("X-Renew-Token"))
+	}
+}

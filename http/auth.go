@@ -192,13 +192,6 @@ func authenticated(fn handleFunc, renewal bool) handleFunc {
 			return http.StatusUnauthorized, nil
 		}
 
-		expiresSoon := tk.ExpiresAt != nil && time.Until(tk.ExpiresAt.Time) < time.Hour
-		updated := tk.IssuedAt != nil && tk.IssuedAt.Unix() < d.store.Users.LastUpdate(tk.User.ID)
-
-		if expiresSoon || updated {
-			w.Header().Add("X-Renew-Token", "true")
-		}
-
 		d.user, err = d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, tk.User.ID)
 		if errors.Is(err, fberrors.ErrNotExist) {
 			// The account was deleted after the token was issued.
@@ -219,6 +212,17 @@ func authenticated(fn handleFunc, renewal bool) handleFunc {
 			}
 		}
 		d.token = token.Raw
+
+		// Only a session that is still good is told to renew its token. Set
+		// before the checks above, the header went out with the 401 that
+		// ends a session as well, and a client that renews when it sees the
+		// header asked for a renewal that could only be refused.
+		expiresSoon := tk.ExpiresAt != nil && time.Until(tk.ExpiresAt.Time) < time.Hour
+		updated := tk.IssuedAt != nil && tk.IssuedAt.Unix() < d.store.Users.LastUpdate(tk.User.ID)
+
+		if expiresSoon || updated {
+			w.Header().Add("X-Renew-Token", "true")
+		}
 
 		canonicalizeRequestPath(r)
 		return fn(w, r, d)
