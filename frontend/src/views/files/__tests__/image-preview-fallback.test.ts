@@ -141,6 +141,46 @@ describe("image preview the server cannot scale", () => {
   });
 });
 
+describe("a subtitle file that cannot be loaded", () => {
+  it("is reported with a message, not a report link", async () => {
+    const showError = vi.fn();
+    setActivePinia(createPinia());
+    useAuthStore().user = { id: 1, perm: {} } as any;
+    useFileStore().req = {
+      name: "clip.mp4",
+      path: "/pics/clip.mp4",
+      url: "/files/pics/clip.mp4",
+      type: "video",
+      extension: ".mp4",
+      isDir: false,
+      subtitles: ["/pics/clip.en.srt"],
+      items: [],
+    } as any;
+    const FakeVideo = defineComponent({
+      emits: ["subtitleError"],
+      setup: () => () => h("div", { class: "fake-video" }),
+    });
+    wrapper = mount(Preview, {
+      attachTo: document.body,
+      global: {
+        mocks: { $t: (k: string) => k },
+        provide: { $showError: showError },
+        stubs: {
+          HeaderBar: true,
+          Action: true,
+          ExtendedImage: true,
+          VideoViewer: FakeVideo,
+          CsvViewer: true,
+          VueReader: true,
+        },
+      },
+    });
+    await flushPromises();
+    wrapper.findComponent(FakeVideo).vm.$emit("subtitleError", "clip.en");
+    expect(showError).toHaveBeenCalledWith("errors.subtitleUnavailable", false);
+  });
+});
+
 describe("the image viewer", () => {
   it("reports an image that cannot be loaded", async () => {
     const w = mount(ExtendedImage, {

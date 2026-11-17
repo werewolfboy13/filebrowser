@@ -74,6 +74,7 @@
     "tooManyAttemptsLater": "Too many attempts. Please wait a while before trying again.",
     "requestTimeout": "The request took too long to reach the server. Please try again.",
     "tooLarge": "This is too large for the server to process.",
+    "subtitleUnavailable": "The subtitles \"{name}\" could not be loaded (the file may be too large to convert).",
     "locked": "The server is still busy with an earlier request for this item. Please try again in a moment."
   },
   "files": {

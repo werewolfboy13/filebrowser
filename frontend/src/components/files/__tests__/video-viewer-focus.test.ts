@@ -109,3 +109,21 @@ describe("video preview keyboard focus", () => {
     );
   });
 });
+
+// A subtitle file the server cannot serve (e.g. 413: too large to convert)
+// made the <track> fail silently.
+describe("video preview subtitles", () => {
+  it("reports a subtitle file that cannot be loaded", async () => {
+    const { default: VideoViewer } = await import("../VideoViewer.vue");
+    w = mount(VideoViewer, {
+      attachTo: document.body,
+      props: {
+        source: "/api/raw/movies/clip.mp4?inline=true",
+        subtitles: ["/api/subtitle/movies/clip.en.srt?inline=true"],
+      },
+    });
+    await flushPromises();
+    w.find("track").element.dispatchEvent(new Event("error"));
+    expect(w.emitted("subtitleError")).toEqual([["clip.en"]]);
+  });
+});

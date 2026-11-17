@@ -30,6 +30,7 @@
             :src="sub"
             :label="subLabel(sub)"
             :default="index === 0"
+            @error="emit('subtitleError', subLabel(sub))"
           />
           <p>
             Sorry, your browser doesn't support embedded videos, but don't
@@ -50,6 +51,10 @@ import "@videojs/html/i18n";
 import "@videojs/html/video/player";
 import "@videojs/html/video/skin";
 import { subLabel } from "./subtitles";
+
+// A subtitle file could not be loaded (e.g. one too large for the server
+// to convert: 413). A failed <track> is otherwise silent.
+const emit = defineEmits<{ subtitleError: [name: string] }>();
 
 withDefaults(
   defineProps<{

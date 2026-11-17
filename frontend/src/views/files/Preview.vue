@@ -132,6 +132,7 @@
           :source="previewUrl"
           :subtitles="subtitles"
           :autoplay="autoPlay"
+          @subtitle-error="subtitleFailed"
         >
         </VideoViewer>
         <object v-else-if="isPdf" class="pdf" :data="previewUrl"></object>
@@ -491,6 +492,9 @@ const updatePreview = async () => {
     }
   }
 };
+
+const subtitleFailed = (name: string) =>
+  $showError(t("errors.subtitleUnavailable", { name }), false);
 
 const imageFailed = () => {
   if (!fullSize.value && !bigFailed.value && authStore.user?.perm.download) {
