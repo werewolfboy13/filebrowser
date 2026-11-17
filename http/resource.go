@@ -107,11 +107,6 @@ func resourceDeleteHandler(fileCache FileCache) handleFunc {
 			return errToStatus(err), err
 		}
 
-		err = d.store.Share.DeleteWithPathPrefix(file.Path, d.user.ID)
-		if err != nil {
-			log.Printf("WARNING: Error(s) occurred while deleting associated shares with file: %s", err)
-		}
-
 		// delete thumbnails
 		err = delThumbs(r.Context(), fileCache, file)
 		if err != nil {
@@ -121,6 +116,14 @@ func resourceDeleteHandler(fileCache FileCache) handleFunc {
 		err = d.RunHook(func() error {
 			return d.user.Fs.RemoveAll(r.URL.Path)
 		}, "delete", r.URL.Path, "", d.user)
+
+		// Remove the shares of what is gone, whoever owns them: a share that
+		// outlives its target would publish whatever is created at that path
+		// later. After a failure, only the shares of what was actually
+		// removed go.
+		if shareErr := deleteSharesUnder(d, file.Path, err != nil); shareErr != nil {
+			log.Printf("WARNING: Error(s) occurred while deleting associated shares with file: %s", shareErr)
+		}
 
 		if err != nil {
 			return errToStatus(err), err
@@ -429,7 +432,19 @@ func patchAction(ctx context.Context, action, src, dst string, d *data, fileCach
 			return err
 		}
 
-		return fileutils.MoveFile(d.user.Fs, src, dst, d.settings.FileMode, d.settings.DirMode)
+		err = fileutils.MoveFile(d.user.Fs, src, dst, d.settings.FileMode, d.settings.DirMode)
+		if err != nil {
+			return err
+		}
+
+		// Shares point at paths, so they have to be moved along with what
+		// they share. Left behind, they would publish whatever is created at
+		// the old path later.
+		if shareErr := moveSharesUnder(d, src, dst); shareErr != nil {
+			log.Printf("WARNING: Error(s) occurred while moving the shares of %s: %s", src, shareErr)
+		}
+
+		return nil
 	default:
 		return fmt.Errorf("unsupported action %s: %w", action, fberrors.ErrInvalidRequestParams)
 	}
