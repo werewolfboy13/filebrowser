@@ -6,7 +6,9 @@ import { renew } from "@/utils/auth";
 
 const RETRY_BASE_DELAY = 1000;
 const RETRY_MAX_DELAY = 20000;
-const CURRENT_UPLOAD_LIST: { [key: string]: tus.Upload } = {};
+// Every upload in flight. A set, not a map by path: two uploads to the
+// same path (e.g. a retry with overwrite) must both be abortable.
+const CURRENT_UPLOADS = new Set<tus.Upload>();
 
 export async function upload(
   filePath: string,
@@ -65,7 +67,7 @@ export async function upload(
         return true;
       },
       onError: function (error: Error | tus.DetailedError) {
-        delete CURRENT_UPLOAD_LIST[filePath];
+        CURRENT_UPLOADS.delete(upload);
 
         if (error.message === "Upload aborted") {
           return reject(error);
@@ -88,11 +90,11 @@ export async function upload(
         }
       },
       onSuccess: function () {
-        delete CURRENT_UPLOAD_LIST[filePath];
+        CURRENT_UPLOADS.delete(upload);
         resolve();
       },
     });
-    CURRENT_UPLOAD_LIST[filePath] = upload;
+    CURRENT_UPLOADS.add(upload);
     upload.start();
   });
 }
@@ -125,13 +127,9 @@ function isTusSupported() {
 }
 
 export function abortAllUploads() {
-  for (const filePath in CURRENT_UPLOAD_LIST) {
-    if (CURRENT_UPLOAD_LIST[filePath]) {
-      CURRENT_UPLOAD_LIST[filePath].abort(true);
-      CURRENT_UPLOAD_LIST[filePath].options!.onError!(
-        new Error("Upload aborted")
-      );
-    }
-    delete CURRENT_UPLOAD_LIST[filePath];
+  for (const upload of [...CURRENT_UPLOADS]) {
+    CURRENT_UPLOADS.delete(upload);
+    upload.abort(true);
+    upload.options!.onError!(new Error("Upload aborted"));
   }
 }

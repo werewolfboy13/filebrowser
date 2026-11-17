@@ -69,6 +69,7 @@ export const useUploadStore = defineStore("upload", () => {
     // Resets the state by preventing the processing of the remaning uploads
     lastUpload.value = Infinity;
     tus.abortAllUploads();
+    api.abortResourceUploads();
   };
 
   //

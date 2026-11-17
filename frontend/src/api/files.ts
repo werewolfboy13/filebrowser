@@ -123,6 +123,17 @@ export async function post(
     : postTus(url, content, overwrite, onupload);
 }
 
+// Uploads sent as a plain POST (when tus is not used), so they can be
+// aborted along with the tus ones.
+const RESOURCE_UPLOADS = new Set<XMLHttpRequest>();
+
+export function abortResourceUploads() {
+  for (const request of [...RESOURCE_UPLOADS]) {
+    request.abort();
+  }
+  RESOURCE_UPLOADS.clear();
+}
+
 async function postResources(
   url: string,
   content: ApiContent = "",
@@ -167,6 +178,16 @@ async function postResources(
       reject(new Error("001 Connection aborted"));
     };
 
+    // same message as an aborted tus upload, which the upload store skips
+    request.onabort = () => {
+      reject(new Error("Upload aborted"));
+    };
+
+    request.onloadend = () => {
+      RESOURCE_UPLOADS.delete(request);
+    };
+
+    RESOURCE_UPLOADS.add(request);
     request.send(bufferContent || content);
   });
 }
