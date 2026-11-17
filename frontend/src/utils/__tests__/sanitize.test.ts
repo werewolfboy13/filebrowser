@@ -152,14 +152,28 @@ describe("markdown preview sanitiser removes", () => {
     });
   }
 
-  it("non-checkbox inputs, and makes checkboxes inert", () => {
+  // Only GFM task-list checkboxes are kept, made inert. Any other input
+  // (a password field, a bare <input name=p>, which is a text field) was
+  // turned into a disabled checkbox: a stray box in the preview.
+  it("every input but checkboxes, and makes checkboxes inert", () => {
     const out = clean(
-      '<input type="password" name="p"><input type="checkbox" checked>'
+      '<p>a<input type="password" name="p">b<input name="p">c' +
+        '<input type="text" value="v"><input type="image" src="/x.png">' +
+        '<input type="CheckBox" checked><input type="checkbox"></p>'
     );
-    expect(out).not.toMatch(/password|name=/);
-    expect(out).toMatch(/<input[^>]*type="checkbox"/);
-    for (const m of out.matchAll(/<input[^>]*>/g)) {
-      expect(m[0]).toContain("disabled");
+    console.log(out);
+    const inputs = [...out.matchAll(/<input[^>]*>/g)].map((m) => m[0]);
+    expect(inputs).toHaveLength(2);
+    for (const input of inputs) {
+      expect(input).toMatch(/type="checkbox"/i);
+      expect(input).toContain("disabled");
     }
+    expect(out).not.toMatch(/password|name=|value=|src=/);
+    expect(out).toContain("<p>abc");
+  });
+
+  it("keeps the checkboxes marked renders for task lists", async () => {
+    const out = await render("- [x] done\n- [ ] todo");
+    expect([...out.matchAll(/<input[^>]*>/g)]).toHaveLength(2);
   });
 });

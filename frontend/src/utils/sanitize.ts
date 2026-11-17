@@ -44,10 +44,20 @@ purifier.addHook("uponSanitizeAttribute", (_node, data) => {
   }
 });
 
+// What a task-list checkbox may keep.
+const CHECKBOX_ATTRS = new Set(["type", "checked", "disabled"]);
+
 purifier.addHook("afterSanitizeAttributes", (node) => {
-  // GFM task lists render <input type="checkbox" disabled>; any other input
-  // becomes an inert checkbox too.
+  // GFM task lists render <input type="checkbox" disabled>. Keep those,
+  // inert and with nothing else; drop every other input.
   if (node.nodeName === "INPUT") {
+    if ((node.getAttribute("type") ?? "").toLowerCase() !== "checkbox") {
+      node.remove();
+      return;
+    }
+    for (const { name } of [...node.attributes]) {
+      if (!CHECKBOX_ATTRS.has(name)) node.removeAttribute(name);
+    }
     node.setAttribute("type", "checkbox");
     node.setAttribute("disabled", "");
   }
@@ -88,7 +98,7 @@ const HTML_TAGS = [
   "hr",
   "i",
   "img",
-  "input", // GFM task lists; made inert above
+  "input", // GFM task-list checkboxes, made inert above; others dropped
   "ins",
   "kbd",
   "li",
