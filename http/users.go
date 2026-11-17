@@ -52,6 +52,12 @@ func getUser(_ http.ResponseWriter, r *http.Request) (*modifyUserRequest, error)
 		return nil, fberrors.ErrInvalidDataType
 	}
 
+	// Every caller goes on to read the user object, so a request without one
+	// is refused here instead of being dereferenced there.
+	if req.Data == nil {
+		return nil, fberrors.ErrEmptyRequest
+	}
+
 	return req, nil
 }
 
