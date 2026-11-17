@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
@@ -107,11 +108,6 @@ func resourceDeleteHandler(fileCache FileCache) handleFunc {
 			return errToStatus(err), err
 		}
 
-		err = d.store.Share.DeleteWithPathPrefix(file.Path, d.user.ID)
-		if err != nil {
-			log.Printf("WARNING: Error(s) occurred while deleting associated shares with file: %s", err)
-		}
-
 		// delete thumbnails
 		err = delThumbs(r.Context(), fileCache, file)
 		if err != nil {
@@ -121,6 +117,14 @@ func resourceDeleteHandler(fileCache FileCache) handleFunc {
 		err = d.RunHook(func() error {
 			return d.user.Fs.RemoveAll(r.URL.Path)
 		}, "delete", r.URL.Path, "", d.user)
+
+		// Remove the shares of what is gone, whoever owns them: a share that
+		// outlives its target would publish whatever is created at that path
+		// later. After a failure, only the shares of what was actually
+		// removed go.
+		if shareErr := deleteSharesUnder(d, file.Path, err != nil); shareErr != nil {
+			log.Printf("WARNING: Error(s) occurred while deleting associated shares with file: %s", shareErr)
+		}
 
 		if err != nil {
 			return errToStatus(err), err
@@ -152,8 +156,15 @@ func resourcePostHandler(fileCache FileCache) handleFunc {
 			ReadHeader: d.server.TypeDetectionByHeader,
 			Checker:    d,
 		})
+		// Anything but a clean "not found" means something may already be at
+		// the path, so the failure cleanup below must leave it alone.
+		created := errors.Is(err, fs.ErrNotExist)
 		if err == nil {
-			if r.URL.Query().Get("override") != "true" {
+			// An existing directory is never something an upload can replace.
+			// Refusing it here also keeps it away from the failure cleanup
+			// below, which is gated by neither the Delete permission nor the
+			// rules on what the directory contains.
+			if file.IsDir || r.URL.Query().Get("override") != "true" {
 				return http.StatusConflict, nil
 			}
 
@@ -168,6 +179,8 @@ func resourcePostHandler(fileCache FileCache) handleFunc {
 			}
 		}
 
+		sweepStaleUploads(d, r.URL.Path)
+
 		err = d.RunHook(func() error {
 			info, writeErr := writeFile(d.user.Fs, r.URL.Path, r.Body, d.settings.FileMode, d.settings.DirMode)
 			if writeErr != nil {
@@ -179,8 +192,10 @@ func resourcePostHandler(fileCache FileCache) handleFunc {
 			return nil
 		}, "upload", r.URL.Path, "", d.user)
 
-		if err != nil {
-			_ = d.user.Fs.RemoveAll(r.URL.Path)
+		// Clean up only a partial file this request created, and never
+		// recursively: whatever was at the path before is not ours to remove.
+		if err != nil && created {
+			_ = d.user.Fs.Remove(r.URL.Path)
 		}
 
 		return errToStatus(err), err
@@ -204,6 +219,8 @@ var resourcePutHandler = withUser(func(w http.ResponseWriter, r *http.Request, d
 	if !exists {
 		return http.StatusNotFound, nil
 	}
+
+	sweepStaleUploads(d, r.URL.Path)
 
 	err = d.RunHook(func() error {
 		info, writeErr := writeFile(d.user.Fs, r.URL.Path, r.Body, d.settings.FileMode, d.settings.DirMode)
@@ -277,11 +294,15 @@ func resourcePatchHandler(fileCache FileCache) handleFunc {
 
 // checkDescendants reports an error if the rules deny any path inside the src
 // tree or, when dst is not empty, the location that tree would land on. The
+// same goes for the server's own files (see data.protected): a directory that
+// holds one cannot be deleted, moved or copied as a whole. The
 // handlers only authorize the root of the operation, but copy, rename and
 // delete then recurse through the whole subtree, so a rule denying a descendant
 // of an allowed directory would be bypassed by operating on the parent instead.
 func checkDescendants(d *data, src, dst string) error {
-	if len(d.settings.Rules) == 0 && len(d.user.Rules) == 0 {
+	// The walk is only needed when something can be refused below the root of
+	// the operation: a rule, or one of the server's own files.
+	if len(d.settings.Rules) == 0 && len(d.user.Rules) == 0 && !d.server.HasProtectedPaths() {
 		return nil
 	}
 
@@ -343,6 +364,9 @@ func addVersionSuffix(source string, afs afero.Fs) string {
 	return source
 }
 
+// writeFile stores the content read from in at dst, creating the directories
+// leading to it. The content only takes the place of an existing file once it
+// has been received completely: see fileutils.WriteFileAtomic.
 func writeFile(afs afero.Fs, dst string, in io.Reader, fileMode, dirMode fs.FileMode) (os.FileInfo, error) {
 	dir, _ := path.Split(dst)
 	err := afs.MkdirAll(dir, dirMode)
@@ -350,30 +374,53 @@ func writeFile(afs afero.Fs, dst string, in io.Reader, fileMode, dirMode fs.File
 		return nil, err
 	}
 
-	file, err := afs.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileMode)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
+	return fileutils.WriteFileAtomic(afs, dst, in, fileMode)
+}
 
-	_, err = io.Copy(file, in)
-	if err != nil {
-		return nil, err
-	}
+// uploadSweeps remembers when the temporary files of a directory were last
+// looked at, so that a burst of uploads into one directory lists it once.
+var uploadSweeps = struct {
+	sync.Mutex
+	last map[string]time.Time
+}{last: map[string]time.Time{}}
 
-	// Sync the file to ensure all data is written to storage.
-	// to prevent file corruption.
-	if err := file.Sync(); err != nil {
-		return nil, err
-	}
+const (
+	// staleUploadAge is how long a temporary upload file is left alone after
+	// it was last written. An upload in progress touches its file with every
+	// chunk, so anything older was abandoned by a crash or a restart.
+	staleUploadAge = 24 * time.Hour
 
-	// Gets the info about the file.
-	info, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
+	uploadSweepInterval = time.Hour
+	uploadSweepMemory   = 1024
+)
 
-	return info, nil
+// sweepStaleUploads removes the temporary upload files in the directory of
+// dst that have not been written for staleUploadAge. They are never listed and
+// cannot be addressed through the API, so this is what cleans up after a
+// crash or a restart in the middle of an upload.
+func sweepStaleUploads(d *data, dst string) {
+	dir, _ := path.Split(dst)
+	if dir == "" {
+		dir = "/"
+	}
+	key := filepath.Clean(d.user.FullPath(dir))
+
+	now := time.Now()
+	uploadSweeps.Lock()
+	if last, ok := uploadSweeps.last[key]; ok && now.Sub(last) < uploadSweepInterval {
+		uploadSweeps.Unlock()
+		return
+	}
+	if len(uploadSweeps.last) >= uploadSweepMemory {
+		clear(uploadSweeps.last)
+	}
+	uploadSweeps.last[key] = now
+	uploadSweeps.Unlock()
+
+	// A directory that does not exist yet has nothing to sweep.
+	_ = fileutils.RemoveStaleTemps(d.user.Fs, dir, func(info os.FileInfo) bool {
+		return now.Sub(info.ModTime()) > staleUploadAge
+	})
 }
 
 func delThumbs(ctx context.Context, fileCache FileCache, file *files.FileInfo) error {
@@ -420,7 +467,19 @@ func patchAction(ctx context.Context, action, src, dst string, d *data, fileCach
 			return err
 		}
 
-		return fileutils.MoveFile(d.user.Fs, src, dst, d.settings.FileMode, d.settings.DirMode)
+		err = fileutils.MoveFile(d.user.Fs, src, dst, d.settings.FileMode, d.settings.DirMode)
+		if err != nil {
+			return err
+		}
+
+		// Shares point at paths, so they have to be moved along with what
+		// they share. Left behind, they would publish whatever is created at
+		// the old path later.
+		if shareErr := moveSharesUnder(d, src, dst); shareErr != nil {
+			log.Printf("WARNING: Error(s) occurred while moving the shares of %s: %s", src, shareErr)
+		}
+
+		return nil
 	default:
 		return fmt.Errorf("unsupported action %s: %w", action, fberrors.ErrInvalidRequestParams)
 	}
@@ -442,6 +501,13 @@ var resourceGetRecursiveHandler = withUser(func(w http.ResponseWriter, r *http.R
 	rootPath := r.URL.Path
 	if rootPath == "" {
 		rootPath = "/"
+	}
+
+	// The walk below checks every entry against the rules, but not the root
+	// it starts from. Refuse a denied root before looking it up, so the answer
+	// does not reveal whether it exists.
+	if !d.Check(rootPath) {
+		return http.StatusForbidden, nil
 	}
 
 	// Make sure the root itself exists and is a directory.

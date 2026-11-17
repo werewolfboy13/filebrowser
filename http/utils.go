@@ -1,14 +1,21 @@
 package fbhttp
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	gopath "path"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/spf13/afero"
 
 	libErrors "github.com/filebrowser/filebrowser/v2/errors"
 	imgErrors "github.com/filebrowser/filebrowser/v2/img"
@@ -72,6 +79,133 @@ func renderJSON(w http.ResponseWriter, _ *http.Request, data interface{}) (int, 
 	}
 
 	return 0, nil
+}
+
+// lstatPath stats name without following a final symlink, where the
+// filesystem can.
+func lstatPath(afs afero.Fs, name string) (os.FileInfo, error) {
+	if lstater, ok := afs.(afero.Lstater); ok {
+		info, _, err := lstater.LstatIfPossible(name)
+		return info, err
+	}
+	return afs.Stat(name)
+}
+
+// Limits on how long the server waits for a request body. They are variables
+// so that tests can shorten them.
+//
+// The server itself only limits the time a request header may take
+// (ReadHeaderTimeout): a limit on whole requests would cut off uploads, and a
+// connection deadline that is still set while a handler runs cancels the
+// request, which would cut off downloads. So the wait is limited where a body
+// is read that has no reason to be slow, and lifted again once it is in.
+var (
+	// requestBodyTimeout is the time a small request body (credentials, a
+	// JSON document) may take to arrive.
+	requestBodyTimeout = 30 * time.Second
+
+	// leftoverBodyTimeout is the time the server waits for the rest of a body
+	// nobody is going to use: that of a refused request, or of a request that
+	// should not have one.
+	leftoverBodyTimeout = 10 * time.Second
+)
+
+// limitBodyWait gives the connection of w the time d to deliver the request
+// body. It does nothing for a writer that is not a server connection.
+func limitBodyWait(w http.ResponseWriter, d time.Duration) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(d))
+}
+
+// liftBodyWait removes the limit set by limitBodyWait. It has to be called as
+// soon as the body is in: the limit is a deadline on the connection, and when
+// it passes while the handler is still at work the request is cancelled.
+func liftBodyWait(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Time{})
+}
+
+// readSmallBody reads the whole request body, which may be at most
+// maxAuthBodySize bytes and has requestBodyTimeout to arrive. It returns the
+// status to answer with when it cannot be read: 413 when it is too large, 408
+// when it did not arrive in time, 400 otherwise.
+func readSmallBody(w http.ResponseWriter, r *http.Request) ([]byte, int, error) {
+	if r.Body == nil {
+		return nil, http.StatusBadRequest, libErrors.ErrEmptyRequest
+	}
+
+	limitBodyWait(w, requestBodyTimeout)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAuthBodySize))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		var netErr net.Error
+		switch {
+		case errors.As(err, &tooLarge):
+			return nil, http.StatusRequestEntityTooLarge, err
+		case errors.As(err, &netErr) && netErr.Timeout(), errors.Is(err, os.ErrDeadlineExceeded):
+			return nil, http.StatusRequestTimeout, err
+		}
+		return nil, http.StatusBadRequest, err
+	}
+	liftBodyWait(w)
+
+	return body, 0, nil
+}
+
+// decodeJSONBody decodes the JSON request body into v. See readSmallBody for
+// its limits and for the status returned when the body cannot be read; a body
+// that is not valid JSON is a 400.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, v interface{}) (int, error) {
+	body, status, err := readSmallBody(w, r)
+	if err != nil {
+		return status, err
+	}
+
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(v); err != nil {
+		return http.StatusBadRequest, err
+	}
+
+	return 0, nil
+}
+
+// maxUnexpectedBody is how much of a body that should not be there is read
+// and thrown away. It is what the server itself is prepared to discard.
+const maxUnexpectedBody = 256 << 10
+
+// discardUnexpectedBody deals with the body of requests that have no use for
+// one: everything but POST, PUT, PATCH and DELETE. No browser sends one, but
+// nothing stops a client from announcing it and then never sending it, and the
+// server waits for a body before it answers, on whatever route, logged in or
+// not. Here the body is read and dropped within leftoverBodyTimeout, before
+// the request is handled; a client that does not deliver it is answered and
+// disconnected.
+//
+// Requests whose method can carry a body are left alone: uploads may take as
+// long as they need. Those are covered where the body is read or refused (see
+// readSmallBody and handle).
+func discardUnexpectedBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if r.Body != nil && r.Body != http.NoBody {
+			limitBodyWait(w, leftoverBodyTimeout)
+			n, err := io.Copy(io.Discard, io.LimitReader(r.Body, maxUnexpectedBody+1))
+			if err != nil || n > maxUnexpectedBody {
+				w.Header().Set("Connection", "close")
+				status := http.StatusRequestTimeout
+				if err == nil {
+					status = http.StatusRequestEntityTooLarge
+				}
+				http.Error(w, strconv.Itoa(status)+" "+http.StatusText(status), status)
+				return
+			}
+			liftBodyWait(w)
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func errToStatus(err error) int {

@@ -1,6 +1,8 @@
 package fileutils
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -8,6 +10,8 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/afero"
+
+	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 )
 
 // MoveFile moves file from src to dst.
@@ -17,10 +21,18 @@ func MoveFile(afs afero.Fs, src, dst string, fileMode, dirMode fs.FileMode) erro
 	if afs.Rename(src, dst) == nil {
 		return nil
 	}
+
+	// Whatever is at dst before the fallback runs is not this move's to
+	// remove: the cleanup below is only for a partial copy it created.
+	_, statErr := lstat(afs, dst)
+	created := errors.Is(statErr, fs.ErrNotExist)
+
 	// fallback
 	err := Copy(afs, src, dst, fileMode, dirMode)
 	if err != nil {
-		_ = afs.Remove(dst)
+		if created {
+			_ = afs.Remove(dst)
+		}
 		return err
 	}
 	if err := afs.RemoveAll(src); err != nil {
@@ -29,9 +41,49 @@ func MoveFile(afs afero.Fs, src, dst string, fileMode, dirMode fs.FileMode) erro
 	return nil
 }
 
+// lstat stats name without following a final symlink where the filesystem
+// allows it.
+func lstat(afs afero.Fs, name string) (os.FileInfo, error) {
+	if lstater, ok := afs.(afero.Lstater); ok {
+		info, _, err := lstater.LstatIfPossible(name)
+		return info, err
+	}
+	return afs.Stat(name)
+}
+
+// ErrNotRegular is returned for a path whose content cannot be read or
+// written like that of a file: a named pipe, a socket or a device. It is an
+// invalid request rather than a failure of the server.
+var ErrNotRegular = fmt.Errorf("%w: not a regular file", fberrors.ErrInvalidRequestParams)
+
+// requireRegular reports an error unless name is a regular file, following
+// symlinks. With mayBeMissing, a name that does not exist passes.
+func requireRegular(afs afero.Fs, name string, mayBeMissing bool) error {
+	info, err := afs.Stat(name)
+	switch {
+	case err != nil && mayBeMissing && errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case !info.Mode().IsRegular():
+		return &os.PathError{Op: "open", Path: name, Err: ErrNotRegular}
+	}
+	return nil
+}
+
 // CopyFile copies a file from source to dest and returns
 // an error if any.
 func CopyFile(afs afero.Fs, source, dest string, fileMode, dirMode fs.FileMode) error {
+	// Only regular files are copied: opening a named pipe, to read from it or
+	// to write to it, blocks until something opens its other end. Stat
+	// follows symlinks, as the copy itself does.
+	if err := requireRegular(afs, source, false); err != nil {
+		return err
+	}
+	if err := requireRegular(afs, dest, true); err != nil {
+		return err
+	}
+
 	// Open the source file.
 	src, err := afs.Open(source)
 	if err != nil {

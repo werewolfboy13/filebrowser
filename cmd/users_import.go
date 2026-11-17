@@ -57,7 +57,9 @@ list or set it to 0.`,
 				return userImportErr
 			}
 
-			err = marshal("users.backup.json", list)
+			// Back up the users that are about to be deleted, not the ones
+			// being imported. The file holds their password hashes.
+			err = marshalPrivate("users.backup.json", oldUsers)
 			if err != nil {
 				return err
 			}

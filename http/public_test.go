@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/asdine/storm/v3"
 	"github.com/filebrowser/filebrowser/v2/files"
@@ -21,6 +22,10 @@ func TestPublicShareHandlerAuthentication(t *testing.T) {
 	t.Parallel()
 
 	const passwordBcrypt = "$2y$10$TFAmdCbyd/mEZDe5fUeZJu.MaJQXRTwdqb/IQV.eTn6dWrF58gCSe"
+	// The token the page of a password-protected share is handed, for the key
+	// the test stores in the settings.
+	privateShare := &share.Link{Hash: "h", UserID: 1, PasswordHash: passwordBcrypt, Token: "123"}
+	validToken := shareToken([]byte("key"), privateShare, time.Now().Add(time.Hour))
 	testCases := map[string]struct {
 		share              *share.Link
 		req                *http.Request
@@ -44,10 +49,17 @@ func TestPublicShareHandlerAuthentication(t *testing.T) {
 		},
 		"Private share, authentication via token": {
 			share:              &share.Link{Hash: "h", UserID: 1, PasswordHash: passwordBcrypt, Token: "123"},
-			req:                newHTTPRequest(t, func(r *http.Request) { r.URL.RawQuery = "token=123" }),
+			req:                newHTTPRequest(t, func(r *http.Request) { r.URL.RawQuery = "token=" + validToken }),
 			sharePerm:          true,
 			downloadPerm:       true,
 			expectedStatusCode: 200,
+		},
+		"Private share, the stored token is not accepted, 401": {
+			share:              &share.Link{Hash: "h", UserID: 1, PasswordHash: passwordBcrypt, Token: "123"},
+			req:                newHTTPRequest(t, func(r *http.Request) { r.URL.RawQuery = "token=123" }),
+			sharePerm:          true,
+			downloadPerm:       true,
+			expectedStatusCode: 401,
 		},
 		"Private share, authentication via invalid token, 401": {
 			share:              &share.Link{Hash: "h", UserID: 1, PasswordHash: passwordBcrypt, Token: "123"},

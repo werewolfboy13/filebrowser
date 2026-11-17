@@ -38,12 +38,23 @@ func wsErr(ws *websocket.Conn, r *http.Request, status int, err error) {
 	}
 }
 
+// maxCommandSize bounds the message a command is read from. A command line is
+// short; without a limit the whole message is buffered, whatever its size.
+const maxCommandSize = 64 << 10 // 64 KiB
+
 var commandsHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+	// Refuse before upgrading: a user who cannot run a command anyway must
+	// not be handed a connection to stream data into.
+	if !d.server.EnableExec || !d.user.Perm.Execute {
+		return http.StatusForbidden, nil
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
 	defer conn.Close()
+	conn.SetReadLimit(maxCommandSize)
 
 	var raw string
 

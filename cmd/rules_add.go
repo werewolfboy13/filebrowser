@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"regexp"
-
 	"github.com/spf13/cobra"
 
 	"github.com/filebrowser/filebrowser/v2/rules"
@@ -36,10 +34,6 @@ var rulesAddCmd = &cobra.Command{
 
 		exp := args[0]
 
-		if regex {
-			regexp.MustCompile(exp)
-		}
-
 		rule := rules.Rule{
 			Allow: allow,
 			Regex: regex,
@@ -49,6 +43,10 @@ var rulesAddCmd = &cobra.Command{
 			rule.Regexp = &rules.Regexp{Raw: exp}
 		} else {
 			rule.Path = exp
+		}
+
+		if err := rule.Validate(); err != nil {
+			return err
 		}
 
 		user := func(u *users.User) error {

@@ -51,6 +51,24 @@ type FileInfo struct {
 	Token      string            `json:"token,omitempty"`
 	currentDir []os.FileInfo     `json:"-"`
 	Resolution *ImageResolution  `json:"resolution,omitempty"`
+
+	// targetMode is the mode of what a symbolic link points at, when the link
+	// could be followed. Mode itself describes the link.
+	targetMode os.FileMode
+	followed   bool
+}
+
+// IsRegular reports whether the content of the file is that of a regular
+// file, following a symbolic link to what it points at.
+//
+// Only a regular file may be opened for its content. Opening a named pipe
+// blocks until something opens its other end, which for a file that merely
+// sits in a served directory is never, and reading a device need not end.
+func (i *FileInfo) IsRegular() bool {
+	if i.IsSymlink && i.followed {
+		return i.targetMode.IsRegular()
+	}
+	return i.Mode.IsRegular()
 }
 
 // FileOptions are the options when getting a file info.
@@ -147,6 +165,8 @@ func stat(opts *FileOptions) (*FileInfo, error) {
 	if file != nil && file.IsSymlink {
 		file.Size = info.Size()
 		file.IsDir = info.IsDir()
+		file.targetMode = info.Mode()
+		file.followed = true
 		return file, nil
 	}
 
@@ -174,6 +194,11 @@ func (i *FileInfo) Checksum(algo string) error {
 
 	if i.Checksums == nil {
 		i.Checksums = map[string]string{}
+	}
+
+	// Hashing reads the whole content.
+	if !i.IsRegular() {
+		return fberrors.ErrInvalidOption
 	}
 
 	reader, err := i.Fs.Open(i.Path)
@@ -220,7 +245,9 @@ func (i *FileInfo) RealPath() string {
 }
 
 func (i *FileInfo) detectType(modify, saveContent, readHeader bool, calcImgRes bool) error {
-	if IsNamedPipe(i.Mode) {
+	// Everything below may open the file, to read its header, its content or
+	// its dimensions.
+	if !i.IsRegular() {
 		i.Type = "blob"
 		return nil
 	}
@@ -443,7 +470,7 @@ func (i *FileInfo) readListing(checker rules.Checker, readHeader bool, calcImgRe
 			currentDir: dir,
 		}
 
-		if !file.IsDir && strings.HasPrefix(mime.TypeByExtension(file.Extension), "image/") && calcImgRes {
+		if file.IsRegular() && strings.HasPrefix(mime.TypeByExtension(file.Extension), "image/") && calcImgRes {
 			resolution, err := calculateImageResolution(file.Fs, file.Path)
 			if err != nil {
 				log.Printf("Error calculating resolution for image %s: %v", file.Path, err)

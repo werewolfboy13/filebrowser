@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"time"
+
 	"github.com/spf13/cobra"
 
 	"github.com/filebrowser/filebrowser/v2/settings"
@@ -65,6 +67,12 @@ options you want to change.`,
 		err = getUserDefaults(flags, &defaults, false)
 		if err != nil {
 			return err
+		}
+
+		// A new password, scope or set of permissions ends the sessions the
+		// account has open, as it does through the API.
+		if password != "" || defaults.Scope != user.Scope || defaults.Perm != user.Perm {
+			user.RevokeTokens(time.Now())
 		}
 
 		user.Scope = defaults.Scope

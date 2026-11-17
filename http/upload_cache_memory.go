@@ -17,7 +17,8 @@ type UploadCache interface {
 	// Register stores an upload with its expected file size. remove is called if
 	// the upload expires before completion, to delete the partial file; it must
 	// route through the uploading user's scoped filesystem so that eviction
-	// cannot follow a symlink out of the user's scope.
+	// cannot follow a symlink out of the user's scope. It is nil when the
+	// upload has nothing of its own to delete.
 	Register(filePath string, fileSize int64, remove func() error)
 
 	// Complete removes an upload from the cache

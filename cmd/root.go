@@ -257,13 +257,14 @@ user created with the credentials from options "username" and "password".`,
 			return err
 		}
 
+		// After NewHandler, which works out whether the served filesystem is
+		// case-insensitive.
+		protectServerFiles(server, v.GetString("database"), v.ConfigFileUsed(), cacheDir)
+
 		defer listener.Close()
 
 		log.Println("Listening on", listener.Addr().String())
-		srv := &http.Server{
-			Handler:           handler,
-			ReadHeaderTimeout: 60 * time.Second,
-		}
+		srv := newServer(handler)
 
 		go func() {
 			if err := srv.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
@@ -294,6 +295,65 @@ user created with the credentials from options "username" and "password".`,
 
 		return nil
 	}, storeOptions{allowsNoDatabase: true}),
+}
+
+// newServer returns the HTTP server for handler.
+//
+// It limits the time a request header may take and the time a connection may
+// sit idle between requests. It deliberately sets neither ReadTimeout nor
+// WriteTimeout: they bound a whole request and a whole response, and an
+// upload or a download can take as long as the file is large. Request bodies
+// that have no reason to be slow are limited by the handlers instead (see
+// requestBodyTimeout in the http package).
+func newServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+}
+
+// protectServerFiles registers the files the server itself depends on that lie
+// inside the directory it serves, so that they are never served, and logs a
+// warning for each. It returns what it registered.
+//
+// With the binary's own defaults (--database ./filebrowser.db, --root .) the
+// database is inside every user's scope, and whoever can download it has the
+// key that signs sessions and every password hash. Refusing to start over it
+// would break installations that have run this way for years, so the paths
+// are refused on every file route instead, and the administrator is told.
+func protectServerFiles(server *settings.Server, database, config, cacheDir string) []string {
+	var inside []string
+	register := func(what, path string, protect func(string) bool) {
+		if path == "" || !protect(path) {
+			return
+		}
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+		inside = append(inside, what)
+		log.Printf("WARNING: The %s (%s) is inside the served directory (%s).", what, path, server.Root)
+	}
+
+	register("database", database, server.Protect)
+	register("configuration file", config, server.Protect)
+	register("cache directory", cacheDir, server.Protect)
+	register("TLS key", server.TLSKey, server.Protect)
+	switch server.Log {
+	case "", "stdout", "stderr":
+	default:
+		register("log file", server.Log, server.ProtectLog)
+	}
+
+	if len(inside) != 0 {
+		log.Println("WARNING: File Browser refuses to serve, change or share these paths, but they stay")
+		log.Println("WARNING: exposed to everything else that can read the served directory, and a")
+		log.Println("WARNING: directory that holds one of them cannot be moved, copied or deleted as a")
+		log.Println("WARNING: whole. Keep them outside the served directory (--database, --config,")
+		log.Println("WARNING: --cacheDir, --key, --log).")
+	}
+
+	return inside
 }
 
 func getServerSettings(v *viper.Viper, st *storage.Storage) (*settings.Server, error) {

@@ -3,10 +3,11 @@ package fbhttp
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -134,6 +135,103 @@ func getSharesForAdminPath(d *data, path string) ([]*share.Link, error) {
 	return filtered, nil
 }
 
+// sharesUnder calls fn for every share, whoever owns it, that points at path
+// (a path in d.user's scope) or at something below it. rel is the share's
+// position below path, empty for path itself.
+//
+// A share stores a path relative to its owner's scope, so shares are compared
+// by where they point on disk: each stored path is resolved through its own
+// owner's scope, as getSharesForAdminPath does. A share whose path merely has
+// the same spelling in another user's scope is a different file and is not
+// reported.
+func sharesUnder(d *data, path string, fn func(link *share.Link, owner *users.User, rel string) error) error {
+	links, err := d.store.Share.All()
+	if errors.Is(err, fberrors.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	fold := func(p string) string {
+		if d.server.CaseInsensitiveFs {
+			return strings.ToLower(p)
+		}
+		return p
+	}
+
+	target := filepath.Clean(d.user.FullPath(path))
+	prefix := fold(target)
+	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+		prefix += string(filepath.Separator)
+	}
+
+	owners := make(map[uint]*users.User)
+	var errs error
+	for _, link := range links {
+		owner, ok := owners[link.UserID]
+		if !ok {
+			owner, err = d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, link.UserID)
+			if err != nil && !errors.Is(err, fberrors.ErrNotExist) {
+				return err
+			}
+			owners[link.UserID] = owner // owner is nil on ErrNotExist
+		}
+		if owner == nil {
+			continue
+		}
+
+		onDisk := filepath.Clean(owner.FullPath(link.Path))
+		switch {
+		case fold(onDisk) == fold(target):
+			errs = errors.Join(errs, fn(link, owner, ""))
+		case strings.HasPrefix(fold(onDisk), prefix) && len(onDisk) >= len(target):
+			rel := strings.TrimPrefix(onDisk[len(target):], string(filepath.Separator))
+			errs = errors.Join(errs, fn(link, owner, rel))
+		}
+	}
+
+	return errs
+}
+
+// deleteSharesUnder removes the shares of every owner that point at path or
+// below it. With onlyMissing set, a share is kept as long as its target still
+// exists, which is what a delete that failed part of the way calls for.
+//
+// A share that outlives its target would publish whatever is created at the
+// same path later.
+func deleteSharesUnder(d *data, path string, onlyMissing bool) error {
+	return sharesUnder(d, path, func(link *share.Link, owner *users.User, _ string) error {
+		if onlyMissing {
+			if _, err := os.Lstat(filepath.Clean(owner.FullPath(link.Path))); !errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+		}
+		return d.store.Share.Delete(link.Hash)
+	})
+}
+
+// moveSharesUnder makes the shares of every owner that point at src or below
+// it point at the same place under dst, after src was renamed to dst. A share
+// whose target has thereby left its owner's scope cannot follow it and is
+// removed.
+func moveSharesUnder(d *data, src, dst string) error {
+	newBase := filepath.Clean(d.user.FullPath(dst))
+
+	return sharesUnder(d, src, func(link *share.Link, owner *users.User, rel string) error {
+		moved := filepath.Join(newBase, rel)
+
+		root := filepath.Clean(owner.FullPath("/"))
+		inScope, err := filepath.Rel(root, moved)
+		if err != nil || inScope == ".." || strings.HasPrefix(inScope, ".."+string(filepath.Separator)) {
+			return d.store.Share.Delete(link.Hash)
+		}
+
+		link.Path = slashClean(filepath.ToSlash(inScope))
+		return d.store.Share.Save(link)
+	})
+}
+
 var shareDeleteHandler = withPermShare(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	hash := strings.TrimSuffix(r.URL.Path, "/")
 	hash = strings.TrimPrefix(hash, "/")
@@ -163,6 +261,12 @@ var sharePostHandler = withPermShare(func(w http.ResponseWriter, r *http.Request
 	// d.user.Fs is scoped, so Stat also refuses to follow a symlink whose target
 	// escapes the user's scope: that returns a permission error here and so
 	// blocks creating a share that points out of scope.
+	//
+	// The rules are consulted first: answering 404 or 200 for a path they deny
+	// would tell the user whether it exists.
+	if !d.Check(r.URL.Path) {
+		return http.StatusForbidden, nil
+	}
 	if _, err := d.user.Fs.Stat(r.URL.Path); err != nil {
 		return errToStatus(err), err
 	}
@@ -170,8 +274,8 @@ var sharePostHandler = withPermShare(func(w http.ResponseWriter, r *http.Request
 	var s *share.Link
 	var body share.CreateBody
 	if r.Body != nil {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			return http.StatusBadRequest, fmt.Errorf("failed to decode body: %w", err)
+		if status, err := decodeJSONBody(w, r, &body); err != nil {
+			return status, fmt.Errorf("failed to decode body: %w", err)
 		}
 		defer r.Body.Close()
 	}

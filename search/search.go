@@ -26,9 +26,16 @@ func Search(ctx context.Context,
 	scope = filepath.ToSlash(filepath.Clean(scope))
 	scope = path.Join("/", scope)
 
-	return afero.Walk(fs, scope, func(fPath string, f os.FileInfo, _ error) error {
+	return afero.Walk(fs, scope, func(fPath string, f os.FileInfo, err error) error {
 		if ctx.Err() != nil {
 			return context.Cause(ctx)
+		}
+		// An entry that could not be examined (a symlink the filesystem
+		// refuses to follow, a directory that cannot be read) comes with an
+		// error and, in the first case, without a FileInfo. Skip it and go on
+		// with the rest of the tree.
+		if err != nil || f == nil {
+			return nil
 		}
 		fPath = filepath.ToSlash(filepath.Clean(fPath))
 		fPath = path.Join("/", fPath)

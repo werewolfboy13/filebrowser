@@ -1,7 +1,6 @@
 package fbhttp
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/filebrowser/filebrowser/v2/rules"
@@ -42,10 +41,15 @@ var settingsGetHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, 
 	return renderJSON(w, r, data)
 })
 
-var settingsPutHandler = withAdmin(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
+var settingsPutHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	req := &settingsData{}
-	err := json.NewDecoder(r.Body).Decode(req)
-	if err != nil {
+	if status, err := decodeJSONBody(w, r, req); err != nil {
+		return status, err
+	}
+
+	// A rule that cannot be evaluated would break, or silently change, every
+	// later access check, so it is refused here rather than stored.
+	if err := rules.Validate(req.Rules); err != nil {
 		return http.StatusBadRequest, err
 	}
 
@@ -61,6 +65,6 @@ var settingsPutHandler = withAdmin(func(_ http.ResponseWriter, r *http.Request, 
 	d.settings.Commands = req.Commands
 	d.settings.HideLoginButton = req.HideLoginButton
 
-	err = d.store.Settings.Save(d.settings)
+	err := d.store.Settings.Save(d.settings)
 	return errToStatus(err), err
 })
