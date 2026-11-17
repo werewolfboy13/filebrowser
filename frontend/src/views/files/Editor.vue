@@ -84,7 +84,6 @@ import url from "@/utils/url";
 import ace, { Ace } from "ace-builds";
 import "ace-builds/src-noconflict/ext-language_tools";
 import modelist from "ace-builds/src-noconflict/ext-modelist";
-import DOMPurify from "dompurify";
 
 import Breadcrumbs from "@/components/Breadcrumbs.vue";
 import Action from "@/components/header/Action.vue";
@@ -94,6 +93,7 @@ import { useFileStore } from "@/stores/file";
 import { useLayoutStore } from "@/stores/layout";
 import { getEditorTheme } from "@/utils/theme";
 import { configureAce } from "@/utils/ace";
+import { sanitizeMarkdownHtml } from "@/utils/sanitize";
 import { marked } from "marked";
 import markedKatex from "marked-katex-extension";
 import { inject, onBeforeUnmount, onMounted, ref, watchEffect } from "vue";
@@ -165,7 +165,7 @@ onMounted(() => {
     if (isMarkdownFile && isPreview.value) {
       const new_value = editor.value?.getValue() || "";
       try {
-        previewContent.value = DOMPurify.sanitize(await marked(new_value));
+        previewContent.value = sanitizeMarkdownHtml(await marked(new_value));
       } catch (error) {
         console.error("Failed to convert content to HTML:", error);
         previewContent.value = "";

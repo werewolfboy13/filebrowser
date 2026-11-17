@@ -14,11 +14,16 @@ const emit = defineEmits(["closed"]);
 const modalContainer = ref(null);
 
 onMounted(() => {
-  const element = document.querySelector("#focus-prompt") as HTMLElement | null;
+  // Look inside this dialog only: an element elsewhere on the page (e.g. in
+  // a rendered file) must never receive the dialog's default focus.
+  const container = modalContainer.value as HTMLElement | null;
+  const element = container?.querySelector(
+    "#focus-prompt"
+  ) as HTMLElement | null;
   if (element) {
     element.focus();
-  } else if (modalContainer.value) {
-    (modalContainer.value as HTMLElement).focus();
+  } else if (container) {
+    container.focus();
   }
 });
 
