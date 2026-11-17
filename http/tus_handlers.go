@@ -64,7 +64,7 @@ func keepUploadActive(cache UploadCache, filePath string) func() {
 }
 
 // tusBusy holds the uploads a request is currently working on, by the real
-// path of their destination.
+// path of their destination (see tusUploadKey).
 //
 // The TUS handlers read the state of an upload (does it exist, how much has
 // been written) and then act on it, which is only correct while nobody else
@@ -84,7 +84,7 @@ var tusBusy = struct {
 // reports false, without waiting, when another request already is; otherwise
 // the returned function must be called when the work is done.
 func tusAcquire(d *data, r *http.Request) (release func(), ok bool) {
-	key := filepath.Clean(d.user.FullPath(r.URL.Path))
+	key := tusUploadKey(d, r.URL.Path)
 
 	tusBusy.Lock()
 	defer tusBusy.Unlock()
@@ -117,10 +117,20 @@ func tusTempPath(dst string) string {
 	return dir + fileutils.TempPrefix + "tus-" + hex.EncodeToString(sum[:16])
 }
 
-// tusUploadKey returns the key an upload to dst is registered under in the
-// upload cache: the real path of dst.
+// tusUploadKey returns the key an upload to dst is known by, in the upload
+// cache and in tusBusy: where dst is on disk once symbolic links are
+// followed.
+//
+// A directory that is reached through a link gives the files in it a second
+// name, and the temporary file of an upload lies in the directory itself.
+// Under the path as written, the two names of one upload were two uploads to
+// the cache and two locks, working on one file.
 func tusUploadKey(d *data, dst string) string {
-	return (&files.FileInfo{Fs: d.user.Fs, Path: dst}).RealPath()
+	lexical := filepath.Clean(d.user.FullPath(slashClean(dst)))
+	if resolved, ok := d.resolvePath(lexical); ok {
+		return resolved
+	}
+	return lexical
 }
 
 // tusWritePath returns the file the data of an upload to dst is appended to.
