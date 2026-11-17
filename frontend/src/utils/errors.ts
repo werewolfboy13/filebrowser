@@ -42,3 +42,20 @@ export function statusMessage(t: Translate, error: unknown): string | null {
   }
   return null;
 }
+
+// What the error toast shows for an error: the message above when there is
+// one (with no "report issue" link: these are not bugs), its own message
+// otherwise. Used for every $showError, e.g. by the profile and user forms
+// and the current-password dialog, whose password checks answer 429 too.
+export function errorToast(
+  t: Translate,
+  error: Error | string,
+  canReport: boolean
+): { message: string; isReport: boolean } {
+  const known = statusMessage(t, error);
+  if (known !== null) return { message: known, isReport: false };
+  return {
+    message: (error as Error).message || String(error),
+    isReport: canReport,
+  };
+}

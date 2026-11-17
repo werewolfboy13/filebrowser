@@ -13,7 +13,7 @@ import i18n, { isRtl } from "@/i18n";
 import App from "@/App.vue";
 import CustomToast from "@/components/CustomToast.vue";
 import { lazyloadOptions } from "@/utils/lazyload";
-import { statusMessage } from "@/utils/errors";
+import { errorToast } from "@/utils/errors";
 
 import dayjs from "dayjs";
 import localizedFormat from "dayjs/plugin/localizedFormat";
@@ -87,14 +87,17 @@ app.provide("$showSuccess", (message: string) => {
 
 app.provide("$showError", (error: Error | string, displayReport = true) => {
   const $toast = useToast();
-  // a busy, rate-limited or too large request is not something to report
-  const known = statusMessage(i18n.global.t, error);
+  const { message, isReport } = errorToast(
+    i18n.global.t,
+    error,
+    !disableExternal && displayReport
+  );
   $toast.error(
     {
       component: CustomToast,
       props: {
-        message: known ?? ((error as Error).message || error),
-        isReport: !disableExternal && displayReport && known === null,
+        message,
+        isReport,
         // TODO: could you add this to the component itself?
         reportText: i18n.global.t("buttons.reportIssue"),
       },

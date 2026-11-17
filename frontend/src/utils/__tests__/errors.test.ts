@@ -11,7 +11,7 @@ vi.hoisted(() => {
 vi.mock("@/utils/auth", () => ({}));
 vi.mock("@/stores/auth", () => ({}));
 
-import { statusMessage } from "@/utils/errors";
+import { errorToast, statusMessage } from "@/utils/errors";
 import { retryAfterSeconds, StatusError } from "@/api/utils";
 
 const t = (k: string, v?: Record<string, unknown>) =>
@@ -63,5 +63,30 @@ describe("retryAfterSeconds", () => {
   it("is undefined when missing or invalid", () => {
     expect(retryAfterSeconds(res())).toBeUndefined();
     expect(retryAfterSeconds(res("soon"))).toBeUndefined();
+  });
+});
+
+describe("errorToast", () => {
+  it("a 429 from a current-password check says how long to wait, without a report link", () => {
+    expect(
+      errorToast(
+        t,
+        new StatusError("429 Too Many Requests\n", 429, undefined, 20),
+        true
+      )
+    ).toEqual({
+      message: 'errors.tooManyAttempts {"seconds":20}',
+      isReport: false,
+    });
+  });
+  it("other errors keep their message and the report link", () => {
+    expect(errorToast(t, new StatusError("boom", 500), true)).toEqual({
+      message: "boom",
+      isReport: true,
+    });
+    expect(errorToast(t, "plain", false)).toEqual({
+      message: "plain",
+      isReport: false,
+    });
   });
 });
