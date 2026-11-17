@@ -165,7 +165,12 @@ func TestSharePasswordGuessesAreSlowedDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code, _, body := e.do(http.MethodGet, "/api/public/dl/"+share+"?token="+link.Token, "", nil, nil); code != http.StatusOK || body != "first" {
+	set, err := e.st.Settings.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := shareToken(set.Key, link, time.Now().Add(time.Hour))
+	if code, _, body := e.do(http.MethodGet, "/api/public/dl/"+share+"?token="+token, "", nil, nil); code != http.StatusOK || body != "first" {
 		t.Errorf("download with the share token while the password waits = %d %q", code, body)
 	}
 

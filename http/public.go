@@ -1,13 +1,18 @@
 package fbhttp
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/url"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/filebrowser/filebrowser/v2/files"
 	"github.com/filebrowser/filebrowser/v2/share"
@@ -38,6 +43,13 @@ var withHashFile = func(fn handleFunc) handleFunc {
 
 		d.user = user
 
+		// The request got past the password of the share: hand its page a
+		// token for the URLs of its downloads and previews.
+		token := ""
+		if link.PasswordHash != "" {
+			token = shareToken(d.settings.Key, link, time.Now().Add(shareTokenLifetime))
+		}
+
 		file, err := files.NewFileInfo(&files.FileOptions{
 			Fs:         d.user.Fs,
 			Path:       link.Path,
@@ -46,7 +58,7 @@ var withHashFile = func(fn handleFunc) handleFunc {
 			ReadHeader: d.server.TypeDetectionByHeader,
 			CalcImgRes: d.server.TypeDetectionByHeader,
 			Checker:    d,
-			Token:      link.Token,
+			Token:      token,
 		})
 		if err != nil {
 			return errToStatus(err), err
@@ -86,7 +98,7 @@ var withHashFile = func(fn handleFunc) handleFunc {
 			Modify:  d.user.Perm.Modify,
 			Expand:  true,
 			Checker: d,
-			Token:   link.Token,
+			Token:   token,
 		})
 		if err != nil {
 			return errToStatus(err), err
@@ -146,9 +158,10 @@ func authenticateShareRequest(w http.ResponseWriter, r *http.Request, d *data, l
 		return 0, nil
 	}
 
-	// An empty stored token must never match: the query parameter is empty
-	// whenever the client does not send one.
-	if l.Token != "" && subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(l.Token)) == 1 {
+	// The token the page of the share was handed after the password was
+	// entered: see shareToken. The fixed token stored with the share is not
+	// accepted any more.
+	if validShareToken(d.settings.Key, l, r.URL.Query().Get("token"), time.Now()) {
 		return 0, nil
 	}
 
@@ -189,4 +202,69 @@ func authenticateShareRequest(w http.ResponseWriter, r *http.Request, d *data, l
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"OK"}`))
+}
+
+// shareTokenLifetime is how long a token handed to the page of a
+// password-protected share stays valid. The page puts it into the URLs of its
+// downloads and previews, and gets a new one with every listing it fetches,
+// so the lifetime only has to outlast one visit: a day covers a long film.
+const shareTokenLifetime = 24 * time.Hour
+
+// shareToken returns the token that opens the password-protected share l
+// until expires, without the password.
+//
+// A download or a preview is a URL the browser fetches on its own, so it
+// cannot carry the password in a header: the page of the share, which has the
+// password, is handed a token to put in the URL instead. A URL ends up in the
+// browser history and in logs along the way, so the token is not the secret
+// of the share but a derived one that expires: its expiry, and a MAC over the
+// share, the hash of its password and that expiry. It is made only of
+// characters that need no escaping in a URL, as the page inserts it as it is.
+//
+// It returns "" when there is no key to derive it with.
+func shareToken(key []byte, l *share.Link, expires time.Time) string {
+	if len(key) == 0 {
+		return ""
+	}
+
+	expiry := strconv.FormatInt(expires.Unix(), 36)
+
+	// A key of its own, so that nothing signed for another purpose with the
+	// settings key (session tokens) can be passed off as a share token.
+	derive := hmac.New(sha256.New, key)
+	derive.Write([]byte("filebrowser share token"))
+
+	mac := hmac.New(sha256.New, derive.Sum(nil))
+	for _, part := range []string{l.Hash, l.PasswordHash, expiry} {
+		mac.Write([]byte(strconv.Itoa(len(part))))
+		mac.Write([]byte{0})
+		mac.Write([]byte(part))
+	}
+
+	return expiry + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// shareTokenExpiry returns when token expires, or the zero time when it has no
+// readable expiry.
+func shareTokenExpiry(token string) time.Time {
+	expiry, _, ok := strings.Cut(token, ".")
+	if !ok {
+		return time.Time{}
+	}
+	seconds, err := strconv.ParseInt(expiry, 36, 64)
+	if err != nil || seconds <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(seconds, 0)
+}
+
+// validShareToken reports whether token opens the share l now.
+func validShareToken(key []byte, l *share.Link, token string, now time.Time) bool {
+	expires := shareTokenExpiry(token)
+	if expires.IsZero() || !now.Before(expires) {
+		return false
+	}
+
+	want := shareToken(key, l, expires)
+	return want != "" && subtle.ConstantTimeCompare([]byte(token), []byte(want)) == 1
 }
