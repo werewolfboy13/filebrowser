@@ -273,6 +273,12 @@ describe("listing shortcuts ignore keys typed into text fields", () => {
 
   const targets = {
     "the command shell": { tagName: "PRE", isContentEditable: true },
+    // e.g. a <span> of highlighted text in an editable area
+    "an element inside an editable area": {
+      tagName: "SPAN",
+      isContentEditable: false,
+      closest: (sel: string) => (sel.includes("contenteditable") ? {} : null),
+    },
     "a textarea": { tagName: "TEXTAREA", isContentEditable: false },
     "an input": { tagName: "INPUT", isContentEditable: false },
     "a select": { tagName: "SELECT", isContentEditable: false },
@@ -304,6 +310,11 @@ describe("listing shortcuts ignore keys typed into text fields", () => {
       setup().keyEvent(key("a", target, { ctrlKey: true }));
       expect(harness.fileStore.selected).toEqual([]);
     });
+
+    // copyCut() and paste() already ignored <input> targets themselves, so
+    // an input cannot show that the typing guard works for these keys: see
+    // the case of an element inside an editable area below instead.
+    if (target.tagName === "INPUT") continue;
 
     it(`Ctrl+V / Ctrl+X typed in ${where} do not touch the file clipboard`, async () => {
       const { keyEvent } = setup();

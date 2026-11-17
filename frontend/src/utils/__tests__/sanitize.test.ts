@@ -63,7 +63,13 @@ describe("markdown preview sanitiser keeps ordinary markdown", () => {
 
 describe("markdown preview sanitiser removes", () => {
   const cases: Array<[string, string, RegExp]> = [
-    ["<style>", "<style>body{display:none}</style>x", /<style/i],
+    // not leading: the HTML parser moves a leading <style> out of the body
+    // by itself, which plain DOMPurify would pass too
+    [
+      "<style>",
+      "<p>x</p><style>header{display:none}</style><p>y</p>",
+      /<style|display:none/i,
+    ],
     ["style attributes", '<p style="position:fixed">x</p>', /style=/],
     ["forms", '<form action="https://a.example/"><p>x</p></form>', /<form/],
     ["buttons", "<button>x</button>", /<button/],

@@ -143,4 +143,22 @@ describe("preview keyboard shortcuts", () => {
     pressIn(document.body, "Escape", 27);
     expect(h.push).toHaveBeenCalledWith({ path: "/files/pics/" });
   });
+  // A key already handled inside the page must not also act on the
+  // preview, e.g. Escape closing the video player's settings menu (its
+  // menus call preventDefault() on it) must not close the preview too.
+  it("a key the page already handled (defaultPrevented) is ignored", async () => {
+    await mountPreview();
+    const menu = document.createElement("div");
+    document.body.appendChild(menu);
+    menu.addEventListener("keydown", (e) => e.preventDefault());
+    const ev = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(ev, "which", { value: 27 });
+    menu.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(h.push).not.toHaveBeenCalled();
+  });
 });
