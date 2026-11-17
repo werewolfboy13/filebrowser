@@ -70,6 +70,14 @@ export const useUploadStore = defineStore("upload", () => {
     lastUpload.value = Infinity;
     tus.abortAllUploads();
     api.abortResourceUploads();
+    // The queue is restarted (reset) when the last active upload settles.
+    // With none active, e.g. on logout while nothing is uploading, nothing
+    // would settle and the queue would stay stopped: the first file of the
+    // next upload would be dropped.
+    if (!hasActiveUploads()) {
+      window.removeEventListener("beforeunload", beforeUnload);
+      reset();
+    }
   };
 
   //

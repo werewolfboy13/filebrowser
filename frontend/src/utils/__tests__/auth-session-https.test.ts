@@ -24,17 +24,26 @@ vi.hoisted(() => {
 });
 const h = vi.hoisted(() => ({
   push: vi.fn(),
-  abort: vi.fn(),
+  abortAllUploads: vi.fn(),
+  abortResourceUploads: vi.fn(),
+  post: vi.fn(),
   jwtAtAbort: null as string | null,
 }));
 vi.mock("@/router", () => ({ default: { push: h.push } }));
 vi.mock("@/i18n", () => ({ detectLocale: () => "en", setLocale: vi.fn() }));
-vi.mock("@/stores/upload", () => ({
-  useUploadStore: () => ({ abort: h.abort }),
+// The real upload store, over mocked transports: logout() runs its abort().
+vi.mock("@/api", () => ({
+  files: { post: h.post, abortResourceUploads: h.abortResourceUploads },
+}));
+vi.mock("@/api/tus", () => ({ abortAllUploads: h.abortAllUploads }));
+vi.mock("@/utils/buttons", () => ({
+  default: { loading: vi.fn(), success: vi.fn(), done: vi.fn() },
 }));
 
+import { createApp } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { logout, parseToken } from "@/utils/auth";
+import { useUploadStore } from "@/stores/upload";
 import { useAuthStore } from "@/stores/auth";
 import { useClipboardStore } from "@/stores/clipboard";
 import { useFileStore } from "@/stores/file";
@@ -43,8 +52,14 @@ import { fakeJwt, recordCookieWrites } from "./auth-session.shared";
 
 describe("auth session over https", () => {
   beforeEach(() => {
-    setActivePinia(createPinia());
+    // the upload store injects $showError: give the pinia an app
+    const app = createApp({});
+    app.provide("$showError", vi.fn());
+    const pinia = createPinia();
+    app.use(pinia);
+    setActivePinia(pinia);
     vi.clearAllMocks();
+    h.post.mockResolvedValue(undefined);
   });
 
   it("marks the auth cookie Secure, when setting and when clearing it", () => {
@@ -64,7 +79,9 @@ describe("auth session over https", () => {
     const auth = useAuthStore();
     parseToken(fakeJwt());
     const jwt = auth.jwt;
-    h.abort.mockImplementation(() => (h.jwtAtAbort = useAuthStore().jwt));
+    h.abortAllUploads.mockImplementation(
+      () => (h.jwtAtAbort = useAuthStore().jwt)
+    );
 
     useClipboardStore().$patch({
       key: "x",
@@ -81,7 +98,8 @@ describe("auth session over https", () => {
 
     logout("inactivity");
 
-    expect(h.abort).toHaveBeenCalledTimes(1);
+    expect(h.abortAllUploads).toHaveBeenCalledTimes(1);
+    expect(h.abortResourceUploads).toHaveBeenCalledTimes(1);
     expect(h.jwtAtAbort).toBe(jwt);
     expect(useClipboardStore().items).toEqual([]);
     expect(useFileStore().req).toBeNull();
@@ -93,5 +111,32 @@ describe("auth session over https", () => {
       path: "/login",
       query: { "logout-reason": "inactivity" },
     });
+  });
+  // logout() aborts uploads. abort() stopped the queue (lastUpload =
+  // Infinity) and only the settling of the last active upload restored it,
+  // so with nothing uploading at logout the queue stayed stopped: after
+  // logging in again on the same tab (no page reload) the first file of the
+  // next upload was dropped and the upload reported as done.
+  it("after logout and a new login, every file of the next upload is sent", async () => {
+    recordCookieWrites();
+    parseToken(fakeJwt());
+    logout(); // nothing was uploading
+    parseToken(fakeJwt()); // logs in again on the same tab
+
+    // upload.handleFiles() queues each file of a selection in turn
+    for (const name of ["a.pdf", "b.pdf", "c.pdf"]) {
+      useUploadStore().upload(
+        `/files/${name}`,
+        name,
+        new File(["data"], name),
+        false,
+        "blob"
+      );
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    const sent = h.post.mock.calls.map((c: unknown[]) => c[0]);
+    console.log("api.post paths:", JSON.stringify(sent));
+    expect(sent).toEqual(["/files/a.pdf", "/files/b.pdf", "/files/c.pdf"]);
   });
 });
