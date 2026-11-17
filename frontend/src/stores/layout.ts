@@ -1,4 +1,7 @@
 import { defineStore } from "pinia";
+
+// Gives every prompt pushed on the stack its own id (see PopupProps.id).
+let nextPromptId = 0;
 // import { useAuthPreferencesStore } from "./auth-preferences";
 // import { useAuthEmailStore } from "./auth-email";
 
@@ -38,6 +41,7 @@ export const useLayoutStore = defineStore("layout", {
     showHover(value: PopupProps | string) {
       if (typeof value !== "object") {
         this.prompts.push({
+          id: ++nextPromptId,
           prompt: value,
           confirm: null,
           action: undefined,
@@ -49,6 +53,7 @@ export const useLayoutStore = defineStore("layout", {
       }
 
       this.prompts.push({
+        id: ++nextPromptId,
         prompt: value.prompt,
         confirm: value?.confirm,
         action: value?.action,
@@ -59,6 +64,7 @@ export const useLayoutStore = defineStore("layout", {
     },
     showError() {
       this.prompts.push({
+        id: ++nextPromptId,
         prompt: "error",
         confirm: null,
         action: undefined,
@@ -68,6 +74,7 @@ export const useLayoutStore = defineStore("layout", {
     },
     showSuccess() {
       this.prompts.push({
+        id: ++nextPromptId,
         prompt: "success",
         confirm: null,
         action: undefined,

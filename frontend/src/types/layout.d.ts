@@ -1,4 +1,8 @@
 interface PopupProps {
+  // Unique per showHover() call, set by the layout store. Prompts.vue keys
+  // the prompt component with it, so every prompt shown gets its own
+  // component instance (and its own captured confirm/props).
+  id?: number;
   prompt: string;
   confirm?: any;
   action?: PopupAction;

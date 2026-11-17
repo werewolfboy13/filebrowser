@@ -44,12 +44,16 @@ import { ref } from "vue";
 import { useLayoutStore } from "@/stores/layout";
 const layoutStore = useLayoutStore();
 
-const { currentPrompt } = layoutStore;
+// The prompt this instance was created for (Prompts.vue gives every prompt
+// shown its own instance).
+const prompt = layoutStore.currentPrompt;
 
 const password = ref("");
 
 const submit = (event: Event) => {
-  currentPrompt?.confirm(event, password.value);
+  // never hand the password to a callback of another (earlier) prompt
+  if (prompt == null || layoutStore.currentPrompt !== prompt) return;
+  prompt.confirm(event, password.value);
 };
 
 const cancel = () => {

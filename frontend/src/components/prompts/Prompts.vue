@@ -1,7 +1,14 @@
 <template>
   <base-modal v-if="modal != null" :prompt="currentPromptName" @closed="close">
+    <!--
+      keep-alive keeps a prompt's state (e.g. the destination picked in Copy
+      or Move) while another prompt is stacked on top of it. The key gives
+      every prompt shown its own instance: without it, a prompt of the same
+      type shown again (the conflict dialog after Cancel and a retry) would
+      reuse the earlier instance and run the earlier prompt's confirm.
+    -->
     <keep-alive>
-      <component :is="modal" />
+      <component :is="modal" :key="currentPrompt?.id" />
     </keep-alive>
   </base-modal>
 </template>
@@ -32,7 +39,7 @@ import CurrentPassword from "./CurrentPassword.vue";
 
 const layoutStore = useLayoutStore();
 
-const { currentPromptName } = storeToRefs(layoutStore);
+const { currentPromptName, currentPrompt } = storeToRefs(layoutStore);
 
 const components = new Map<string, any>([
   ["info", Info],

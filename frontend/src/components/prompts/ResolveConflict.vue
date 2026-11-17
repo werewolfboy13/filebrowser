@@ -145,7 +145,7 @@
           v-if="personalized"
           id="focus-prompt"
           class="button button--flat"
-          @click="(event) => currentPrompt?.confirm(event, conflict)"
+          @click="confirm"
           :aria-label="$t('buttons.ok')"
           :title="$t('buttons.ok')"
           tabindex="1"
@@ -164,13 +164,20 @@ import { filesize } from "@/utils";
 import dayjs from "dayjs";
 
 const layoutStore = useLayoutStore();
-const { currentPrompt } = layoutStore;
+// The prompt this instance was created for (Prompts.vue gives every prompt
+// shown its own instance).
+const prompt = layoutStore.currentPrompt;
 
-const conflict = ref<ConflictingResource[]>(currentPrompt?.props.conflict);
+const conflict = ref<ConflictingResource[]>(prompt?.props.conflict);
 
-const isUploadAction = ref<boolean | undefined>(
-  currentPrompt?.props.isUploadAction
-);
+const isUploadAction = ref<boolean | undefined>(prompt?.props.isUploadAction);
+
+// Only ever run this dialog's own callback, and only while it is the one
+// shown: never a callback that belongs to another (earlier) prompt.
+const confirm = (event: Event) => {
+  if (prompt == null || layoutStore.currentPrompt !== prompt) return;
+  prompt.confirm(event, conflict.value);
+};
 
 const personalized = ref(false);
 
@@ -212,14 +219,14 @@ const resume = (event: Event) => {
       item.checked = ["dest"];
     }
   });
-  currentPrompt?.confirm(event, conflict.value);
+  confirm(event);
 };
 
 const resolve = (event: Event, result: Array<"origin" | "dest">) => {
   for (const item of conflict.value) {
     item.checked = result;
   }
-  currentPrompt?.confirm(event, conflict.value);
+  confirm(event);
 };
 
 const toogleCheckAll = (e: Event) => {
