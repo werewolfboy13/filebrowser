@@ -22,7 +22,7 @@ var withHashFile = func(fn handleFunc) handleFunc {
 			return errToStatus(err), err
 		}
 
-		status, err := authenticateShareRequest(r, link)
+		status, err := authenticateShareRequest(w, r, d, link)
 		if status != 0 || err != nil {
 			return status, err
 		}
@@ -141,7 +141,7 @@ var publicDlHandler = withHashFile(func(w http.ResponseWriter, r *http.Request, 
 	return rawDirHandler(w, r, d, file)
 })
 
-func authenticateShareRequest(r *http.Request, l *share.Link) (int, error) {
+func authenticateShareRequest(w http.ResponseWriter, r *http.Request, d *data, l *share.Link) (int, error) {
 	if l.PasswordHash == "" {
 		return 0, nil
 	}
@@ -161,13 +161,27 @@ func authenticateShareRequest(r *http.Request, l *share.Link) (int, error) {
 	if password == "" {
 		return http.StatusUnauthorized, nil
 	}
+
+	// Guessing the password is slowed down per share and client address.
+	done := func(attemptOutcome) {}
+	if d.limits != nil {
+		attempt, retryAfter := d.limits.share.begin(limiterKey("share", clientAddr(r), l.Hash))
+		if attempt == nil {
+			return tooManyAttempts(w, retryAfter)
+		}
+		done = attempt
+	}
+
 	if err := bcrypt.CompareHashAndPassword([]byte(l.PasswordHash), []byte(password)); err != nil {
 		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			done(attemptFailed)
 			return http.StatusUnauthorized, nil
 		}
 		// The stored hash could not be used. Never fall through to the file.
+		done(attemptAborted)
 		return http.StatusInternalServerError, err
 	}
+	done(attemptSucceeded)
 
 	return 0, nil
 }

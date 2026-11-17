@@ -26,6 +26,20 @@ func NewHandler(
 	server *settings.Server,
 	assetsFs fs.FS,
 ) (http.Handler, error) {
+	return newHandler(imgSvc, fileCache, uploadCache, store, server, assetsFs, newLimits())
+}
+
+// newHandler is NewHandler with the failure limiters passed in, so that tests
+// can reach them.
+func newHandler(
+	imgSvc ImgService,
+	fileCache FileCache,
+	uploadCache UploadCache,
+	store *storage.Storage,
+	server *settings.Server,
+	assetsFs fs.FS,
+	limits *limits,
+) (http.Handler, error) {
 	server.Clean()
 	server.CaseInsensitiveFs = files.CaseInsensitive(afero.NewOsFs(), server.Root)
 
@@ -41,12 +55,17 @@ func NewHandler(
 	index, static := getStaticHandlers(store, server, assetsFs)
 
 	monkey := func(fn handleFunc, prefix string) http.Handler {
-		return handle(fn, prefix, store, server)
+		return handleWith(fn, prefix, store, server, limits)
 	}
 
 	r.HandleFunc("/health", healthHandler)
 	r.PathPrefix("/static").Handler(static)
 	r.NotFoundHandler = index
+	// Answered through handle, like every other error, so that what is left
+	// of the request body is not waited for indefinitely.
+	r.MethodNotAllowedHandler = monkey(func(http.ResponseWriter, *http.Request, *data) (int, error) {
+		return http.StatusMethodNotAllowed, nil
+	}, "")
 
 	api := r.PathPrefix("/api").Subrouter()
 
@@ -95,7 +114,7 @@ func NewHandler(
 	public.PathPrefix("/dl").Handler(monkey(publicDlHandler, "/api/public/dl/")).Methods("GET")
 	public.PathPrefix("/share").Handler(monkey(publicShareHandler, "/api/public/share/")).Methods("GET")
 
-	return securityHeaders(stripPrefix(server.BaseURL, r)), nil
+	return securityHeaders(discardUnexpectedBody(stripPrefix(server.BaseURL, r))), nil
 }
 
 // frameAncestorsPolicy only lets pages of the same origin embed a response.

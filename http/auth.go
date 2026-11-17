@@ -1,10 +1,12 @@
 package fbhttp
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -235,8 +237,21 @@ func withAdmin(fn handleFunc) handleFunc {
 
 func loginHandler(tokenExpireTime time.Duration) handleFunc {
 	return func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+		// The credentials are read here, within a time limit, and handed to
+		// the auther from memory: a login that never sends its body must not
+		// hold a connection, and the user name is needed before the password
+		// is looked at.
+		var body []byte
 		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodySize)
+			var (
+				status int
+				err    error
+			)
+			body, status, err = readSmallBody(w, r)
+			if err != nil {
+				return status, err
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
 		}
 
 		auther, err := d.store.Auth.Get(d.settings.AuthMethod)
@@ -244,16 +259,42 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 			return http.StatusInternalServerError, err
 		}
 
+		// Guessing a password is slowed down per user name and client
+		// address. Only methods that check a password are concerned: a proxy
+		// vouches for its users itself.
+		done := func(attemptOutcome) {}
+		if d.limits != nil && checksPassword(d.settings.AuthMethod) {
+			var cred struct {
+				Username string `json:"username"`
+			}
+			_ = json.Unmarshal(body, &cred)
+
+			attempt, retryAfter := d.limits.login.begin(limiterKey("login", clientAddr(r), cred.Username))
+			if attempt == nil {
+				return tooManyAttempts(w, retryAfter)
+			}
+			done = attempt
+		}
+
 		user, err := auther.Auth(r, d.store.Users, d.settings, d.server)
 		switch {
 		case errors.Is(err, os.ErrPermission):
+			done(attemptFailed)
 			return http.StatusForbidden, nil
 		case err != nil:
+			done(attemptAborted)
 			return http.StatusInternalServerError, err
 		}
+		done(attemptSucceeded)
 
 		return printToken(w, r, d, user, tokenExpireTime)
 	}
+}
+
+// checksPassword reports whether logging in with the method means presenting
+// a password that could be guessed.
+func checksPassword(method settings.AuthMethod) bool {
+	return method == fbAuth.MethodJSONAuth || method == fbAuth.MethodHookAuth
 }
 
 type signupBody struct {
@@ -270,12 +311,9 @@ var signupHandler = func(w http.ResponseWriter, r *http.Request, d *data) (int, 
 		return http.StatusBadRequest, nil
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodySize)
-
 	info := &signupBody{}
-	err := json.NewDecoder(r.Body).Decode(info)
-	if err != nil {
-		return http.StatusBadRequest, err
+	if status, err := decodeJSONBody(w, r, info); err != nil {
+		return status, err
 	}
 
 	if info.Password == "" || info.Username == "" {

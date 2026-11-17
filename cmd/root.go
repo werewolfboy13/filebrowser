@@ -264,10 +264,7 @@ user created with the credentials from options "username" and "password".`,
 		defer listener.Close()
 
 		log.Println("Listening on", listener.Addr().String())
-		srv := &http.Server{
-			Handler:           handler,
-			ReadHeaderTimeout: 60 * time.Second,
-		}
+		srv := newServer(handler)
 
 		go func() {
 			if err := srv.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
@@ -298,6 +295,22 @@ user created with the credentials from options "username" and "password".`,
 
 		return nil
 	}, storeOptions{allowsNoDatabase: true}),
+}
+
+// newServer returns the HTTP server for handler.
+//
+// It limits the time a request header may take and the time a connection may
+// sit idle between requests. It deliberately sets neither ReadTimeout nor
+// WriteTimeout: they bound a whole request and a whole response, and an
+// upload or a download can take as long as the file is large. Request bodies
+// that have no reason to be slow are limited by the handlers instead (see
+// requestBodyTimeout in the http package).
+func newServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 }
 
 // protectServerFiles registers the files the server itself depends on that lie

@@ -35,6 +35,9 @@ type data struct {
 	// token is the session token the request was authenticated with.
 	token string
 
+	// limits holds the limiters for failed logins and share passwords.
+	limits *limits
+
 	// checkerPrefix is prepended to every path before evaluating rules. It is
 	// set when the user's filesystem has been rebased onto a subdirectory (as
 	// done for public shares), so that rules — which are relative to the user's
@@ -315,6 +318,12 @@ func (d *data) rulePath(path string) string {
 }
 
 func handle(fn handleFunc, prefix string, store *storage.Storage, server *settings.Server) http.Handler {
+	return handleWith(fn, prefix, store, server, newLimits())
+}
+
+// handleWith is handle with the failure limiters of the handler the route
+// belongs to. NewHandler shares one set between its routes.
+func handleWith(fn handleFunc, prefix string, store *storage.Storage, server *settings.Server, limits *limits) http.Handler {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for k, v := range globalHeaders {
 			w.Header().Set(k, v)
@@ -331,6 +340,7 @@ func handle(fn handleFunc, prefix string, store *storage.Storage, server *settin
 			store:    store,
 			settings: settings,
 			server:   server,
+			limits:   limits,
 		})
 
 		if status >= 400 || err != nil {
@@ -339,6 +349,17 @@ func handle(fn handleFunc, prefix string, store *storage.Storage, server *settin
 		}
 
 		if status != 0 {
+			// An error is usually answered without the request body having
+			// been read, and the server reads what is left of it before it
+			// sends the answer. Give that a limit: a client that announces a
+			// body and never sends it would otherwise hold the connection,
+			// and this goroutine, for as long as it likes. This is the path
+			// every unauthenticated request to a route that takes a body ends
+			// on.
+			if status >= 400 {
+				limitBodyWait(w, leftoverBodyTimeout)
+			}
+
 			txt := http.StatusText(status)
 			if status == http.StatusBadRequest && err != nil {
 				txt += " (" + err.Error() + ")"

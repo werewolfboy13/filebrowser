@@ -41,6 +41,7 @@ type fullEnv struct {
 	st     *storage.Storage
 	srv    *httptest.Server
 	server *settings.Server
+	limits *limits
 }
 
 func newFullEnv(t *testing.T) *fullEnv {
@@ -142,14 +143,15 @@ func newFullEnvOpts(t *testing.T, opts fullEnvOptions) *fullEnv {
 	}
 	cache := newMemoryUploadCache()
 	t.Cleanup(cache.Close)
-	h, err := NewHandler(img.New(1), diskcache.NewNoOp(), cache, st, server, assets)
+	limits := newLimits()
+	h, err := newHandler(img.New(1), diskcache.NewNoOp(), cache, st, server, assets, limits)
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 
-	return &fullEnv{t: t, root: root, bobDir: bobDir, st: st, srv: srv, server: server}
+	return &fullEnv{t: t, root: root, bobDir: bobDir, st: st, srv: srv, server: server, limits: limits}
 }
 
 // do sends a request and returns the status, headers and body. A transport
