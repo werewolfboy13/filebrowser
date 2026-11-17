@@ -82,16 +82,26 @@ func generateEnvKeyReplacements(cmd *cobra.Command) []string {
 	return replacements
 }
 
-func initViper(cmd *cobra.Command) (*viper.Viper, error) {
+// newViper returns a Viper that is bound to the command's flags and to the FB_
+// environment variables, and that knows which configuration file to read. The
+// file is not read yet.
+func newViper(cmd *cobra.Command) (*viper.Viper, error) {
 	v := viper.New()
 
-	// Get config file from flag
-	cfgFile, err := cmd.Flags().GetString("config")
+	// Environment variables
+	v.SetEnvPrefix("FB")
+	v.AutomaticEnv()
+	v.SetEnvKeyReplacer(strings.NewReplacer(generateEnvKeyReplacements(cmd)...))
+
+	// Bind the flags
+	err := v.BindPFlags(cmd.Flags())
 	if err != nil {
 		return nil, err
 	}
 
-	// Configuration file
+	// Configuration file: the --config flag, or else the FB_CONFIG environment
+	// variable, or else a search of the default locations.
+	cfgFile := v.GetString("config")
 	if cfgFile == "" {
 		home, err := homedir.Dir()
 		if err != nil {
@@ -105,15 +115,22 @@ func initViper(cmd *cobra.Command) (*viper.Viper, error) {
 		v.SetConfigFile(cfgFile)
 	}
 
-	// Environment variables
-	v.SetEnvPrefix("FB")
-	v.AutomaticEnv()
-	v.SetEnvKeyReplacer(strings.NewReplacer(generateEnvKeyReplacements(cmd)...))
+	return v, nil
+}
 
-	// Bind the flags
-	err = v.BindPFlags(cmd.Flags())
+func initViper(cmd *cobra.Command) (*viper.Viper, error) {
+	v, err := newViper(cmd)
 	if err != nil {
 		return nil, err
+	}
+
+	// A configuration file named by the --config flag is the user's own, so
+	// only the one named by FB_CONFIG is created when it is missing.
+	if !cmd.Flags().Changed("config") {
+		err = seedConfigFile(os.Getenv(envConfig), os.Getenv(envConfigTemplate))
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Read in configuration
