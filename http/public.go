@@ -186,7 +186,8 @@ func authenticateShareRequest(w http.ResponseWriter, r *http.Request, d *data, l
 	// Guessing the password is slowed down per share and client address.
 	done := func(attemptOutcome) {}
 	if d.limits != nil {
-		attempt, retryAfter := d.limits.share.begin(limiterKey("share", clientAddr(r), l.Hash))
+		addr := clientAddr(r)
+		attempt, retryAfter := d.limits.share.begin(addr, limiterKey("share", addr, l.Hash))
 		if attempt == nil {
 			return tooManyAttempts(w, retryAfter)
 		}

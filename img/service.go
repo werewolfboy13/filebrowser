@@ -37,12 +37,20 @@ const (
 
 // Service
 type Service struct {
+	// sem bounds the images being decoded and resized at one time.
 	sem semaphore.Semaphore
+
+	// memory bounds what they may be expected to need between them, and
+	// maxImage what a single one may: see MaxDecodeMemory.
+	memory   *weighted
+	maxImage int64
 }
 
 func New(workers int) *Service {
 	return &Service{
-		sem: semaphore.New(workers),
+		sem:      semaphore.New(workers),
+		memory:   newWeighted(decodeBudget(workers)),
+		maxImage: MaxDecodeMemory,
 	}
 }
 
@@ -166,24 +174,24 @@ var ErrInvalidImage = errors.New("invalid image")
 // Whatever goes wrong with an image is returned as an error, including a
 // panic in the decoder or in the resizing: both run in the calling goroutine,
 // so a file that trips one of them up fails its own request and nothing else.
+//
+// An image whose decoding is estimated to need more than MaxDecodeMemory is
+// refused with ErrImageTooLarge. Any other image waits, under ctx, until the
+// memory it needs is free of the budget the service has, and a worker is.
 func (s *Service) Resize(ctx context.Context, in io.Reader, width, height int, out io.Writer, options ...Option) (err error) {
-	if err := s.sem.Acquire(ctx, 1); err != nil {
-		return err
-	}
-	defer s.sem.Release(1)
-
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("%w: %v", ErrInvalidImage, r)
 		}
 	}()
 
-	// The wait for a worker can outlast the request.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	format, wrappedReader, err := s.detectFormat(in)
+	// Reading the header costs next to nothing, and tells what decoding the
+	// image will: it is done before anything is waited for.
+	format, cost, wrappedReader, err := s.detectFormat(in)
 	if err != nil {
 		return err
 	}
@@ -206,6 +214,23 @@ func (s *Service) Resize(ctx context.Context, in io.Reader, width, height int, o
 				return nil
 			}
 		}
+	}
+
+	// The memory first, then the worker: an image that waits for memory must
+	// not keep a worker from the small images that need none to speak of.
+	if err := s.memory.acquire(ctx, cost); err != nil {
+		return err
+	}
+	defer s.memory.release(cost)
+
+	if err := s.sem.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer s.sem.Release(1)
+
+	// Either wait can outlast the request.
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	// A JPEG can say that it has to be turned to be shown upright. That is in
@@ -294,34 +319,37 @@ func (s *Service) scale(ctx context.Context, img image.Image, orientation, width
 	return config.format.encode(out, orient(resized, orientation))
 }
 
-func (s *Service) detectFormat(in io.Reader) (Format, io.Reader, error) {
+// detectFormat reads the header of the image and returns its format, the
+// memory decoding it is estimated to need, and a reader of the whole image.
+func (s *Service) detectFormat(in io.Reader) (Format, int64, io.Reader, error) {
 	buf := &bytes.Buffer{}
 	r := io.TeeReader(in, buf)
 
 	imgConfig, imgFormat, err := image.DecodeConfig(r)
 	if err != nil {
-		return 0, nil, fmt.Errorf("%s: %w", err.Error(), ErrUnsupportedFormat)
+		return 0, 0, nil, fmt.Errorf("%s: %w", err.Error(), ErrUnsupportedFormat)
 	}
 
 	// Check if image dimensions exceed maximum allowed size
 	if imgConfig.Width > MaxImageWidth || imgConfig.Height > MaxImageHeight {
-		return 0, nil, fmt.Errorf("image dimensions %dx%d exceed maximum %dx%d: %w",
+		return 0, 0, nil, fmt.Errorf("image dimensions %dx%d exceed maximum %dx%d: %w",
 			imgConfig.Width, imgConfig.Height, MaxImageWidth, MaxImageHeight, ErrImageTooLarge)
 	}
 
 	// The dimensions alone do not bound the memory decoding needs: the pixel
 	// size and the format matter as much.
-	if cost := decodeCost(imgConfig, imgFormat, buf.Bytes()); cost > MaxDecodeMemory {
-		return 0, nil, fmt.Errorf("decoding a %dx%d %s image needs about %d MiB, more than the %d MiB allowed: %w",
-			imgConfig.Width, imgConfig.Height, imgFormat, cost>>20, MaxDecodeMemory>>20, ErrImageTooLarge)
+	cost := decodeCost(imgConfig, imgFormat, buf.Bytes())
+	if cost > s.maxImage {
+		return 0, 0, nil, fmt.Errorf("decoding a %dx%d %s image needs about %d MiB, more than the %d MiB allowed: %w",
+			imgConfig.Width, imgConfig.Height, imgFormat, cost>>20, s.maxImage>>20, ErrImageTooLarge)
 	}
 
 	format, err := ParseFormat(imgFormat)
 	if err != nil {
-		return 0, nil, ErrUnsupportedFormat
+		return 0, 0, nil, ErrUnsupportedFormat
 	}
 
-	return format, io.MultiReader(buf, in), nil
+	return format, cost, io.MultiReader(buf, in), nil
 }
 
 func getEmbeddedThumbnail(in io.Reader) ([]byte, io.Reader, error) {

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 	"github.com/filebrowser/filebrowser/v2/files"
 	"github.com/filebrowser/filebrowser/v2/fileutils"
 	"github.com/spf13/afero"
@@ -63,7 +64,7 @@ func keepUploadActive(cache UploadCache, filePath string) func() {
 }
 
 // tusBusy holds the uploads a request is currently working on, by the real
-// path of their destination.
+// path of their destination (see tusUploadKey).
 //
 // The TUS handlers read the state of an upload (does it exist, how much has
 // been written) and then act on it, which is only correct while nobody else
@@ -83,7 +84,7 @@ var tusBusy = struct {
 // reports false, without waiting, when another request already is; otherwise
 // the returned function must be called when the work is done.
 func tusAcquire(d *data, r *http.Request) (release func(), ok bool) {
-	key := filepath.Clean(d.user.FullPath(r.URL.Path))
+	key := tusUploadKey(d, r.URL.Path)
 
 	tusBusy.Lock()
 	defer tusBusy.Unlock()
@@ -116,10 +117,20 @@ func tusTempPath(dst string) string {
 	return dir + fileutils.TempPrefix + "tus-" + hex.EncodeToString(sum[:16])
 }
 
-// tusUploadKey returns the key an upload to dst is registered under in the
-// upload cache: the real path of dst.
+// tusUploadKey returns the key an upload to dst is known by, in the upload
+// cache and in tusBusy: where dst is on disk once symbolic links are
+// followed.
+//
+// A directory that is reached through a link gives the files in it a second
+// name, and the temporary file of an upload lies in the directory itself.
+// Under the path as written, the two names of one upload were two uploads to
+// the cache and two locks, working on one file.
 func tusUploadKey(d *data, dst string) string {
-	return (&files.FileInfo{Fs: d.user.Fs, Path: dst}).RealPath()
+	lexical := filepath.Clean(d.user.FullPath(slashClean(dst)))
+	if resolved, ok := d.resolvePath(lexical); ok {
+		return resolved
+	}
+	return lexical
 }
 
 // tusWritePath returns the file the data of an upload to dst is appended to.
@@ -175,6 +186,8 @@ func tusPostHandler(cache UploadCache) handleFunc {
 			return errToStatus(err), err
 		}
 
+		override := r.URL.Query().Get("override") == "true"
+
 		// if file exists
 		exists := file != nil
 		if exists {
@@ -183,7 +196,7 @@ func tusPostHandler(cache UploadCache) handleFunc {
 			}
 
 			// Existing files will remain untouched unless explicitly instructed to override
-			if r.URL.Query().Get("override") != "true" {
+			if !override {
 				return http.StatusConflict, nil
 			}
 
@@ -204,7 +217,7 @@ func tusPostHandler(cache UploadCache) handleFunc {
 		// start the first one over; without override it is a conflict, as it
 		// was when the destination was created up front.
 		uploadKey := tusUploadKey(d, r.URL.Path)
-		if !exists && r.URL.Query().Get("override") != "true" {
+		if !exists && !override {
 			if _, cacheErr := cache.GetLength(uploadKey); cacheErr == nil {
 				if _, temp, _ := tusWritePath(d, r.URL.Path); temp {
 					return http.StatusConflict, nil
@@ -267,7 +280,9 @@ func tusPostHandler(cache UploadCache) handleFunc {
 		// An empty upload is complete as it is: no PATCH follows.
 		if uploadLength == 0 {
 			if !direct {
-				if err := fileutils.ReplaceWithTemp(d.user.Fs, tmp, r.URL.Path, d.settings.FileMode); err != nil {
+				if err := fileutils.CommitTemp(d.user.Fs, tmp, r.URL.Path, d.settings.FileMode, override && d.user.Perm.Modify); err != nil {
+					// Nothing will come back for an upload without data.
+					_ = d.user.Fs.Remove(tmp)
 					return errToStatus(err), err
 				}
 			}
@@ -287,7 +302,13 @@ func tusPostHandler(cache UploadCache) handleFunc {
 			uploadPath := r.URL.Path
 			remove = func() error { return d.user.Fs.Remove(uploadPath) }
 		}
-		cache.Register(uploadKey, uploadLength, remove)
+		cache.Register(uploadKey, uploadInfo{Length: uploadLength, Override: override, Owner: d.user.ID}, remove)
+
+		// The cache removes the temporary file when the upload expires, if
+		// it can. This is what does when it cannot: see tusTemps.
+		if !direct {
+			tusTemps.track(d.user.Fs, tmp, tusTempKey(d, tmp))
+		}
 
 		return http.StatusCreated, nil
 	})
@@ -372,10 +393,11 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 	}
 
 	uploadKey := tusUploadKey(d, r.URL.Path)
-	uploadLength, err := cache.GetLength(uploadKey)
+	upload, err := cache.Get(uploadKey)
 	if err != nil {
 		return http.StatusNotFound, err
 	}
+	uploadLength := upload.Length
 
 	if uploadOffset > uploadLength {
 		return http.StatusBadRequest, fmt.Errorf("upload offset %d exceeds declared length %d", uploadOffset, uploadLength)
@@ -449,7 +471,27 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 			if err := openFile.Close(); err != nil {
 				return http.StatusInternalServerError, fmt.Errorf("could not close file: %w", err)
 			}
-			if err := fileutils.ReplaceWithTemp(d.user.Fs, writePath, r.URL.Path, d.settings.FileMode); err != nil {
+
+			// What the creation of the upload checked was true then. A file
+			// can be at the destination now that was not, and the user's
+			// permissions can have changed: an upload can take as long as
+			// its client likes. The destination is replaced only by an
+			// upload that asked to, from a user who may now. Otherwise the
+			// upload ends here, as a second upload to a path in use always
+			// did, and its data is discarded.
+			err := fileutils.CommitTemp(d.user.Fs, writePath, r.URL.Path, d.settings.FileMode, upload.Override && d.user.Perm.Modify)
+			switch {
+			case errors.Is(err, fberrors.ErrExist):
+				cache.Complete(uploadKey)
+				if upload.Override {
+					return http.StatusForbidden, nil
+				}
+				return http.StatusConflict, nil
+			case err != nil:
+				// The data is all here, in the temporary file, which is
+				// kept: the client can ask for it to be put in place again
+				// (a PATCH without data at the final offset), for as long as
+				// the upload is.
 				return http.StatusInternalServerError, fmt.Errorf("could not store the upload: %w", err)
 			}
 		}
@@ -463,9 +505,16 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 
 // tusDeleteHandler cancels an upload in progress. It discards what the upload
 // has written so far, which is its temporary file, and never the destination.
+//
+// Whoever created the upload may cancel it. That used to take the Delete
+// permission, from the time when cancelling removed the destination; a user
+// without it could not cancel an upload of their own, which then stayed
+// behind, out of reach, until it expired. Cancelling somebody else's upload
+// still takes the Delete permission.
 func tusDeleteHandler(cache UploadCache) handleFunc {
 	return withUser(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
-		if r.URL.Path == "/" || !d.user.Perm.Delete {
+		// Without either permission there is nothing the user could cancel.
+		if r.URL.Path == "/" || (!d.user.Perm.Delete && !d.user.Perm.Create) {
 			return http.StatusForbidden, nil
 		}
 		if !d.Check(r.URL.Path) {
@@ -478,9 +527,13 @@ func tusDeleteHandler(cache UploadCache) handleFunc {
 		}
 
 		uploadKey := tusUploadKey(d, r.URL.Path)
-		_, err = cache.GetLength(uploadKey)
+		upload, err := cache.Get(uploadKey)
 		if err != nil {
 			return http.StatusNotFound, err
+		}
+
+		if !d.user.Perm.Delete && (upload.Owner == 0 || upload.Owner != d.user.ID) {
+			return http.StatusForbidden, nil
 		}
 
 		release, ok := tusAcquire(d, r)
@@ -493,7 +546,12 @@ func tusDeleteHandler(cache UploadCache) handleFunc {
 		// writes to its destination directly does so because the destination
 		// was there before it (a symbolic link, or a file in a directory that
 		// takes no new one), and cancelling an upload is not deleting a file.
-		if temp {
+		//
+		// temp says that writePath is the temporary file of this upload: a
+		// regular file under the name tusTempPath gives it. That name cannot
+		// be given to anything through the API (see data.Check), so this
+		// never removes a file somebody stored.
+		if temp && fileutils.IsTempName(gopath.Base(writePath)) {
 			err = d.user.Fs.Remove(writePath)
 			if err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return errToStatus(err), err

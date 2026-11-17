@@ -2,6 +2,7 @@ package fbhttp
 
 import (
 	"net/http"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -36,7 +37,12 @@ func testLimiter() (*failureLimiter, *fakeClock) {
 
 // failOnce makes one failed attempt and reports whether it was let through.
 func failOnce(l *failureLimiter, key [32]byte) (allowed bool, retryAfter time.Duration) {
-	done, retry := l.begin(key)
+	return failOnceFrom(l, "203.0.113.7", key)
+}
+
+// failOnceFrom is failOnce for a key of the given group.
+func failOnceFrom(l *failureLimiter, group string, key [32]byte) (allowed bool, retryAfter time.Duration) {
+	done, retry := l.begin(group, key)
 	if done == nil {
 		return false, retry
 	}
@@ -68,7 +74,7 @@ func TestFailureLimiterBacksOffExponentially(t *testing.T) {
 		// A moment before the wait is over it still holds, also for a
 		// success-to-be: the attempt is not made at all.
 		clock.Advance(want - time.Millisecond)
-		if done, _ := l.begin(key); done != nil {
+		if done, _ := l.begin("203.0.113.7", key); done != nil {
 			t.Fatal("an attempt was let through before the wait was over")
 		}
 		clock.Advance(time.Millisecond)
@@ -104,7 +110,7 @@ func TestFailureLimiterForgets(t *testing.T) {
 
 	// A success clears the key: the free failures are available again.
 	clock.Advance(limiterBaseDelay)
-	done, _ := l.begin(key)
+	done, _ := l.begin("203.0.113.7", key)
 	if done == nil {
 		t.Fatal("no attempt after the wait")
 	}
@@ -132,7 +138,7 @@ func TestFailureLimiterCountsAttemptsInFlight(t *testing.T) {
 
 	var pending []func(attemptOutcome)
 	for i := 0; i < 50; i++ {
-		if done, _ := l.begin(key); done != nil {
+		if done, _ := l.begin("203.0.113.7", key); done != nil {
 			pending = append(pending, done)
 		}
 	}
@@ -146,18 +152,18 @@ func TestFailureLimiterCountsAttemptsInFlight(t *testing.T) {
 
 	// Past the free failures, one at a time.
 	l.now = func() time.Time { return time.Unix(1_800_000_000, 0).Add(time.Hour / 4) }
-	first, _ := l.begin(key)
+	first, _ := l.begin("203.0.113.7", key)
 	if first == nil {
 		t.Fatal("no attempt after the wait")
 	}
-	if second, _ := l.begin(key); second != nil {
+	if second, _ := l.begin("203.0.113.7", key); second != nil {
 		t.Error("two attempts in flight for a key that used up its free failures")
 	}
 	first(attemptAborted)
 
 	// An attempt that ended without a verdict counts neither way: the key
 	// neither waits longer nor is forgotten.
-	if done, _ := l.begin(key); done == nil {
+	if done, _ := l.begin("203.0.113.7", key); done == nil {
 		t.Error("an aborted attempt made the key wait")
 	} else {
 		done(attemptAborted)
@@ -166,7 +172,7 @@ func TestFailureLimiterCountsAttemptsInFlight(t *testing.T) {
 		t.Errorf("state after aborted attempts: %+v", state)
 	}
 	fresh := limiterKey("login", "203.0.113.7", "nobody")
-	if done, _ := l.begin(fresh); done != nil {
+	if done, _ := l.begin("203.0.113.7", fresh); done != nil {
 		done(attemptAborted)
 	}
 	if _, kept := l.keys[fresh]; kept {
@@ -174,22 +180,131 @@ func TestFailureLimiterCountsAttemptsInFlight(t *testing.T) {
 	}
 }
 
-func TestFailureLimiterIsBounded(t *testing.T) {
+// The limiter keeps a bounded number of keys. It used to make room for a new
+// one by dropping the key that had been quiet the longest, whatever that key
+// had on it. Failed attempts under throw-away names pushed out the key of the
+// account being guessed, and with it its count: the free failures were
+// available again, and the wait started over.
+func TestFailureLimiterIsBoundedWithoutForgettingFailures(t *testing.T) {
 	l, clock := testLimiter()
-	l.maxKeys = 100
+	l.maxKeys = 30
+	const addr = "203.0.113.7"
+	throwaway := func(i int) [32]byte { return limiterKey("login", addr, "nobody-"+strconv.Itoa(i)) }
 
+	// One key that used up some of its free failures, one that is waiting.
+	counting := limiterKey("login", addr, "bob")
+	for i := 0; i < limiterFreeFailures-1; i++ {
+		failOnce(l, counting)
+	}
+	blocked := limiterKey("login", addr, "admin")
+	for i := 0; i < limiterFreeFailures+2; i++ {
+		failOnce(l, blocked)
+		clock.Advance(limiterBaseDelay * 2)
+	}
+	if allowed, _ := failOnce(l, blocked); allowed {
+		t.Fatal("control: the key is not waiting")
+	}
+
+	// The flood. Past the bound, new keys are refused instead of old ones
+	// being dropped.
+	refused := 0
 	for i := 0; i < 1000; i++ {
-		failOnce(l, limiterKey("login", "203.0.113.7", string(rune('a'+i%26))+string(rune(i))))
+		if allowed, retry := failOnce(l, throwaway(i)); !allowed {
+			refused++
+			if retry <= 0 {
+				t.Fatalf("a refused attempt was given no time to wait (%s)", retry)
+			}
+		}
 		clock.Advance(time.Millisecond)
 	}
 	if len(l.keys) > l.maxKeys {
 		t.Errorf("the limiter holds %d keys, limit %d", len(l.keys), l.maxKeys)
 	}
+	if refused != 1000-(l.maxKeys-2) {
+		t.Errorf("%d of the 1000 new keys were refused, want %d", refused, 1000-(l.maxKeys-2))
+	}
 
-	// The most recent keys are the ones that were kept.
-	recent := limiterKey("login", "203.0.113.7", string(rune('a'+999%26))+string(rune(999)))
-	if _, ok := l.keys[recent]; !ok {
-		t.Error("the most recent key was evicted")
+	// Both keys still have what they had: one more failure makes the first
+	// wait, and the second, whose wait is over by now, waits twice as long as
+	// the last time instead of starting over.
+	clock.Advance(limiterMaxDelay)
+	if allowed, _ := failOnce(l, counting); !allowed {
+		t.Error("the last free failure of a key was refused after the flood")
+	}
+	if allowed, retry := failOnce(l, counting); allowed || retry != limiterBaseDelay {
+		t.Errorf("after the flood the key that had used %d free failures: allowed = %v, wait %s; want a wait of %s",
+			limiterFreeFailures-1, allowed, retry, limiterBaseDelay)
+	}
+	if allowed, _ := failOnce(l, blocked); !allowed {
+		t.Fatal("no attempt for the waiting key once its wait was over")
+	}
+	if allowed, retry := failOnce(l, blocked); allowed || retry != limiterBaseDelay<<3 {
+		t.Errorf("after the flood the waiting key: allowed = %v, wait %s; want %s (its count was dropped)", allowed, retry, limiterBaseDelay<<3)
+	}
+
+	// A success gives its place back at once.
+	clock.Advance(limiterMaxDelay)
+	done, _ := l.begin(addr, counting)
+	if done == nil {
+		t.Fatal("no attempt after the wait")
+	}
+	done(attemptSucceeded)
+	if allowed, _ := failOnce(l, throwaway(5000)); !allowed {
+		t.Error("a new key was refused although a place had become free")
+	}
+
+	// And everything is forgotten after a long enough silence.
+	clock.Advance(limiterForget + time.Second)
+	for i := 0; i < l.maxKeys; i++ {
+		if allowed, _ := failOnce(l, throwaway(6000+i)); !allowed {
+			t.Fatalf("new key %d was refused after the old ones were forgotten", i)
+		}
+	}
+	if len(l.keys) > l.maxKeys || len(l.groups) != 1 || l.groups[addr] != len(l.keys) {
+		t.Errorf("%d keys, groups %v", len(l.keys), l.groups)
+	}
+}
+
+// One address can only take up so many keys, so it takes many addresses to
+// fill the limiter, and what one of them does costs the others nothing.
+func TestFailureLimiterBoundsTheKeysOfOneAddress(t *testing.T) {
+	l, clock := testLimiter()
+	l.maxKeys = 100
+	l.maxGroupKeys = 5
+	const flooder, other = "198.51.100.7", "203.0.113.9"
+
+	first := limiterKey("login", flooder, "name-0")
+	for i := 0; i < 50; i++ {
+		allowed, _ := failOnceFrom(l, flooder, limiterKey("login", flooder, "name-"+strconv.Itoa(i)))
+		if allowed != (i < l.maxGroupKeys) {
+			t.Fatalf("new key %d of one address: allowed = %v", i, allowed)
+		}
+	}
+	if len(l.keys) != l.maxGroupKeys {
+		t.Errorf("one address holds %d keys, limit %d", len(l.keys), l.maxGroupKeys)
+	}
+
+	// Its own keys still work, and so do those of everybody else.
+	if allowed, _ := failOnceFrom(l, flooder, first); !allowed {
+		t.Error("a key the address already had was refused")
+	}
+	for i := 0; i < 20; i++ {
+		if allowed, _ := failOnceFrom(l, other, limiterKey("login", other, "name-"+strconv.Itoa(i))); allowed != (i < l.maxGroupKeys) {
+			t.Fatalf("new key %d of another address: allowed = %v", i, allowed)
+		}
+	}
+
+	// The address gets its places back as its keys are forgotten.
+	clock.Advance(limiterForget + time.Second)
+	if allowed, _ := failOnceFrom(l, flooder, limiterKey("login", flooder, "later")); !allowed {
+		t.Error("a new key was refused after the old ones of the address were forgotten")
+	}
+	total := 0
+	for _, n := range l.groups {
+		total += n
+	}
+	if total != len(l.keys) {
+		t.Errorf("the group counts add up to %d for %d keys", total, len(l.keys))
 	}
 }
 

@@ -25,7 +25,7 @@ func TestMemoryUploadCacheEvictionUsesRemovalCallback(t *testing.T) {
 	done := make(chan struct{})
 	var once sync.Once
 	// Deliberately do NOT delete the file here.
-	c.cache.Set(f, memoryUploadEntry{size: 1, remove: func() error {
+	c.cache.Set(f, memoryUploadEntry{upload: uploadInfo{Length: 1}, remove: func() error {
 		once.Do(func() { close(done) })
 		return nil
 	}}, time.Millisecond)

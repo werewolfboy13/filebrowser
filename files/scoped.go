@@ -25,11 +25,6 @@ var (
 	_ afero.Lstater = (*ScopedFs)(nil)
 )
 
-// maxSymlinkHops bounds how many dangling symlinks within() will follow before
-// giving up, so a pathological chain cannot loop forever. It mirrors the kernel
-// MAXSYMLINKS limit; the operation is rejected once the bound is exceeded.
-const maxSymlinkHops = 255
-
 func NewScopedFs(source afero.Fs, path string) *ScopedFs {
 	if s, ok := source.(*ScopedFs); ok {
 		source = s.base
@@ -105,32 +100,37 @@ func (s *ScopedFs) within(p string) (bool, error) {
 	// land. A non-existent regular path resolves to the file that would be
 	// created inside its containing directory, so walk up to the nearest
 	// existing ancestor and validate that. But when target itself is a dangling
-	// symlink, follow it one level instead: validating its lexical parent would
-	// wrongly accept a link pointing outside the scope, letting a write follow
-	// the link and create the file out of bounds.
+	// symlink, follow it instead: validating its lexical parent would wrongly
+	// accept a link pointing outside the scope, letting a write follow the link
+	// and create the file out of bounds.
 	for hops := 0; errors.Is(err, fs.ErrNotExist); {
 		if fi, lerr := os.Lstat(target); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
 			hops++
-			if hops > maxSymlinkHops {
+			if hops > maxLinkHops {
 				return false, os.ErrPermission
 			}
-			dest, rerr := os.Readlink(target)
-			if rerr != nil {
-				return false, rerr
+			// Follow the link the way the kernel will when the write goes
+			// through it: element by element, starting in the directory that
+			// really contains it (a symlinked ancestor could otherwise shift
+			// the computed target back into scope), and with ".." meaning
+			// the parent of wherever the elements before it led. Reading the
+			// target as text instead ("sub/../new.txt" is "new.txt") accepts
+			// a link that climbs out of the scope through another link. The
+			// parent is guaranteed to resolve here because os.Lstat above
+			// already traversed it.
+			base, berr := filepath.EvalSymlinks(filepath.Dir(target))
+			if berr != nil {
+				return false, berr
 			}
-			if !filepath.IsAbs(dest) {
-				// Resolve the link relative to the directory that really contains
-				// it, not its lexical parent: a symlinked ancestor could otherwise
-				// shift the computed target back into scope while the real write
-				// lands outside it. The parent is guaranteed to resolve here
-				// because os.Lstat above already traversed it.
-				base, berr := filepath.EvalSymlinks(filepath.Dir(target))
-				if berr != nil {
-					return false, berr
-				}
-				dest = filepath.Join(base, dest)
+			links := 0
+			landing, lerr := evalFrom(base, filepath.VolumeName(base), []string{filepath.Base(target)}, &links)
+			if lerr != nil {
+				// The kernel does not open such a path either.
+				return false, os.ErrPermission
 			}
-			target = filepath.Clean(dest)
+			// Every link is followed now. What is left to do is to find the
+			// nearest ancestor that exists.
+			target = landing
 		} else {
 			parent := filepath.Dir(target)
 			if parent == target {
@@ -154,6 +154,29 @@ func (s *ScopedFs) within(p string) (bool, error) {
 	}
 
 	return resolved == root || strings.HasPrefix(resolved, prefix), nil
+}
+
+// Link makes newname a hard link to oldname, both inside the scope. Like
+// os.Link it fails when newname exists, without replacing it, which is what
+// makes it the way to put a finished upload in place only where nothing is:
+// see fileutils.CommitTemp. afero has no such operation.
+func (s *ScopedFs) Link(oldname, newname string) error {
+	if err := s.guard(oldname); err != nil {
+		return err
+	}
+	if err := s.guard(newname); err != nil {
+		return err
+	}
+
+	oldReal, err := s.base.RealPath(oldname)
+	if err != nil {
+		return err
+	}
+	newReal, err := s.base.RealPath(newname)
+	if err != nil {
+		return err
+	}
+	return os.Link(oldReal, newReal)
 }
 
 func (s *ScopedFs) Create(name string) (afero.File, error) {

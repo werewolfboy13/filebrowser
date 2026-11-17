@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -19,10 +20,20 @@ import (
 // it will replace. See WriteFileAtomic.
 const TempPrefix = ".fbtmp-"
 
-var tempName = regexp.MustCompile(`^\.fbtmp-(tus-)?[0-9a-f]{32}$`)
+var (
+	// ownTempName matches the names this package gives its temporary files.
+	ownTempName = regexp.MustCompile(`^\.fbtmp-(tus-)?[0-9a-f]{32}$`)
 
-// IsTempName reports whether name, the last element of a path, is the name of
-// one of the temporary files this package creates.
+	// tempName matches them in any spelling.
+	tempName = regexp.MustCompile(`(?i)^\.fbtmp-(tus-)?[0-9a-f]{32}$`)
+)
+
+// IsTempName reports whether name, the last element of a path, names one of
+// the temporary files this package creates, or would on a filesystem that
+// does not tell upper from lower case (the default on macOS and Windows):
+// there, ".FBTMP-..." opens the file that was created as ".fbtmp-...". The
+// spelling is ignored everywhere rather than only where the filesystem is
+// known to fold case, so that nothing depends on that being found out right.
 func IsTempName(name string) bool {
 	return tempName.MatchString(name)
 }
@@ -43,7 +54,12 @@ func NewTempPath(dst string) (string, error) {
 // WriteFileAtomic writes the content read from in to dst so that a failure on
 // the way (the client going away, a full disk, a crash) leaves whatever was at
 // dst untouched: the content goes to a temporary file in the same directory,
-// which replaces dst only once it is complete and synced.
+// which takes the place of dst only once it is complete and synced.
+//
+// replace says whether the content may take the place of a file that is at
+// dst. Without it, dst is only ever created: ErrExist is returned when
+// something is there, whether it was there from the start or appeared while
+// the content was on its way. See CommitTemp for how that is made sure of.
 //
 // Replacing a file with another one must not change anything but its content,
 // so dst is written in place instead, as it was before, when that cannot be
@@ -59,11 +75,15 @@ func NewTempPath(dst string) (string, error) {
 // pipe, a socket, a device) is refused with ErrNotRegular.
 //
 // It returns the FileInfo of the written file.
-func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMode) (os.FileInfo, error) {
+func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMode, replace bool) (os.FileInfo, error) {
 	old, err := lstat(afs, dst)
 	switch {
 	case err == nil && old.IsDir():
 		return nil, fberrors.ErrIsDirectory
+	case err == nil && !replace:
+		// Also a symbolic link whose target does not exist: the write would
+		// go through it.
+		return nil, fberrors.ErrExist
 	case err == nil && !old.Mode().IsRegular():
 		// A symbolic link is written through, to keep the link; anything
 		// else that is not a regular file cannot take content.
@@ -74,8 +94,14 @@ func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMod
 	case err != nil && !errors.Is(err, fs.ErrNotExist):
 		// dst cannot be examined (it is out of bounds, for instance). Let the
 		// write itself report why.
+		if !replace {
+			return writeNewInPlace(afs, dst, in, fileMode, false)
+		}
 		return writeInPlace(afs, dst, in, fileMode)
 	}
+
+	// Past the switch, dst is a regular file or does not exist.
+	exists := err == nil
 
 	tmp, err := NewTempPath(dst)
 	if err != nil {
@@ -86,24 +112,39 @@ func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMod
 	if err != nil {
 		// The directory does not take a new file. Writing in place either
 		// works (an existing, writable file) or reports the real problem.
+		if !exists {
+			return writeNewInPlace(afs, dst, in, fileMode, replace)
+		}
 		return writeInPlace(afs, dst, in, fileMode)
 	}
 
-	info, err := fillTemp(file, in)
+	info, err := fillFile(file, in)
 	if err != nil {
 		_ = afs.Remove(tmp)
 		return nil, err
 	}
 
-	if err := ReplaceWithTemp(afs, tmp, dst, fileMode); err != nil {
+	if err := CommitTemp(afs, tmp, dst, fileMode, replace); err != nil {
+		// Whoever sent the content still has it, so the temporary file is of
+		// no use, unless dst was left damaged: then it is the only complete
+		// copy of either version there is.
+		if !errors.Is(err, ErrDestinationDamaged) {
+			_ = afs.Remove(tmp)
+		}
 		return nil, err
 	}
 
 	return info, nil
 }
 
-// fillTemp copies in to the temporary file, syncs it and closes it.
-func fillTemp(file afero.File, in io.Reader) (os.FileInfo, error) {
+// ErrDestinationDamaged is returned when the content could not be put in
+// place and the destination is no longer what it was either: writing into it
+// failed after part of it had been overwritten. The complete content is still
+// in the temporary file, which is kept.
+var ErrDestinationDamaged = errors.New("the destination was left incomplete")
+
+// fillFile copies in to the file, syncs it and closes it.
+func fillFile(file afero.File, in io.Reader) (os.FileInfo, error) {
 	_, err := io.Copy(file, in)
 	if err == nil {
 		// Sync the file to ensure all data is written to storage before it
@@ -127,11 +168,22 @@ func fillTemp(file afero.File, in io.Reader) (os.FileInfo, error) {
 	return info, nil
 }
 
-// ReplaceWithTemp makes the complete temporary file tmp the content of dst,
-// and removes tmp. It renames tmp over dst when that changes nothing but the
+// CommitTemp makes the complete temporary file tmp the content of dst, and
+// removes tmp. fileMode is used when dst does not exist yet.
+//
+// With replace, it renames tmp over dst when that changes nothing but the
 // content, and otherwise copies the content into dst in place; see
-// WriteFileAtomic. fileMode is used when dst does not exist yet.
-func ReplaceWithTemp(afs afero.Fs, tmp, dst string, fileMode fs.FileMode) error {
+// WriteFileAtomic.
+//
+// Without replace, dst is created and never replaced: when something is at
+// dst, tmp is removed and ErrExist returned. See placeNew.
+//
+// tmp is removed when it is in place, and when dst refuses it for good
+// (something is there that may not be replaced, or cannot take content).
+// When putting it in place fails for another reason (a full disk), tmp is
+// kept: it is complete, and the caller can try again or discard it. The error
+// is ErrDestinationDamaged if dst was changed on the way.
+func CommitTemp(afs afero.Fs, tmp, dst string, fileMode fs.FileMode, replace bool) error {
 	old, err := lstat(afs, dst)
 	exists := err == nil
 
@@ -140,6 +192,11 @@ func ReplaceWithTemp(afs afero.Fs, tmp, dst string, fileMode fs.FileMode) error 
 	case exists && old.IsDir():
 		_ = afs.Remove(tmp)
 		return fberrors.ErrIsDirectory
+	case exists && !replace:
+		_ = afs.Remove(tmp)
+		return fberrors.ErrExist
+	case !replace:
+		return placeNew(afs, tmp, dst, fileMode)
 	case exists && !old.Mode().IsRegular():
 		if err := requireRegular(afs, dst, old.Mode()&os.ModeSymlink != 0); err != nil {
 			_ = afs.Remove(tmp)
@@ -161,21 +218,221 @@ func ReplaceWithTemp(afs afero.Fs, tmp, dst string, fileMode fs.FileMode) error 
 		// (a bind-mounted file), or is open elsewhere on Windows.
 	}
 
-	err = copyInPlace(afs, tmp, dst, fileMode)
-	_ = afs.Remove(tmp)
+	damaged, err := copyInPlace(afs, tmp, dst, fileMode)
+	switch {
+	case err == nil:
+		_ = afs.Remove(tmp)
+		return nil
+	case damaged:
+		return fmt.Errorf("%w: %w", ErrDestinationDamaged, err)
+	}
 	return err
 }
 
-// copyInPlace overwrites dst with the content of the file at src.
-func copyInPlace(afs afero.Fs, src, dst string, fileMode fs.FileMode) error {
-	in, err := afs.Open(src)
+// placeNew puts the complete temporary file tmp at dst if, and only if,
+// nothing is there. It removes tmp when it is in place and when something is
+// there, and keeps it when putting it there failed: see CommitTemp.
+//
+// Looking first and renaming then would leave a moment in which a file can
+// appear at dst and be replaced, and a rename replaces without asking. A hard
+// link does not: creating one fails when the name is taken, and the check and
+// the creation are one step in the kernel. So dst is made a second name of
+// tmp, and the first name is removed.
+//
+// A filesystem without hard links (FAT, exFAT, some network and FUSE mounts)
+// leaves only the look and the rename, immediately after one another. On
+// those, a file created at dst in the instant between the two is still
+// replaced.
+func placeNew(afs afero.Fs, tmp, dst string, fileMode fs.FileMode) error {
+	err := link(afs, tmp, dst)
+	switch {
+	case err == nil:
+		// Should removing the first name fail, it stays behind as a stale
+		// temporary file and is swept up later.
+		_ = afs.Remove(tmp)
+		syncDir(afs, dst)
+		return nil
+	case errors.Is(err, fs.ErrExist):
+		_ = afs.Remove(tmp)
+		return fberrors.ErrExist
+	}
+
+	if _, statErr := lstat(afs, dst); statErr == nil {
+		_ = afs.Remove(tmp)
+		return fberrors.ErrExist
+	}
+	if err := afs.Rename(tmp, dst); err == nil {
+		syncDir(afs, dst)
+		return nil
+	}
+
+	// Neither a link nor a rename: copy the content into a file created for
+	// it, which fails as well when the name is taken, and which is removed
+	// again when the copy fails.
+	in, err := afs.Open(tmp)
 	if err != nil {
 		return err
 	}
+	_, err = writeNewInPlace(afs, dst, in, fileMode, false)
+	_ = in.Close()
+	if err == nil || errors.Is(err, fberrors.ErrExist) {
+		_ = afs.Remove(tmp)
+	}
+	return err
+}
+
+// hardLinker is implemented by the filesystems that can give a file a second
+// name. afero has no such operation, so the ones in use here are known by
+// type: see link.
+type hardLinker interface {
+	Link(oldname, newname string) error
+}
+
+// errNoHardLinks is returned by link for a filesystem it cannot make a hard
+// link on.
+var errNoHardLinks = errors.New("hard links are not available on this filesystem")
+
+// link makes newname a hard link to oldname. It fails, with an error that is
+// fs.ErrExist, when newname exists, and never replaces it.
+func link(afs afero.Fs, oldname, newname string) error {
+	switch f := afs.(type) {
+	case hardLinker:
+		// The scoped filesystem of a user.
+		return f.Link(oldname, newname)
+	case *afero.BasePathFs:
+		oldReal, err := f.RealPath(oldname)
+		if err != nil {
+			return err
+		}
+		newReal, err := f.RealPath(newname)
+		if err != nil {
+			return err
+		}
+		return os.Link(oldReal, newReal)
+	case *afero.OsFs:
+		return os.Link(oldname, newname)
+	}
+	return errNoHardLinks
+}
+
+// copyInPlace makes the content of the file at src the content of dst, by
+// writing into dst. It reports whether a failure left dst changed.
+//
+// dst is not emptied first. What the new content is longer by is written
+// first, behind the old content: that is the part that needs room on the
+// disk, and when there is none, cutting it off again leaves dst exactly as
+// it was. Only then is the old content overwritten, which needs no room on
+// the filesystems this is likely to meet, and what is left of it cut off.
+// Emptying dst first, as this did, lost the old content to a disk that was
+// full before the new content was written.
+//
+// A failure while the old content is being overwritten cannot be undone: dst
+// is then a mix of both, and the caller is told.
+func copyInPlace(afs afero.Fs, src, dst string, fileMode fs.FileMode) (damaged bool, err error) {
+	in, err := afs.Open(src)
+	if err != nil {
+		return false, err
+	}
 	defer in.Close()
 
-	_, err = writeInPlace(afs, dst, in, fileMode)
+	srcInfo, err := in.Stat()
+	if err != nil {
+		return false, err
+	}
+	newSize := srcInfo.Size()
+
+	// Created here if it is not there (it was a moment ago, or the rename
+	// that was tried first failed): then it is ours to remove again.
+	created := true
+	out, err := afs.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_EXCL, fileMode)
+	if errors.Is(err, fs.ErrExist) {
+		// Also a symbolic link whose target does not exist yet: the content
+		// goes through the link, which creates the target.
+		created = false
+		out, err = afs.OpenFile(dst, os.O_RDWR|os.O_CREATE, fileMode)
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		_ = out.Close()
+		if err != nil && created {
+			_ = afs.Remove(dst)
+			damaged = false
+		}
+	}()
+
+	outInfo, err := out.Stat()
+	if err != nil {
+		return false, err
+	}
+	oldSize := outInfo.Size()
+
+	if newSize > oldSize {
+		if err := copyRange(out, in, oldSize, newSize-oldSize); err != nil {
+			// Put it back the way it was.
+			if truncErr := out.Truncate(oldSize); truncErr != nil {
+				return true, err
+			}
+			return false, err
+		}
+	}
+
+	if err := copyRange(out, in, 0, min(oldSize, newSize)); err != nil {
+		return true, err
+	}
+	if newSize < oldSize {
+		if err := out.Truncate(newSize); err != nil {
+			return true, err
+		}
+	}
+
+	// Sync the file to ensure all data is written to storage.
+	if err := out.Sync(); err != nil {
+		return true, err
+	}
+	return false, nil
+}
+
+// copyRange copies n bytes at offset from in to the same place in out.
+func copyRange(out, in afero.File, offset, n int64) error {
+	if n == 0 {
+		return nil
+	}
+	if _, err := in.Seek(offset, io.SeekStart); err != nil {
+		return err
+	}
+	if _, err := out.Seek(offset, io.SeekStart); err != nil {
+		return err
+	}
+	_, err := io.CopyN(out, in, n)
 	return err
+}
+
+// writeNewInPlace is writeInPlace for a destination that did not exist a
+// moment ago. It creates dst itself, which is how it knows that a file it
+// could not complete is its own to remove: a caller cannot tell such a file
+// from one that someone else put there in the meantime.
+//
+// When dst was created in the meantime, it is overwritten with replace, and
+// left alone, with ErrExist, without.
+func writeNewInPlace(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMode, replace bool) (os.FileInfo, error) {
+	file, err := afs.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_EXCL, fileMode)
+	switch {
+	case errors.Is(err, fs.ErrExist) && replace:
+		return writeInPlace(afs, dst, in, fileMode)
+	case errors.Is(err, fs.ErrExist):
+		return nil, fberrors.ErrExist
+	case err != nil:
+		return nil, err
+	}
+
+	info, err := fillFile(file, in)
+	if err != nil {
+		_ = afs.Remove(dst)
+		return nil, err
+	}
+	return info, nil
 }
 
 // writeInPlace truncates dst and writes the content read from in to it.
@@ -233,7 +490,9 @@ func RemoveStaleTemps(afs afero.Fs, dir string, stale func(os.FileInfo) bool) er
 	}
 
 	for _, name := range names {
-		if !IsTempName(name) {
+		// Only the names as this package writes them: a file under another
+		// spelling was not created here, and is not ours to remove.
+		if !ownTempName.MatchString(name) {
 			continue
 		}
 

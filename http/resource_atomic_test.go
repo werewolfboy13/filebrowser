@@ -210,3 +210,67 @@ func TestUploadTemporariesAreInternal(t *testing.T) {
 		t.Error("a recent temporary file was removed")
 	}
 }
+
+// The temporary file of an upload was hidden, and refused by name, under its
+// exact lower-case name only. On a filesystem that does not tell upper from
+// lower case (the default on macOS and Windows) the same file answers to
+// ".FBTMP-TUS-...", and the name of a resumable upload's temporary file can
+// be worked out from the name of its destination: anyone with access to the
+// directory could read, change or delete an upload in progress.
+func TestUploadTemporariesAreInternalInAnySpelling(t *testing.T) {
+	e := newFullEnv(t)
+	bob := e.login("bob", fullEnvUserPassword)
+	admin := e.login("admin", fullEnvAdminPassword)
+
+	code, hdr, body := e.do(http.MethodPost, "/api/tus/secret.bin", bob, http.NoBody, map[string]string{"Upload-Length": "20"})
+	if code != http.StatusCreated {
+		t.Fatalf("tus create = %d %q", code, body)
+	}
+	code, _, _ = e.do(http.MethodPatch, hdr.Get("Location"), bob, strings.NewReader("CONFIDENTI"), map[string]string{
+		"Content-Type": "application/offset+octet-stream", "Upload-Offset": "0",
+	})
+	if code != http.StatusNoContent {
+		t.Fatalf("first chunk = %d", code)
+	}
+	temps := uploadTempsIn(t, e.bobDir)
+	if len(temps) != 1 {
+		t.Fatalf("temporary files of the upload: %v", temps)
+	}
+
+	// What a case-insensitive filesystem makes of the other spellings is
+	// played by files that carry them: the check is on the name, and must
+	// not depend on what the disk does with it.
+	spellings := []string{temps[0], strings.ToUpper(temps[0]), strings.Replace(temps[0], "tus", "TUS", 1)}
+	for _, name := range spellings[1:] {
+		if !e.server.CaseInsensitiveFs {
+			e.writeBobFile(name, "CONFIDENTI")
+		}
+	}
+
+	for _, name := range spellings {
+		for _, rq := range []struct{ method, path, body string }{
+			{http.MethodGet, "/api/raw/users/bob/" + name, ""},
+			{http.MethodGet, "/api/resources/users/bob/" + name, ""},
+			{http.MethodPut, "/api/resources/users/bob/" + name, "CHANGED"},
+			{http.MethodPost, "/api/resources/users/bob/" + name + "?override=true", "CHANGED"},
+			{http.MethodDelete, "/api/resources/users/bob/" + name, ""},
+			{http.MethodPatch, "/api/resources/users/bob/" + name + "?action=rename&destination=%2Fusers%2Fbob%2Ftaken.bin", ""},
+		} {
+			code, _, body := e.do(rq.method, rq.path, admin, strings.NewReader(rq.body), nil)
+			if code != http.StatusForbidden || strings.Contains(body, "CONFIDENTI") {
+				t.Errorf("%s %s = %d %q, want 403", rq.method, rq.path, code, body)
+			}
+		}
+		if data, err := os.ReadFile(filepath.Join(e.bobDir, name)); err != nil || string(data) != "CONFIDENTI" {
+			t.Errorf("%s holds %q (%v) after the requests", name, data, err)
+		}
+	}
+
+	_, _, listing := e.do(http.MethodGet, "/api/resources/users/bob/", admin, nil, nil)
+	_, _, search := e.do(http.MethodGet, "/api/search/users/bob/?query=fbtmp", admin, nil, nil)
+	for _, name := range spellings {
+		if strings.Contains(listing, name) || strings.Contains(search, name) {
+			t.Errorf("%s is listed or found", name)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -39,10 +40,11 @@ func (c *redisUploadCache) filePathKey(filePath string) string {
 	return "filebrowser:upload:" + filePath
 }
 
-// Register stores the upload length. The scoped removal callback is unused by
-// the redis backend, which does not delete partial files on eviction.
-func (c *redisUploadCache) Register(filePath string, fileSize int64, _ func() error) {
-	err := c.client.Set(context.Background(), c.filePathKey(filePath), fileSize, uploadCacheTTL).Err()
+// Register stores the upload. The scoped removal callback is unused by the
+// redis backend: nothing runs when a key expires. The temporary file of an
+// abandoned upload is removed by tusTemps instead.
+func (c *redisUploadCache) Register(filePath string, upload uploadInfo, _ func() error) {
+	err := c.client.Set(context.Background(), c.filePathKey(filePath), encodeUploadInfo(upload), uploadCacheTTL).Err()
 	if err != nil {
 		log.Printf("failed to register upload in redis cache: %v", err)
 	}
@@ -55,23 +57,66 @@ func (c *redisUploadCache) Complete(filePath string) {
 	}
 }
 
-func (c *redisUploadCache) GetLength(filePath string) (int64, error) {
+func (c *redisUploadCache) Get(filePath string) (uploadInfo, error) {
 	result, err := c.client.Get(context.Background(), c.filePathKey(filePath)).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return 0, fmt.Errorf("no active upload found for the given path")
+			return uploadInfo{}, errNoActiveUpload
 		}
-		return 0, fmt.Errorf("redis error: %w", err)
+		return uploadInfo{}, fmt.Errorf("redis error: %w", err)
 	}
 
-	size, err := strconv.ParseInt(result, 10, 64)
+	upload, err := decodeUploadInfo(result)
 	if err != nil {
-		return 0, fmt.Errorf("invalid upload length in cache: %w", err)
+		return uploadInfo{}, err
 	}
 
 	c.Touch(filePath)
 
-	return size, nil
+	return upload, nil
+}
+
+func (c *redisUploadCache) GetLength(filePath string) (int64, error) {
+	upload, err := c.Get(filePath)
+	return upload.Length, err
+}
+
+// encodeUploadInfo writes an upload as the value kept in redis: its length,
+// followed by ":" and a field for each thing that is more than the length
+// alone ("o" for an override, "u" and the ID of the owner). An upload
+// without any is the bare number this cache has always stored. Fields that
+// are not known are skipped when reading, so that more can be added.
+func encodeUploadInfo(upload uploadInfo) string {
+	value := strconv.FormatInt(upload.Length, 10)
+	if upload.Override {
+		value += ":o"
+	}
+	if upload.Owner != 0 {
+		value += ":u" + strconv.FormatUint(uint64(upload.Owner), 10)
+	}
+	return value
+}
+
+func decodeUploadInfo(value string) (uploadInfo, error) {
+	fields := strings.Split(value, ":")
+
+	length, err := strconv.ParseInt(fields[0], 10, 64)
+	if err != nil {
+		return uploadInfo{}, fmt.Errorf("invalid upload length in cache: %w", err)
+	}
+
+	upload := uploadInfo{Length: length}
+	for _, field := range fields[1:] {
+		switch {
+		case field == "o":
+			upload.Override = true
+		case strings.HasPrefix(field, "u"):
+			if owner, err := strconv.ParseUint(field[1:], 10, 0); err == nil {
+				upload.Owner = uint(owner)
+			}
+		}
+	}
+	return upload, nil
 }
 
 func (c *redisUploadCache) Touch(filePath string) {

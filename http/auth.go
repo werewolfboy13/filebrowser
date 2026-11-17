@@ -2,8 +2,6 @@ package fbhttp
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -46,6 +43,14 @@ type userInfo struct {
 
 type authToken struct {
 	User userInfo `json:"user"`
+
+	// PasswordLogin marks a token that was issued in answer to a login with
+	// the account's password. A token that comes from a renewal does not
+	// carry it, so it says that whoever got this token knew the password at
+	// the time, which holding a session alone does not. See confirmPassword
+	// for what it is used for.
+	PasswordLogin bool `json:"pwl,omitempty"`
+
 	jwt.RegisteredClaims
 }
 
@@ -118,68 +123,8 @@ func proxyAsserts(r *http.Request, d *data, id uint) bool {
 	return user.ID == id
 }
 
-// renewGrace lets one session renew a token that was just revoked.
-//
-// A change that revokes the tokens of a user (see users.User.RevokeTokens)
-// also revokes the token of the session making it. For that one session the
-// handler registers its token here, and the next renewal presenting exactly
-// that token is let through, once and within renewGracePeriod. The web
-// interface renews as soon as it sees X-Renew-Token on the response to the
-// change, so it carries on without a new login, while every other token of
-// the user stays revoked.
-var renewGrace = &renewGraceStore{entries: map[uint]renewGraceEntry{}}
-
-const renewGracePeriod = time.Minute
-
-type renewGraceEntry struct {
-	token   [sha256.Size]byte
-	expires time.Time
-}
-
-// renewGraceStore holds at most one entry per user, so it is bounded by the
-// number of users.
-type renewGraceStore struct {
-	mu      sync.Mutex
-	entries map[uint]renewGraceEntry
-}
-
-// allow lets token, a token of user id, be renewed once although revoked.
-func (s *renewGraceStore) allow(id uint, token string) {
-	if token == "" {
-		return
-	}
-	s.mu.Lock()
-	s.entries[id] = renewGraceEntry{token: sha256.Sum256([]byte(token)), expires: time.Now().Add(renewGracePeriod)}
-	s.mu.Unlock()
-}
-
-// take reports whether token may be renewed although revoked, and uses the
-// permission up.
-func (s *renewGraceStore) take(id uint, token string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	entry, ok := s.entries[id]
-	if !ok {
-		return false
-	}
-	sum := sha256.Sum256([]byte(token))
-	if subtle.ConstantTimeCompare(entry.token[:], sum[:]) != 1 {
-		return false
-	}
-
-	delete(s.entries, id)
-	return time.Now().Before(entry.expires)
-}
-
+// withUser runs fn for a request that carries a valid session token.
 func withUser(fn handleFunc) handleFunc {
-	return authenticated(fn, false)
-}
-
-// authenticated runs fn for a request that carries a valid session token.
-// With renewal set, a token that was revoked is accepted when renewGrace has
-// it: only the renewal endpoint does that.
-func authenticated(fn handleFunc, renewal bool) handleFunc {
 	return func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		keyFunc := func(_ *jwt.Token) (interface{}, error) {
 			return d.settings.Key, nil
@@ -192,13 +137,6 @@ func authenticated(fn handleFunc, renewal bool) handleFunc {
 			return http.StatusUnauthorized, nil
 		}
 
-		expiresSoon := tk.ExpiresAt != nil && time.Until(tk.ExpiresAt.Time) < time.Hour
-		updated := tk.IssuedAt != nil && tk.IssuedAt.Unix() < d.store.Users.LastUpdate(tk.User.ID)
-
-		if expiresSoon || updated {
-			w.Header().Add("X-Renew-Token", "true")
-		}
-
 		d.user, err = d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, tk.User.ID)
 		if errors.Is(err, fberrors.ErrNotExist) {
 			// The account was deleted after the token was issued.
@@ -209,16 +147,27 @@ func authenticated(fn handleFunc, renewal bool) handleFunc {
 		}
 
 		// A token issued before the user's tokens were last revoked is as
-		// good as expired. One without an issue time cannot be placed, and is
-		// refused as soon as there was a revocation.
+		// good as expired, for every request and for a renewal alike. One
+		// without an issue time cannot be placed, and is refused as soon as
+		// there was a revocation.
 		if d.user.TokensNotBefore != 0 {
 			if tk.IssuedAt == nil || d.user.TokenRevoked(tk.IssuedAt.Time) {
-				if !renewal || !renewGrace.take(d.user.ID, token.Raw) {
-					return http.StatusUnauthorized, nil
-				}
+				return http.StatusUnauthorized, nil
 			}
 		}
 		d.token = token.Raw
+		d.loginToken = tk.PasswordLogin
+
+		// Only a session that is still good is told to renew its token. Set
+		// before the checks above, the header went out with the 401 that
+		// ends a session as well, and a client that renews when it sees the
+		// header asked for a renewal that could only be refused.
+		expiresSoon := tk.ExpiresAt != nil && time.Until(tk.ExpiresAt.Time) < time.Hour
+		updated := tk.IssuedAt != nil && tk.IssuedAt.Unix() < d.store.Users.LastUpdate(tk.User.ID)
+
+		if expiresSoon || updated {
+			w.Header().Add("X-Renew-Token", "true")
+		}
 
 		canonicalizeRequestPath(r)
 		return fn(w, r, d)
@@ -269,7 +218,8 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 			}
 			_ = json.Unmarshal(body, &cred)
 
-			attempt, retryAfter := d.limits.login.begin(limiterKey("login", clientAddr(r), cred.Username))
+			addr := clientAddr(r)
+			attempt, retryAfter := d.limits.login.begin(addr, limiterKey("login", addr, cred.Username))
 			if attempt == nil {
 				return tooManyAttempts(w, retryAfter)
 			}
@@ -287,7 +237,11 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 		}
 		done(attemptSucceeded)
 
-		return printToken(w, r, d, user, tokenExpireTime)
+		signed, err := signSessionToken(d, user, tokenExpireTime, d.settings.AuthMethod == fbAuth.MethodJSONAuth)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		return writeToken(w, signed)
 	}
 }
 
@@ -365,14 +319,69 @@ var signupHandler = func(w http.ResponseWriter, r *http.Request, d *data) (int, 
 }
 
 func renewHandler(tokenExpireTime time.Duration) handleFunc {
-	return authenticated(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		w.Header().Set("X-Renew-Token", "false")
 		return printToken(w, r, d, d.user, tokenExpireTime)
-	}, true)
+	})
 }
 
+// newTokenHeader is the response header a session is handed its new token
+// in, when what it just did ended the token it came with: see
+// replaceSessionToken.
+const newTokenHeader = "X-Auth-Token"
+
+// replaceSessionToken hands the session that made the request a token to go
+// on with, in the newTokenHeader header of the response.
+//
+// It is for a request that revokes the tokens of its own user (a change of
+// the own password, permissions or scope). The token the request came with
+// is over from that moment, like every other one of the user, and there is no
+// way of renewing it: a renewal can be asked for by anyone who holds the
+// token, and whoever asks first would be the one to keep a session. The new
+// token goes out with the answer to the change instead, which only the
+// client that made the change receives.
+//
+// The token is a credential, so the response must not be stored. Every
+// response of the API already says so (see globalHeaders); it is said here
+// as well in case that is ever relaxed. The client is also told not to renew:
+// the only token it could renew with is the one that was just revoked.
+func replaceSessionToken(w http.ResponseWriter, d *data, user *users.User, tokenExpirationTime time.Duration) error {
+	signed, err := signSessionToken(d, user, tokenExpirationTime, false)
+	if err != nil {
+		return err
+	}
+
+	w.Header().Set(newTokenHeader, signed)
+	if !strings.Contains(w.Header().Get("Cache-Control"), "no-store") {
+		w.Header().Set("Cache-Control", "no-store")
+	}
+	w.Header().Set("X-Renew-Token", "false")
+	return nil
+}
+
+// printToken answers with a token for user that does not say how the session
+// began: what a renewal hands out.
 func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.User, tokenExpirationTime time.Duration) (int, error) {
+	signed, err := signSessionToken(d, user, tokenExpirationTime, false)
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	return writeToken(w, signed)
+}
+
+func writeToken(w http.ResponseWriter, signed string) (int, error) {
+	w.Header().Set("Content-Type", "text/plain")
+	if _, err := w.Write([]byte(signed)); err != nil {
+		return http.StatusInternalServerError, err
+	}
+	return 0, nil
+}
+
+// signSessionToken issues a session token for user. passwordLogin marks it as
+// the answer to a login with the account's password.
+func signSessionToken(d *data, user *users.User, tokenExpirationTime time.Duration, passwordLogin bool) (string, error) {
 	claims := &authToken{
+		PasswordLogin: passwordLogin,
 		User: userInfo{
 			ID:                    user.ID,
 			Locale:                user.Locale,
@@ -396,15 +405,5 @@ func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.Use
 		},
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString(d.settings.Key)
-	if err != nil {
-		return http.StatusInternalServerError, err
-	}
-
-	w.Header().Set("Content-Type", "text/plain")
-	if _, err := w.Write([]byte(signed)); err != nil {
-		return http.StatusInternalServerError, err
-	}
-	return 0, nil
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(d.settings.Key)
 }

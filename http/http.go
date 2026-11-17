@@ -77,7 +77,7 @@ func newHandler(
 	users := api.PathPrefix("/users").Subrouter()
 	users.Handle("", monkey(usersGetHandler, "")).Methods("GET")
 	users.Handle("", monkey(userPostHandler, "")).Methods("POST")
-	users.Handle("/{id:[0-9]+}", monkey(userPutHandler, "")).Methods("PUT")
+	users.Handle("/{id:[0-9]+}", monkey(userPutHandler(tokenExpirationTime), "")).Methods("PUT")
 	users.Handle("/{id:[0-9]+}", monkey(userGetHandler, "")).Methods("GET")
 	users.Handle("/{id:[0-9]+}", monkey(userDeleteHandler, "")).Methods("DELETE")
 

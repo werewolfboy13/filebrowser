@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -132,25 +133,53 @@ func oversizedPNG(t *testing.T) []byte {
 }
 
 // End to end: a small upload that would decode to hundreds of megabytes is
-// answered with 413 instead of being decoded.
-func TestPreviewOfAnImageOverTheDecodeBudgetIs413(t *testing.T) {
+// never decoded. The thumbnail is refused with 413, and the preview the viewer
+// asks for is the file as it is, which costs the server nothing.
+func TestPreviewOfAnImageOverTheDecodeBudget(t *testing.T) {
 	e := newFullEnv(t)
 	tok := e.login("bob", fullEnvUserPassword)
 
-	if code, _, body := e.do(http.MethodPost, "/api/resources/bomb.png", tok, bytes.NewReader(oversizedPNG(t)), nil); code != http.StatusOK {
+	bomb := oversizedPNG(t)
+	if code, _, body := e.do(http.MethodPost, "/api/resources/bomb.png", tok, bytes.NewReader(bomb), nil); code != http.StatusOK {
 		t.Fatalf("upload = %d %q", code, body)
 	}
 
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
-	for _, size := range []string{"big", "thumb"} {
-		if code, _, _ := e.do(http.MethodGet, "/api/preview/"+size+"/bomb.png", tok, nil, nil); code != http.StatusRequestEntityTooLarge {
-			t.Errorf("preview/%s of the oversized image = %d, want 413", size, code)
+
+	if code, _, _ := e.do(http.MethodGet, "/api/preview/thumb/bomb.png", tok, nil, nil); code != http.StatusRequestEntityTooLarge {
+		t.Errorf("preview/thumb of the oversized image = %d, want 413", code)
+	}
+
+	// Four at once, as a viewer and its neighbours would ask.
+	type answer struct {
+		code int
+		hdr  http.Header
+		body string
+	}
+	answers := make(chan answer, 4)
+	for i := 0; i < cap(answers); i++ {
+		go func() {
+			code, hdr, body := e.do(http.MethodGet, "/api/preview/big/bomb.png", tok, nil, nil)
+			answers <- answer{code, hdr, body}
+		}()
+	}
+	for i := 0; i < cap(answers); i++ {
+		got := <-answers
+		if got.code != http.StatusOK || got.body != string(bomb) {
+			t.Errorf("preview/big of the oversized image = %d with %d bytes, want 200 and the %d bytes of the file", got.code, len(got.body), len(bomb))
+		}
+		// Served like any other download of the file.
+		if got.hdr.Get("X-Content-Type-Options") != "nosniff" || !strings.Contains(strings.Join(got.hdr.Values("Content-Security-Policy"), " "), "script-src 'none'") {
+			t.Errorf("the original was served without the headers of a download: %v", got.hdr)
 		}
 	}
+
 	runtime.ReadMemStats(&after)
-	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 64<<20 {
+	// Decoding it once takes 288 MiB. Reading the file and sending it four
+	// times allocates a few times its size.
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 96<<20 {
 		t.Errorf("the previews allocated %d MiB", allocated>>20)
 	}
 }

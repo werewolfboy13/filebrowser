@@ -59,6 +59,66 @@ func getUser(w http.ResponseWriter, r *http.Request) (*modifyUserRequest, int, e
 	return req, 0, nil
 }
 
+// confirmPassword checks that password is the password of the user making
+// the request, which the users API asks for before it changes an account. It
+// returns status 0 when it is, and the answer to give otherwise.
+//
+// Whoever holds a session token can ask this question, so it is a way to
+// guess the password of the account without going through the login, and the
+// login's limiter. A stolen token that finds the password can change it and
+// take the account over. Wrong answers are therefore counted, by the same
+// limiter the login uses: a few are free, then every further one has to wait,
+// twice as long each time, and while it waits nothing is checked.
+//
+// They are counted per account, and not per address as well, as the login
+// does: a token can be used from any number of addresses.
+//
+// That alone would let the holder of a stolen token keep the count of the
+// account blocked for as long as the token lives, and with it the one thing
+// that ends the stolen session: the user changing their password. So a
+// session that comes straight from a login with the password
+// (authToken.PasswordLogin) is counted on its own, by its token. Such a token
+// cannot be made without the password, and a renewal does not carry the mark
+// on, so an attacker cannot get more of these counts than they have stolen
+// login tokens. The user can always log in again and confirm the password
+// from that session, whatever the stolen one is doing.
+//
+// The price: someone who stole a token that came straight from a login gets
+// that token's own allowance of guesses, on top of the account's, until the
+// token expires (two hours by default). And as with the login, the limiter
+// lives in memory: a restart forgets the counts.
+//
+// A request without a password is refused without being counted and without
+// computing a hash: it is not a guess.
+func confirmPassword(w http.ResponseWriter, d *data, password string) (int, error) {
+	if password == "" {
+		return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
+	}
+
+	done := func(attemptOutcome) {}
+	if d.limits != nil {
+		account := strconv.FormatUint(uint64(d.user.ID), 10)
+		key := limiterKey("password", account)
+		if d.loginToken {
+			key = limiterKey("password", account, "login", d.token)
+		}
+
+		attempt, retryAfter := d.limits.password.begin(account, key)
+		if attempt == nil {
+			return tooManyAttempts(w, retryAfter)
+		}
+		done = attempt
+	}
+
+	if !users.CheckPwd(password, d.user.Password) {
+		done(attemptFailed)
+		return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
+	}
+	done(attemptSucceeded)
+
+	return 0, nil
+}
+
 func withSelfOrAdmin(fn handleFunc) handleFunc {
 	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		id, err := getUserID(r)
@@ -119,8 +179,8 @@ var userDeleteHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Requ
 	}
 
 	if d.settings.AuthMethod == auth.MethodJSONAuth {
-		if !users.CheckPwd(body.CurrentPassword, d.user.Password) {
-			return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
+		if status, err := confirmPassword(w, d, body.CurrentPassword); status != 0 {
+			return status, err
 		}
 	}
 
@@ -139,8 +199,8 @@ var userPostHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *
 	}
 
 	if d.settings.AuthMethod == auth.MethodJSONAuth {
-		if !users.CheckPwd(req.CurrentPassword, d.user.Password) {
-			return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
+		if status, err := confirmPassword(w, d, req.CurrentPassword); status != 0 {
+			return status, err
 		}
 	}
 
@@ -239,7 +299,15 @@ func userUpdateFields(which []string) (fields []string, all bool, err error) {
 	return fields, false, nil
 }
 
-var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+// userPutHandler updates a user. tokenExpireTime is the lifetime of the token
+// handed to a session whose change ended its own token.
+func userPutHandler(tokenExpireTime time.Duration) handleFunc {
+	return withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+		return userPut(w, r, d, tokenExpireTime)
+	})
+}
+
+func userPut(w http.ResponseWriter, r *http.Request, d *data, tokenExpireTime time.Duration) (int, error) {
 	req, status, err := getUser(w, r)
 	if err != nil {
 		return status, err
@@ -260,8 +328,10 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 			}
 		}
 
-		if needsPassword && !users.CheckPwd(req.CurrentPassword, d.user.Password) {
-			return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
+		if needsPassword {
+			if status, err := confirmPassword(w, d, req.CurrentPassword); status != 0 {
+				return status, err
+			}
 		}
 	}
 
@@ -354,13 +424,18 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 		return http.StatusInternalServerError, err
 	}
 
-	// The session that made the change was revoked with the others. Let it
-	// renew its token once, and tell the client to do so now: the web
-	// interface renews when it sees this header.
+	// The session that made the change was revoked with the others. It is
+	// handed a new token with this answer, issued for the account as it is
+	// stored now.
 	if revoke && req.Data.ID == d.user.ID {
-		renewGrace.allow(d.user.ID, d.token)
-		w.Header().Set("X-Renew-Token", "true")
+		updated, err := d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.user.ID)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		if err := replaceSessionToken(w, d, updated, tokenExpireTime); err != nil {
+			return http.StatusInternalServerError, err
+		}
 	}
 
 	return http.StatusOK, nil
-})
+}

@@ -1,8 +1,6 @@
 package fbhttp
 
 import (
-	"errors"
-	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -35,6 +33,10 @@ type data struct {
 	// token is the session token the request was authenticated with.
 	token string
 
+	// loginToken tells that token was issued by a login that presented the
+	// password, and not by a renewal: see authToken.PasswordLogin.
+	loginToken bool
+
 	// limits holds the limiters for failed logins and share passwords.
 	limits *limits
 
@@ -51,9 +53,10 @@ type data struct {
 	// used.
 	scopeRoot string
 
-	// resolved caches, for the length of the request, where paths on disk
-	// lead once symbolic links are followed. See resolvePath.
-	resolved map[string]string
+	// resolver finds out where paths on disk lead once symbolic links are
+	// followed, and remembers, for the length of the request, the directories
+	// it went through. See resolvePath.
+	resolver files.PathResolver
 
 	// protectedInfo caches the identities of the server's own files. See
 	// protectedFiles.
@@ -105,12 +108,35 @@ func (d *data) CheckRules(path string) bool {
 		return true
 	}
 
-	if resolved, ok := d.resolvedRulePath(path); ok && resolved != rulePath {
-		return d.rulesAllow(resolved)
+	switch resolved, where := d.resolvedRulePath(path); where {
+	case leadsInside:
+		if resolved != rulePath {
+			return d.rulesAllow(resolved)
+		}
+	case leadsNowhere:
+		// Where the path leads cannot be told, so it cannot be told whether
+		// a rule denies that place. The kernel does not open such a path
+		// either (it goes through a loop of links, or through something that
+		// is not a directory), so nothing is lost by refusing it; should the
+		// two ever disagree, this is the side to err on.
+		return false
 	}
 
 	return true
 }
+
+// Where a path leads once symbolic links are followed, as far as the rules
+// are concerned.
+const (
+	// leadsInside: to a place inside the scope the rules are relative to.
+	leadsInside = iota
+	// leadsOutside: out of that scope, or the filesystem is not one on disk.
+	// The scoped filesystem refuses such a path on its own, and when
+	// external symlinks are allowed no rule can describe it.
+	leadsOutside
+	// leadsNowhere: it cannot be resolved.
+	leadsNowhere
+)
 
 // protected reports whether path names one of the server's own files that lie
 // inside the served directory (see settings.Server.Protect): the database,
@@ -120,6 +146,10 @@ func (d *data) CheckRules(path string) bool {
 // A file can be reached by more names than the one it was registered under,
 // so the path is compared as written, with symbolic links followed, and, for
 // an existing file, by identity, which covers hard links.
+//
+// The identity is that of the file the kernel opens under the name, asked of
+// the kernel itself: whatever resolvePath makes of the name, no other name of
+// a protected file that exists gets past this.
 //
 // It costs nothing when nothing is registered, which is the case whenever
 // those files are kept outside the served directory.
@@ -133,14 +163,11 @@ func (d *data) protected(path string) bool {
 		return true
 	}
 
-	resolved, ok := d.resolvePath(lexical)
-	if !ok {
-		resolved = lexical
-	} else if resolved != lexical && d.server.IsProtected(resolved) {
+	if resolved, ok := d.resolvePath(lexical); ok && resolved != lexical && d.server.IsProtected(resolved) {
 		return true
 	}
 
-	info, err := os.Stat(resolved)
+	info, err := os.Stat(lexical)
 	if err != nil || !info.Mode().IsRegular() {
 		return false
 	}
@@ -187,14 +214,17 @@ func (d *data) rulesAllow(path string) bool {
 }
 
 // resolvedRulePath returns the path, in the form the rules are written in,
-// that path leads to once symbolic links are followed. It reports false when
-// that cannot be told or lies outside the scope the rules are relative to:
-// the scoped filesystem refuses such a path on its own, and when external
-// symlinks are allowed no rule can describe it.
-func (d *data) resolvedRulePath(path string) (string, bool) {
+// that path leads to once symbolic links are followed, and which of
+// leadsInside, leadsOutside and leadsNowhere it is. The path is only
+// meaningful for leadsInside.
+func (d *data) resolvedRulePath(path string) (resolved string, where int) {
+	if files.BasePath(d.user.Fs) == nil {
+		return "", leadsOutside
+	}
+
 	onDisk, ok := d.realPath(path)
 	if !ok {
-		return "", false
+		return "", leadsNowhere
 	}
 
 	root := d.scopeRoot
@@ -203,15 +233,15 @@ func (d *data) resolvedRulePath(path string) (string, bool) {
 	}
 	root, ok = d.resolvePath(root)
 	if !ok {
-		return "", false
+		return "", leadsNowhere
 	}
 
 	rel, err := filepath.Rel(root, onDisk)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", false
+		return "", leadsOutside
 	}
 
-	return slashClean(filepath.ToSlash(rel)), true
+	return slashClean(filepath.ToSlash(rel)), leadsInside
 }
 
 // realPath returns where path, a path in the user's filesystem, is on disk
@@ -224,77 +254,20 @@ func (d *data) realPath(path string) (string, bool) {
 	return d.resolvePath(filepath.Clean(d.user.FullPath(slashClean(path))))
 }
 
-// maxLinkHops bounds the symbolic links followed while resolving one path, so
-// that a loop ends.
-const maxLinkHops = 255
-
-// resolvePath follows the symbolic links in the absolute path full and returns
-// where it leads. A path that does not exist resolves to where it would be
-// created: the nearest existing ancestor is resolved and the rest appended,
-// and a dangling link is followed to its target, which is where a write
-// through it would land. It reports false when the path cannot be resolved.
+// resolvePath follows the symbolic links in the absolute path full the way
+// the kernel does and returns where it leads; see files.EvalPath. A path that
+// does not exist resolves to where it would be created: the nearest existing
+// ancestor is resolved and the rest appended, and a dangling link is followed
+// to its target, which is where a write through it would land. It reports
+// false when the path cannot be resolved, which is when the kernel does not
+// open it either.
 //
-// Results are kept for the request. Listing a directory checks every entry
-// in it, and this way the directory itself is resolved once and each entry
-// costs a single lstat.
+// The directories on the way are kept for the request. Listing a directory
+// checks every entry in it, and this way the directory itself is resolved
+// once and each entry costs a single lstat. See files.PathResolver for the
+// bound on what is kept.
 func (d *data) resolvePath(full string) (string, bool) {
-	hops := 0
-	return d.resolvePathHops(full, &hops)
-}
-
-func (d *data) resolvePathHops(full string, hops *int) (string, bool) {
-	if cached, ok := d.resolved[full]; ok {
-		return cached, cached != ""
-	}
-
-	result, ok := d.resolvePathUncached(full, hops)
-	if d.resolved == nil {
-		d.resolved = map[string]string{}
-	}
-	if !ok {
-		result = ""
-	}
-	d.resolved[full] = result
-
-	return result, ok
-}
-
-func (d *data) resolvePathUncached(full string, hops *int) (string, bool) {
-	parent := filepath.Dir(full)
-	if parent == full {
-		// The root of the filesystem, or of a volume.
-		return full, true
-	}
-
-	realParent, ok := d.resolvePathHops(parent, hops)
-	if !ok {
-		return "", false
-	}
-
-	candidate := filepath.Join(realParent, filepath.Base(full))
-	info, err := os.Lstat(candidate)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return candidate, true
-	case err != nil:
-		return "", false
-	case info.Mode()&os.ModeSymlink == 0:
-		return candidate, true
-	}
-
-	if *hops++; *hops > maxLinkHops {
-		return "", false
-	}
-	target, err := os.Readlink(candidate)
-	if err != nil {
-		return "", false
-	}
-	if !filepath.IsAbs(target) {
-		// Relative to the directory that really holds the link.
-		target = filepath.Join(realParent, target)
-	}
-
-	return d.resolvePathHops(filepath.Clean(target), hops)
+	return d.resolver.Resolve(full)
 }
 
 // rulePath canonicalizes path into the form the rules are written in.

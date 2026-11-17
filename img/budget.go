@@ -6,15 +6,38 @@ import (
 )
 
 // MaxDecodeMemory is the most memory, in bytes, decoding one image may be
-// expected to need. Images estimated above it are refused.
+// expected to need. Images estimated above it are refused with
+// ErrImageTooLarge.
 //
 // It replaces a limit on the pixel count alone: what a decoded image costs
 // depends on its colour model as much as on its dimensions (a 16-bit RGBA
 // pixel is eight bytes, a grayscale one is one), and a file's size says nothing
-// about either. The value leaves room for the largest photographs in common
-// use (a 50 megapixel 4:2:0 JPEG decodes to about 75 MiB) while bounding what
-// the configured number of image workers can hold between them.
-const MaxDecodeMemory = 128 << 20
+// about either.
+//
+// It is a ceiling for images nobody has a reason to ask a preview of (a
+// 10000 x 10000 RGBA image is 400 MiB), not the bound on what the service
+// holds: that is the budget all images being decoded share, see
+// DecodeMemoryPerWorker. The value leaves room for the photographs in common
+// use, also the expensive ones: a 24 megapixel progressive JPEG needs about
+// 170 MiB, a 24 megapixel TIFF 180 MiB, a 20 megapixel 16-bit PNG 150 MiB.
+const MaxDecodeMemory = 256 << 20
+
+// DecodeMemoryPerWorker is what each image worker adds to the memory all
+// images being decoded at one time may be expected to need between them. The
+// budget is never less than MaxDecodeMemory, so that every image that is
+// accepted can have its turn.
+//
+// An image takes its estimated cost out of the budget before it is decoded,
+// and waits when that is not there. Small images are decoded side by side, as
+// many as there are workers; a large one waits until enough of the others are
+// done, and then holds most of the budget by itself.
+const DecodeMemoryPerWorker = 128 << 20
+
+// decodeBudget returns the memory budget of a service with the given number
+// of workers.
+func decodeBudget(workers int) int64 {
+	return max(MaxDecodeMemory, int64(workers)*DecodeMemoryPerWorker)
+}
 
 // decodeCost estimates the memory needed to decode an image, from its
 // configuration, its format and the leading bytes of the file (which, for the
