@@ -78,8 +78,16 @@ const settle = (p: Promise<unknown>) =>
     (e: Error) => e.message
   );
 
+// "still pending" instead of hanging the test when the upload went ahead
+const within = (p: Promise<string>, ms = 200) =>
+  Promise.race([
+    p,
+    new Promise<string>((r) => setTimeout(() => r("still pending"), ms)),
+  ]);
+
 describe("aborting uploads", () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     h.tusUploads.length = 0;
     h.xhrs.length = 0;
   });
@@ -112,5 +120,44 @@ describe("aborting uploads", () => {
     console.log("xhr aborted:", h.xhrs[0].aborted);
     expect(h.xhrs[0].aborted).toBe(true);
     expect(await p).toBe("Upload aborted");
+  });
+  // post() awaits before it registers the upload (useTus(); on other
+  // protocols the whole file read): an abort in that window could not see
+  // it, and the upload started afterwards, e.g. after logout.
+  it("an upload aborted before post() registered it does not start", async () => {
+    let decide!: (v: boolean) => void;
+    vi.spyOn(tus, "useTus").mockReturnValue(
+      new Promise<boolean>((r) => (decide = r))
+    );
+    const p = settle(files.post("/files/late.bin", new Blob(["x"]), false));
+    files.abortResourceUploads(); // what the upload store's abort() calls
+    decide(true);
+    expect(await within(p)).toBe("Upload aborted");
+    expect(h.tusUploads).toHaveLength(0);
+    expect(h.xhrs).toHaveLength(0);
+  });
+
+  it("an upload aborted while its file is read (non-http protocol) does not start", async () => {
+    vi.spyOn(tus, "useTus").mockResolvedValue(true);
+    const loc = (globalThis as any).window.location;
+    const protocol = loc.protocol;
+    loc.protocol = "app:";
+    try {
+      const p = settle(files.post("/files/app.bin", new Blob(["x"]), false));
+      await Promise.resolve(); // past useTus(), into the file read
+      files.abortResourceUploads();
+      expect(await within(p)).toBe("Upload aborted");
+      expect(h.xhrs).toHaveLength(0);
+    } finally {
+      loc.protocol = protocol;
+    }
+  });
+
+  it("control: an upload started after the abort runs", async () => {
+    files.abortResourceUploads();
+    vi.spyOn(tus, "useTus").mockResolvedValue(true);
+    void files.post("/files/next.bin", new Blob(["x"]), false);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.tusUploads).toHaveLength(1);
   });
 });

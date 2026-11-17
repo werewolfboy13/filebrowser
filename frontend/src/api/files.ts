@@ -109,6 +109,7 @@ export async function post(
   overwrite = false,
   onupload: any = () => {}
 ) {
+  const generation = uploadGeneration;
   // Use the pre-existing API if:
   const useResourcesApi =
     // a folder is being created
@@ -118,8 +119,9 @@ export async function post(
       !["http:", "https:"].includes(window.location.protocol)) ||
     // Tus is disabled / not applicable
     !(await useTus(content));
+  checkNotAborted(generation);
   return useResourcesApi
-    ? postResources(url, content, overwrite, onupload)
+    ? postResources(url, content, overwrite, onupload, generation)
     : postTus(url, content, overwrite, onupload);
 }
 
@@ -127,7 +129,22 @@ export async function post(
 // aborted along with the tus ones.
 const RESOURCE_UPLOADS = new Set<XMLHttpRequest>();
 
+// Bumped by every abort. post() awaits before the upload exists (and can
+// be aborted), so it checks after each await that no abort happened since
+// it was called; otherwise an upload aborted in that window, e.g. by
+// logout, would still start.
+let uploadGeneration = 0;
+
+function checkNotAborted(generation: number) {
+  // same message as an aborted tus upload, which the upload store skips
+  if (generation !== uploadGeneration) throw new Error("Upload aborted");
+}
+
+// Aborts the plain POST uploads, and every upload that post() has not
+// handed to its transport yet. The upload store's abort() calls this along
+// with tus' abortAllUploads().
 export function abortResourceUploads() {
+  uploadGeneration++;
   for (const request of [...RESOURCE_UPLOADS]) {
     request.abort();
   }
@@ -138,7 +155,8 @@ async function postResources(
   url: string,
   content: ApiContent = "",
   overwrite = false,
-  onupload: any
+  onupload: any,
+  generation: number
 ) {
   url = removePrefix(url);
 
@@ -148,6 +166,7 @@ async function postResources(
     !["http:", "https:"].includes(window.location.protocol)
   ) {
     bufferContent = await new Response(content).arrayBuffer();
+    checkNotAborted(generation);
   }
 
   const authStore = useAuthStore();
