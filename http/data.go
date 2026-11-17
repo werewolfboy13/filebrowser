@@ -32,6 +32,9 @@ type data struct {
 	user     *users.User
 	raw      interface{}
 
+	// token is the session token the request was authenticated with.
+	token string
+
 	// checkerPrefix is prepended to every path before evaluating rules. It is
 	// set when the user's filesystem has been rebased onto a subdirectory (as
 	// done for public shares), so that rules — which are relative to the user's

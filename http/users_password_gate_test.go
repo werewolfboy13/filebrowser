@@ -133,6 +133,9 @@ func TestUserUpdateRequestsOfTheFrontend(t *testing.T) {
 		t.Error("a full update without a password must keep the stored one")
 	}
 
+	// The changes of password and permissions above ended bob's session.
+	bob = e.login("bob", "brand-new-password-77")
+
 	// A non-admin still cannot touch what only admins may change, password
 	// or not.
 	for _, field := range []string{"perm", "scope", "rules", "commands", "username", "lockPassword"} {

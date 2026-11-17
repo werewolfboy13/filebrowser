@@ -87,11 +87,29 @@ func (s *Storage) Gets(baseScope string, followExternalSymlinks bool) ([]*User, 
 	return users, err
 }
 
+// keepRevocation carries the revocation mark of the stored record over to
+// user when user is about to replace it and has an older one, or none. A
+// record is rewritten as a whole from many places (the API, the CLI, hook
+// authentication, imports), with a user built from input that knows nothing
+// of the mark, and none of them may bring revoked sessions back.
+func (s *Storage) keepRevocation(user *User) {
+	if user.ID == 0 {
+		return
+	}
+	if stored, err := s.back.GetBy(user.ID); err == nil && stored.TokensNotBefore > user.TokensNotBefore {
+		user.TokensNotBefore = stored.TokensNotBefore
+	}
+}
+
 // Update updates a user in the database.
 func (s *Storage) Update(user *User, fields ...string) error {
 	err := user.Clean("", false, fields...)
 	if err != nil {
 		return err
+	}
+
+	if len(fields) == 0 {
+		s.keepRevocation(user)
 	}
 
 	err = s.back.Update(user, fields...)
@@ -110,6 +128,8 @@ func (s *Storage) Save(user *User) error {
 	if err := user.Clean("", false); err != nil {
 		return err
 	}
+
+	s.keepRevocation(user)
 
 	return s.back.Save(user)
 }

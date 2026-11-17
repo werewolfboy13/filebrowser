@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/gorilla/mux"
 	"golang.org/x/text/cases"
@@ -168,6 +169,9 @@ var userPostHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *
 		return http.StatusBadRequest, err
 	}
 
+	// A new account has no sessions to revoke, whatever the request says.
+	req.Data.TokensNotBefore = 0
+
 	userHome, err := d.settings.MakeUserDir(req.Data.Username, req.Data.Scope, d.server.Root)
 	if err != nil {
 		log.Printf("create user: failed to mkdir user home dir: [%s]", userHome)
@@ -284,23 +288,32 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 		return http.StatusBadRequest, err
 	}
 
-	if all {
-		if !d.user.Perm.Admin {
-			return http.StatusForbidden, nil
-		}
+	if all && !d.user.Perm.Admin {
+		return http.StatusForbidden, nil
+	}
 
+	stored, err := d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.raw.(uint))
+	if errors.Is(err, fberrors.ErrNotExist) {
+		return http.StatusNotFound, err
+	}
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+
+	// A change of the password, the permissions or the scope ends the
+	// sessions of the account: whoever holds a token from before must not
+	// keep it past the change.
+	newPassword := false
+
+	if all {
 		if req.Data.Password != "" {
 			req.Data.Password, err = users.ValidateAndHashPwd(req.Data.Password, d.settings.MinimumPasswordLength)
 			if err != nil {
 				return http.StatusBadRequest, err
 			}
+			newPassword = true
 		} else {
-			var suser *users.User
-			suser, err = d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.raw.(uint))
-			if err != nil {
-				return http.StatusInternalServerError, err
-			}
-			req.Data.Password = suser.Password
+			req.Data.Password = stored.Password
 		}
 	}
 
@@ -314,6 +327,7 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 			if err != nil {
 				return http.StatusBadRequest, err
 			}
+			newPassword = true
 		}
 
 		if !d.user.Perm.Admin && slices.Contains(NonModifiableFieldsForNonAdmin, field) {
@@ -321,10 +335,31 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	revoke := newPassword ||
+		((all || slices.Contains(fields, "Perm")) && req.Data.Perm != stored.Perm) ||
+		((all || slices.Contains(fields, "Scope")) && req.Data.Scope != stored.Scope)
+
+	// The mark is the server's to set, whatever the request carries.
+	req.Data.TokensNotBefore = stored.TokensNotBefore
+	if revoke {
+		req.Data.RevokeTokens(time.Now())
+		if !all {
+			fields = append(fields, "TokensNotBefore")
+		}
+	}
+
 	// With no fields, Update stores the whole user.
 	err = d.store.Users.Update(req.Data, fields...)
 	if err != nil {
 		return http.StatusInternalServerError, err
+	}
+
+	// The session that made the change was revoked with the others. Let it
+	// renew its token once, and tell the client to do so now: the web
+	// interface renews when it sees this header.
+	if revoke && req.Data.ID == d.user.ID {
+		renewGrace.allow(d.user.ID, d.token)
+		w.Header().Set("X-Renew-Token", "true")
 	}
 
 	return http.StatusOK, nil

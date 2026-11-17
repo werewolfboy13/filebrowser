@@ -3,6 +3,7 @@ package users
 import (
 	"fmt"
 	"path/filepath"
+	"time"
 
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 	"github.com/filebrowser/filebrowser/v2/files"
@@ -37,6 +38,39 @@ type User struct {
 	HideDotfiles          bool          `json:"hideDotfiles"`
 	DateFormat            bool          `json:"dateFormat"`
 	AceEditorTheme        string        `json:"aceEditorTheme"`
+
+	// TokensNotBefore is the time, in Unix seconds, before which no session
+	// token of the user is valid any more. Zero, as in every record written
+	// before the field existed, means no token was ever revoked. It is set by
+	// RevokeTokens and is not something a client can change.
+	TokensNotBefore int64 `json:"tokensNotBefore,omitempty"`
+}
+
+// RevokeTokens ends every session of the user: no token issued up to now is
+// valid afterwards. Tokens are dated to the second, so the mark is put one
+// second ahead, and moved on when it is already there, which makes a second
+// revocation within the same second end the tokens issued after the first.
+func (u *User) RevokeTokens(now time.Time) {
+	mark := now.Unix() + 1
+	if mark <= u.TokensNotBefore {
+		mark = u.TokensNotBefore + 1
+	}
+	u.TokensNotBefore = mark
+}
+
+// TokenRevoked reports whether a token issued at issuedAt was revoked.
+func (u *User) TokenRevoked(issuedAt time.Time) bool {
+	return u.TokensNotBefore != 0 && issuedAt.Unix() < u.TokensNotBefore
+}
+
+// IssueTime returns the time to date a token issued now with. It is now,
+// unless tokens were revoked within the last second or so: the token is then
+// dated at the revocation mark, so that it is not taken for a revoked one.
+func (u *User) IssueTime(now time.Time) time.Time {
+	if now.Unix() < u.TokensNotBefore {
+		return time.Unix(u.TokensNotBefore, 0)
+	}
+	return now
 }
 
 // GetRules implements rules.Provider.

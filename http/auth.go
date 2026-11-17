@@ -1,12 +1,15 @@
 package fbhttp
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -113,7 +116,68 @@ func proxyAsserts(r *http.Request, d *data, id uint) bool {
 	return user.ID == id
 }
 
+// renewGrace lets one session renew a token that was just revoked.
+//
+// A change that revokes the tokens of a user (see users.User.RevokeTokens)
+// also revokes the token of the session making it. For that one session the
+// handler registers its token here, and the next renewal presenting exactly
+// that token is let through, once and within renewGracePeriod. The web
+// interface renews as soon as it sees X-Renew-Token on the response to the
+// change, so it carries on without a new login, while every other token of
+// the user stays revoked.
+var renewGrace = &renewGraceStore{entries: map[uint]renewGraceEntry{}}
+
+const renewGracePeriod = time.Minute
+
+type renewGraceEntry struct {
+	token   [sha256.Size]byte
+	expires time.Time
+}
+
+// renewGraceStore holds at most one entry per user, so it is bounded by the
+// number of users.
+type renewGraceStore struct {
+	mu      sync.Mutex
+	entries map[uint]renewGraceEntry
+}
+
+// allow lets token, a token of user id, be renewed once although revoked.
+func (s *renewGraceStore) allow(id uint, token string) {
+	if token == "" {
+		return
+	}
+	s.mu.Lock()
+	s.entries[id] = renewGraceEntry{token: sha256.Sum256([]byte(token)), expires: time.Now().Add(renewGracePeriod)}
+	s.mu.Unlock()
+}
+
+// take reports whether token may be renewed although revoked, and uses the
+// permission up.
+func (s *renewGraceStore) take(id uint, token string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, ok := s.entries[id]
+	if !ok {
+		return false
+	}
+	sum := sha256.Sum256([]byte(token))
+	if subtle.ConstantTimeCompare(entry.token[:], sum[:]) != 1 {
+		return false
+	}
+
+	delete(s.entries, id)
+	return time.Now().Before(entry.expires)
+}
+
 func withUser(fn handleFunc) handleFunc {
+	return authenticated(fn, false)
+}
+
+// authenticated runs fn for a request that carries a valid session token.
+// With renewal set, a token that was revoked is accepted when renewGrace has
+// it: only the renewal endpoint does that.
+func authenticated(fn handleFunc, renewal bool) handleFunc {
 	return func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		keyFunc := func(_ *jwt.Token) (interface{}, error) {
 			return d.settings.Key, nil
@@ -141,6 +205,18 @@ func withUser(fn handleFunc) handleFunc {
 		if err != nil {
 			return http.StatusInternalServerError, err
 		}
+
+		// A token issued before the user's tokens were last revoked is as
+		// good as expired. One without an issue time cannot be placed, and is
+		// refused as soon as there was a revocation.
+		if d.user.TokensNotBefore != 0 {
+			if tk.IssuedAt == nil || d.user.TokenRevoked(tk.IssuedAt.Time) {
+				if !renewal || !renewGrace.take(d.user.ID, token.Raw) {
+					return http.StatusUnauthorized, nil
+				}
+			}
+		}
+		d.token = token.Raw
 
 		canonicalizeRequestPath(r)
 		return fn(w, r, d)
@@ -251,10 +327,10 @@ var signupHandler = func(w http.ResponseWriter, r *http.Request, d *data) (int, 
 }
 
 func renewHandler(tokenExpireTime time.Duration) handleFunc {
-	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+	return authenticated(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		w.Header().Set("X-Renew-Token", "false")
 		return printToken(w, r, d, d.user, tokenExpireTime)
-	})
+	}, true)
 }
 
 func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.User, tokenExpirationTime time.Duration) (int, error) {
@@ -274,7 +350,9 @@ func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.Use
 			AceEditorTheme:        user.AceEditorTheme,
 		},
 		RegisteredClaims: jwt.RegisteredClaims{
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			// Dated so that it is not mistaken for a token revoked a moment
+			// ago: see users.User.IssueTime.
+			IssuedAt:  jwt.NewNumericDate(user.IssueTime(time.Now())),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(tokenExpirationTime)),
 			Issuer:    "File Browser",
 		},

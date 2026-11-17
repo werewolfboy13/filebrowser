@@ -3,6 +3,7 @@ package users
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/filebrowser/filebrowser/v2/files"
 	"github.com/spf13/afero"
@@ -40,4 +41,35 @@ func TestUserCleanFs(t *testing.T) {
 			t.Fatalf("FullPath: got %q, want %q", got, want)
 		}
 	})
+}
+
+func TestRevokeTokens(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+
+	u := &User{}
+	if u.TokenRevoked(now.Add(-time.Hour)) {
+		t.Error("an account that was never revoked refuses a token")
+	}
+
+	u.RevokeTokens(now)
+	if !u.TokenRevoked(now) || !u.TokenRevoked(now.Add(-time.Hour)) {
+		t.Error("a token issued up to the moment of the revocation is still accepted")
+	}
+	// What is issued next is stamped with IssueTime, and must be accepted.
+	if issued := u.IssueTime(now); u.TokenRevoked(issued) {
+		t.Errorf("a token issued right after the revocation (%v) is refused", issued)
+	}
+
+	// A second revocation within the same second ends what was issued after
+	// the first one.
+	issued := u.IssueTime(now)
+	u.RevokeTokens(now)
+	if !u.TokenRevoked(issued) {
+		t.Error("a second revocation in the same second did not end the token issued in between")
+	}
+
+	// Without a revocation, tokens are stamped with the current time.
+	if issued := (&User{}).IssueTime(now); !issued.Equal(now) {
+		t.Errorf("IssueTime = %v, want %v", issued, now)
+	}
 }

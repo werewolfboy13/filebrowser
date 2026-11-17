@@ -223,6 +223,9 @@ func (a *HookAuth) GetUser(d *users.User) *users.User {
 		HideDotfiles: a.Fields.GetBoolean("user.hideDotfiles", d.HideDotfiles),
 		Perm:         perms,
 		LockPassword: true,
+
+		// Not something a hook decides: the stored value is kept.
+		TokensNotBefore: d.TokensNotBefore,
 	}
 
 	return &user
