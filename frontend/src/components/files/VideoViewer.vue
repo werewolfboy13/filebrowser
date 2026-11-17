@@ -15,7 +15,7 @@
         (double tap to seek) that the videojs-hotkeys and videojs-mobile-ui
         plugins used to add.
       -->
-      <video-skin class="video-max">
+      <video-skin ref="skinElement" class="video-max">
         <video
           ref="videoElement"
           :src="source"
@@ -43,7 +43,9 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { useLayoutStore } from "@/stores/layout";
+import { isTypingTarget } from "@/utils/keyboard";
 import "@videojs/html/i18n";
 import "@videojs/html/video/player";
 import "@videojs/html/video/skin";
@@ -62,6 +64,35 @@ withDefaults(
 );
 
 const videoElement = ref<HTMLVideoElement | null>(null);
+const skinElement = ref<HTMLElement | null>(null);
+const layoutStore = useLayoutStore();
+
+// The skin's keyboard shortcuts (Space, arrows, 0-9, m, f, c...) listen on
+// the player container, so they only work while the player has focus; the
+// preview leaves the arrow keys to them for videos. Focus the player when
+// the preview opens (the viewer is created anew for every file), unless the
+// user is typing (e.g. in the command shell) or a dialog is open. Keys the
+// player has no shortcut for (Escape, Enter) still reach the preview.
+onMounted(async () => {
+  await customElements.whenDefined("video-skin");
+  await nextTick();
+  if (layoutStore.currentPrompt !== null) return;
+  const active = document.activeElement;
+  if (isTypingTarget(active)) return;
+  // a control of the preview (e.g. the next/previous buttons) may hand
+  // focus on; anything else outside it keeps it
+  if (
+    active !== null &&
+    active !== document.body &&
+    active.closest("#previewer") === null
+  ) {
+    return;
+  }
+  const container = skinElement.value?.shadowRoot?.querySelector(
+    "media-container"
+  ) as HTMLElement | null | undefined;
+  container?.focus({ preventScroll: true });
+});
 
 onBeforeUnmount(() => {
   // Stop playback and abort the download right away instead of waiting for

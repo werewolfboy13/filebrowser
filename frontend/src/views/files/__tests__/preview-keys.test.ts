@@ -61,14 +61,21 @@ import { useFileStore } from "@/stores/file";
 
 let wrapper: VueWrapper | null = null;
 
-async function mountPreview() {
+async function mountPreview(type = "image") {
   setActivePinia(createPinia());
   useAuthStore().user = { id: 1, perm: {} } as any;
+  // the folder the preview was opened from: a.png, then b.png
+  useFileStore().oldReq = {
+    items: [
+      { name: "a.png", type, url: "/files/pics/a.png" },
+      { name: "b.png", type, url: "/files/pics/b.png" },
+    ],
+  } as any;
   useFileStore().req = {
     name: "a.png",
     path: "/pics/a.png",
     url: "/files/pics/a.png",
-    type: "image",
+    type,
     extension: ".png",
     isDir: false,
     items: [],
@@ -117,6 +124,22 @@ describe("preview keyboard shortcuts", () => {
 
   it("control: Escape on the page closes the preview", async () => {
     await mountPreview();
+    pressIn(document.body, "Escape", 27);
+    expect(h.push).toHaveBeenCalledWith({ path: "/files/pics/" });
+  });
+  it("control: the right arrow on the page goes to the next file", async () => {
+    await mountPreview();
+    pressIn(document.body, "ArrowRight", 39);
+    expect(h.replace).toHaveBeenCalledWith({ path: "/files/pics/b.png" });
+  });
+
+  // The video player has focus (VideoViewer focuses it on open) and its
+  // shortcuts use the arrow keys to seek.
+  it("for a video, the arrow keys do not switch files, and Escape still closes", async () => {
+    await mountPreview("video");
+    pressIn(document.body, "ArrowRight", 39);
+    pressIn(document.body, "ArrowLeft", 37);
+    expect(h.replace).not.toHaveBeenCalled();
     pressIn(document.body, "Escape", 27);
     expect(h.push).toHaveBeenCalledWith({ path: "/files/pics/" });
   });

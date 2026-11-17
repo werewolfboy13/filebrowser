@@ -9,6 +9,7 @@
 // stubbed by the guard.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 import {
   startNetworkGuard,
   type NetworkGuard,
@@ -34,6 +35,7 @@ HTMLMediaElement.prototype.pause = () => {};
 
 describe("video player network requests", () => {
   beforeEach(() => {
+    setActivePinia(createPinia()); // the viewer checks for open dialogs
     document.body.innerHTML = "";
     guard = startNetworkGuard();
   });
