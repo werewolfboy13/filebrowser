@@ -44,10 +44,18 @@ var withHashFile = func(fn handleFunc) handleFunc {
 		d.user = user
 
 		// The request got past the password of the share: hand its page a
-		// token for the URLs of its downloads and previews.
+		// token for the URLs of its downloads and previews. A request that
+		// got in with a token is handed that same token back, not a later
+		// one: a token would otherwise be a way to keep the share open for
+		// good.
 		token := ""
 		if link.PasswordHash != "" {
-			token = shareToken(d.settings.Key, link, time.Now().Add(shareTokenLifetime))
+			now := time.Now()
+			if presented := r.URL.Query().Get("token"); validShareToken(d.settings.Key, link, presented, now) {
+				token = presented
+			} else {
+				token = shareToken(d.settings.Key, link, now.Add(shareTokenLifetime))
+			}
 		}
 
 		file, err := files.NewFileInfo(&files.FileOptions{

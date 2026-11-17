@@ -128,3 +128,52 @@ func TestShareTokenIsTemporary(t *testing.T) {
 		t.Errorf("a share without a password hands out the token %q", got)
 	}
 }
+
+// A token must not be a way to get a later one: whoever holds a token could
+// otherwise keep the share open for good by asking again before it expires.
+// Only the password earns a new token.
+func TestShareTokenCannotRenewItself(t *testing.T) {
+	e := newFullEnv(t)
+	e.writeBobFile("album/pic.txt", "a picture")
+	tok := e.login("bob", fullEnvUserPassword)
+	share := e.createShare(tok, "/album", `{"password":"sharepw"}`)
+
+	link, err := e.st.Share.GetByHash(share)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := e.st.Settings.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A token with an hour left, as it would be late in its life.
+	expires := time.Now().Add(time.Hour).Truncate(time.Second)
+	held := shareToken(set.Key, link, expires)
+
+	for _, path := range []string{"/api/public/share/" + share, "/api/public/share/" + share + "/pic.txt"} {
+		code, _, body := e.do(http.MethodGet, path+"?token="+held, "", nil, nil)
+		if code != http.StatusOK {
+			t.Fatalf("GET %s with a token = %d %q", path, code, body)
+		}
+		var info struct {
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal([]byte(body), &info); err != nil {
+			t.Fatal(err)
+		}
+		if got := shareTokenExpiry(info.Token); got.After(expires) {
+			t.Errorf("GET %s with a token that expires at %v handed out one that expires at %v", path, expires, got)
+		}
+		// The page keeps working with what it is handed back.
+		if code, _, _ := e.do(http.MethodGet, "/api/public/dl/"+share+"/pic.txt?token="+info.Token, "", nil, nil); code != http.StatusOK {
+			t.Errorf("download with the token handed back = %d", code)
+		}
+	}
+
+	// The password does earn a new one.
+	fresh := e.shareInfoToken(share, "", "sharepw")
+	if got := shareTokenExpiry(fresh); !got.After(expires) {
+		t.Errorf("the password earned a token that expires at %v, not later than %v", got, expires)
+	}
+}
