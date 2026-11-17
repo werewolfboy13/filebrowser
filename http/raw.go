@@ -93,11 +93,6 @@ var rawHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) 
 		return errToStatus(err), err
 	}
 
-	if files.IsNamedPipe(file.Mode) {
-		setContentDisposition(w, r, file)
-		return 0, nil
-	}
-
 	if !file.IsDir {
 		return rawFileHandler(w, r, file)
 	}
@@ -172,6 +167,13 @@ func (w *archiveWalk) files(path string) ([]archives.FileInfo, error) {
 	}
 
 	if info.IsDir() && !w.enter(path) {
+		return nil, nil
+	}
+
+	// Named pipes, sockets and devices are left out: the archiver would open
+	// them for their content. Stat follows symlinks, so one that is reached
+	// through a link is recognised too.
+	if !info.IsDir() && !info.Mode().IsRegular() {
 		return nil, nil
 	}
 
@@ -287,6 +289,15 @@ func rawDirHandler(w http.ResponseWriter, r *http.Request, d *data, file *files.
 }
 
 func rawFileHandler(w http.ResponseWriter, r *http.Request, file *files.FileInfo) (int, error) {
+	// Only a regular file is opened: opening a named pipe would block the
+	// request for good. This is the one place every download of a single file
+	// goes through (raw, public shares and the previews served as they are),
+	// and the file may be reached through a symbolic link.
+	if !file.IsRegular() {
+		setContentDisposition(w, r, file)
+		return 0, nil
+	}
+
 	fd, err := file.Fs.Open(file.Path)
 	if err != nil {
 		return http.StatusInternalServerError, err

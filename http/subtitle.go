@@ -53,15 +53,16 @@ func subtitleFileHandler(w http.ResponseWriter, r *http.Request, file *files.Fil
 	// WebVTT is streamed to the client as it is; every other format is
 	// converted in memory and therefore limited in size. Stat follows a
 	// symlink, so the size is that of the file that will be read.
-	converted := !strings.HasSuffix(file.Name, ".vtt")
-	if converted {
-		info, err := file.Fs.Stat(file.Path)
-		if err != nil {
-			return errToStatus(err), err
-		}
-		if info.Size() > maxSubtitleSize {
-			return http.StatusRequestEntityTooLarge, nil
-		}
+	info, err := file.Fs.Stat(file.Path)
+	if err != nil {
+		return errToStatus(err), err
+	}
+	// Opening anything but a regular file can block for good.
+	if !info.Mode().IsRegular() {
+		return http.StatusBadRequest, nil
+	}
+	if !strings.HasSuffix(file.Name, ".vtt") && info.Size() > maxSubtitleSize {
+		return http.StatusRequestEntityTooLarge, nil
 	}
 
 	fd, err := file.Fs.Open(file.Path)

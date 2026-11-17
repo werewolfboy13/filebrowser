@@ -191,6 +191,12 @@ func tusPostHandler(cache UploadCache) handleFunc {
 			if !d.user.Perm.Modify {
 				return http.StatusForbidden, nil
 			}
+
+			// Opening a named pipe to write to it blocks until something
+			// reads from it. A link whose target does not exist yet is fine.
+			if info, statErr := d.user.Fs.Stat(r.URL.Path); statErr == nil && !info.Mode().IsRegular() {
+				return http.StatusBadRequest, fmt.Errorf("cannot upload to %s: not a regular file", r.URL.Path)
+			}
 		}
 
 		// The destination of an upload in progress does not exist yet, so the
@@ -382,6 +388,8 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 	switch {
 	case info.IsDir():
 		return http.StatusBadRequest, fmt.Errorf("cannot upload to a directory %s", r.URL.Path)
+	case !info.Mode().IsRegular():
+		return http.StatusBadRequest, fmt.Errorf("cannot upload to %s: not a regular file", r.URL.Path)
 	case info.Size() != uploadOffset:
 		return http.StatusConflict, fmt.Errorf(
 			"%s file size doesn't match the provided offset: %d",

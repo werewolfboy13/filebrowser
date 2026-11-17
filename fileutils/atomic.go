@@ -48,12 +48,15 @@ func NewTempPath(dst string) (string, error) {
 // Replacing a file with another one must not change anything but its content,
 // so dst is written in place instead, as it was before, when that cannot be
 // guaranteed: when dst is a symbolic link (the link would be replaced, not its
-// target), has other hard links, is not a regular file, belongs to an owner
+// target), has other hard links, belongs to an owner
 // the temporary file cannot be given, or when the directory does not allow
 // creating or renaming a file (a read-only directory holding a writable file,
 // or a bind-mounted file). In the cases that are only discovered after the
 // content was received, dst is rewritten from the complete temporary file, so
 // an interrupted upload still cannot damage it.
+//
+// A destination that is neither a regular file nor a link to one (a named
+// pipe, a socket, a device) is refused with ErrNotRegular.
 //
 // It returns the FileInfo of the written file.
 func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMode) (os.FileInfo, error) {
@@ -62,6 +65,11 @@ func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMod
 	case err == nil && old.IsDir():
 		return nil, fberrors.ErrIsDirectory
 	case err == nil && !old.Mode().IsRegular():
+		// A symbolic link is written through, to keep the link; anything
+		// else that is not a regular file cannot take content.
+		if err := requireRegular(afs, dst, old.Mode()&os.ModeSymlink != 0); err != nil {
+			return nil, err
+		}
 		return writeInPlace(afs, dst, in, fileMode)
 	case err != nil && !errors.Is(err, fs.ErrNotExist):
 		// dst cannot be examined (it is out of bounds, for instance). Let the
@@ -133,6 +141,10 @@ func ReplaceWithTemp(afs afero.Fs, tmp, dst string, fileMode fs.FileMode) error 
 		_ = afs.Remove(tmp)
 		return fberrors.ErrIsDirectory
 	case exists && !old.Mode().IsRegular():
+		if err := requireRegular(afs, dst, old.Mode()&os.ModeSymlink != 0); err != nil {
+			_ = afs.Remove(tmp)
+			return err
+		}
 		rename = false
 	case exists:
 		// Take over the permissions and the ownership of the file being
