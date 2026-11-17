@@ -462,8 +462,7 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 }
 
 // tusDeleteHandler cancels an upload in progress. It discards what the upload
-// has written so far, which is its temporary file; the destination is only
-// removed when the upload was writing to it directly.
+// has written so far, which is its temporary file, and never the destination.
 func tusDeleteHandler(cache UploadCache) handleFunc {
 	return withUser(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		if r.URL.Path == "/" || !d.user.Perm.Delete {
@@ -473,7 +472,7 @@ func tusDeleteHandler(cache UploadCache) handleFunc {
 			return http.StatusForbidden, nil
 		}
 
-		writePath, _, err := tusWritePath(d, r.URL.Path)
+		writePath, temp, err := tusWritePath(d, r.URL.Path)
 		if err != nil {
 			return errToStatus(err), err
 		}
@@ -490,9 +489,15 @@ func tusDeleteHandler(cache UploadCache) handleFunc {
 		}
 		defer release()
 
-		err = d.user.Fs.Remove(writePath)
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return errToStatus(err), err
+		// Only the temporary file is the upload's to remove. An upload that
+		// writes to its destination directly does so because the destination
+		// was there before it (a symbolic link, or a file in a directory that
+		// takes no new one), and cancelling an upload is not deleting a file.
+		if temp {
+			err = d.user.Fs.Remove(writePath)
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return errToStatus(err), err
+			}
 		}
 
 		cache.Complete(uploadKey)
