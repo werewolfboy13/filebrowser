@@ -223,6 +223,53 @@ func TestWriteFileAtomicFallsBackToWritingInPlace(t *testing.T) {
 	}
 }
 
+// Where the directory takes no temporary file, a new file is written in
+// place. When that write fails, what it created is removed again here: no
+// caller can tell a partial file of its own from a file that was put there by
+// someone else.
+func TestWriteFileAtomicRemovesItsOwnPartialFile(t *testing.T) {
+	base, root := newAtomicFs(t)
+	// Refuses the temporary file, but not the destination.
+	noTemp := &tempRefusingFs{Fs: base}
+
+	if _, err := WriteFileAtomic(noTemp, "/new.txt", &brokenReader{data: "partial"}, 0o644); err == nil {
+		t.Fatal("an interrupted write reported success")
+	}
+	if _, err := os.Lstat(filepath.Join(root, "new.txt")); !os.IsNotExist(err) {
+		t.Errorf("the partial new file was left behind (%v)", err)
+	}
+
+	// A complete write of a new file still works that way.
+	if _, err := WriteFileAtomic(noTemp, "/new.txt", strings.NewReader("complete"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "new.txt")); string(data) != "complete" {
+		t.Errorf("content = %q", data)
+	}
+
+	// And a failed overwrite in place does not remove the file that was
+	// there before it.
+	if _, err := WriteFileAtomic(noTemp, "/new.txt", &brokenReader{data: "partial"}, 0o644); err == nil {
+		t.Fatal("an interrupted write reported success")
+	}
+	if _, err := os.Lstat(filepath.Join(root, "new.txt")); err != nil {
+		t.Errorf("a failed overwrite removed the destination: %v", err)
+	}
+}
+
+// tempRefusingFs refuses to create temporary files, like a directory in which
+// only the names that are already there can be written.
+type tempRefusingFs struct {
+	afero.Fs
+}
+
+func (f *tempRefusingFs) OpenFile(name string, flag int, perm os.FileMode) (afero.File, error) {
+	if IsTempName(filepath.Base(name)) {
+		return nil, os.ErrPermission
+	}
+	return f.Fs.OpenFile(name, flag, perm)
+}
+
 func TestWriteFileAtomicRefusesADirectory(t *testing.T) {
 	afs, root := newAtomicFs(t)
 	if err := os.MkdirAll(filepath.Join(root, "dir", "sub"), 0o755); err != nil {

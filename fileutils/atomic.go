@@ -77,6 +77,9 @@ func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMod
 		return writeInPlace(afs, dst, in, fileMode)
 	}
 
+	// Past the switch, dst is a regular file or does not exist.
+	exists := err == nil
+
 	tmp, err := NewTempPath(dst)
 	if err != nil {
 		return nil, err
@@ -86,10 +89,13 @@ func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMod
 	if err != nil {
 		// The directory does not take a new file. Writing in place either
 		// works (an existing, writable file) or reports the real problem.
+		if !exists {
+			return writeNewInPlace(afs, dst, in, fileMode)
+		}
 		return writeInPlace(afs, dst, in, fileMode)
 	}
 
-	info, err := fillTemp(file, in)
+	info, err := fillFile(file, in)
 	if err != nil {
 		_ = afs.Remove(tmp)
 		return nil, err
@@ -102,8 +108,8 @@ func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMod
 	return info, nil
 }
 
-// fillTemp copies in to the temporary file, syncs it and closes it.
-func fillTemp(file afero.File, in io.Reader) (os.FileInfo, error) {
+// fillFile copies in to the file, syncs it and closes it.
+func fillFile(file afero.File, in io.Reader) (os.FileInfo, error) {
 	_, err := io.Copy(file, in)
 	if err == nil {
 		// Sync the file to ensure all data is written to storage before it
@@ -176,6 +182,28 @@ func copyInPlace(afs afero.Fs, src, dst string, fileMode fs.FileMode) error {
 
 	_, err = writeInPlace(afs, dst, in, fileMode)
 	return err
+}
+
+// writeNewInPlace is writeInPlace for a destination that did not exist a
+// moment ago. It creates dst itself, which is how it knows that a file it
+// could not complete is its own to remove: a caller cannot tell such a file
+// from one that someone else put there in the meantime.
+func writeNewInPlace(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMode) (os.FileInfo, error) {
+	file, err := afs.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_EXCL, fileMode)
+	if errors.Is(err, fs.ErrExist) {
+		// It was created in the meantime.
+		return writeInPlace(afs, dst, in, fileMode)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := fillFile(file, in)
+	if err != nil {
+		_ = afs.Remove(dst)
+		return nil, err
+	}
+	return info, nil
 }
 
 // writeInPlace truncates dst and writes the content read from in to it.
