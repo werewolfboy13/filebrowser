@@ -7,8 +7,8 @@
     <media-i18n> without a lang attribute follows the nearest ancestor lang,
     i.e. <html lang>, which the app sets to the user's locale.
   -->
-  <media-i18n class="video-max">
-    <video-player class="video-max" default-playback-rates="0.5 1 1.5 2 2.5 3">
+  <media-i18n>
+    <video-player default-playback-rates="0.5 1 1.5 2 2.5 3">
       <!--
         The packaged skin supplies the controls, keyboard shortcuts (seek,
         volume, 0-9 to jump, speed, captions, fullscreen) and touch gestures
