@@ -223,6 +223,28 @@ func marshal(filename string, data interface{}) error {
 	}
 	defer fd.Close()
 
+	return encodeTo(fd, filename, data)
+}
+
+// marshalPrivate is marshal for a file that holds secrets: it is readable and
+// writable by the owner only, also when it replaces an existing file.
+func marshalPrivate(filename string, data interface{}) error {
+	fd, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer fd.Close()
+
+	// The mode above only applies to a file that did not exist yet.
+	if err := fd.Chmod(0600); err != nil {
+		return err
+	}
+
+	return encodeTo(fd, filename, data)
+}
+
+// encodeTo writes data to fd in the format named by the extension of filename.
+func encodeTo(fd *os.File, filename string, data interface{}) error {
 	switch ext := filepath.Ext(filename); ext {
 	case ".json":
 		encoder := json.NewEncoder(fd)
