@@ -1,0 +1,72 @@
+# Adds Redis to compose.yaml, for the upload cache that several File Browser instances share. One
+# instance does not need it, and is better off without: with Redis, the server does not start
+# while Redis is down, and an upload that is given up leaves its partial file behind.
+#
+#   docker compose -f compose.yaml -f compose.redis.yaml up --build
+#
+# Redis needs a password, in the environment or in a .env file next to this one. The same value
+# goes into Redis's command line as it is and into a URL, where most punctuation means something
+# else. So use only letters, digits and - . _ ~ in it, which is what this command gives:
+#
+#   echo "REDIS_PASSWORD=$(openssl rand -hex 32)" >> .env
+#
+# The Redis image is a Docker Hardened Image, which needs a `docker login dhi.io` to pull.
+
+services:
+  filebrowser:
+    environment:
+      FB_REDIS_CACHE_URL: redis://default:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379
+    # The server connects to Redis when it starts, and stops when it cannot.
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - default
+      - redis
+
+  redis:
+    image: dhi.io/redis:8
+    restart: unless-stopped
+    # As for File Browser, and Redis writes nothing at all.
+    cap_drop:
+      - ALL
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    user: '65532:65532'
+    pids_limit: 64
+    # The image has no shell to write the password to a file at start, and Compose cannot put a
+    # file of its own into a container with a read-only root filesystem, so the password is an
+    # argument. That makes it visible in the process list of the machine that runs Docker. The
+    # image's own configuration file comes first. Nothing is written to disk, neither the cache
+    # nor a PID file: an upload that was in progress when Redis restarts starts over.
+    command:
+      [
+        'redis-server',
+        '/etc/redis/redis.conf',
+        '--requirepass',
+        '${REDIS_PASSWORD:?REDIS_PASSWORD is required}',
+        '--save',
+        '',
+        '--appendonly',
+        'no',
+        '--pidfile',
+        '',
+      ]
+    environment:
+      # Read by redis-cli in the health check below.
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    # With -e, redis-cli fails when Redis answers with an error, such as a refused password.
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-e', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - redis
+
+networks:
+  # Redis is reachable from File Browser only, and reaches nothing outside this network.
+  redis:
+    internal: true

@@ -2,13 +2,23 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
+	"testing/fstest"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	fbhttp "github.com/filebrowser/filebrowser/v2/http"
+	"github.com/filebrowser/filebrowser/v2/settings"
+	"github.com/filebrowser/filebrowser/v2/storage"
 )
 
 // newHealthTestCmd returns a command that runs the health check with its own
@@ -194,9 +204,10 @@ func TestHealthTargetPrecedence(t *testing.T) {
 }
 
 func TestHealthCommand(t *testing.T) {
-	// Not the machine's own configuration.
+	// Not the machine's own configuration, nor a server that runs on it.
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv(envConfig, "")
+	t.Setenv(envHealthFile, "")
 
 	t.Run("succeeds against a healthy server", func(t *testing.T) {
 		srv := httptest.NewServer(healthyHandler("/health"))
@@ -254,6 +265,50 @@ func TestHealthCommand(t *testing.T) {
 
 		if err := runHealthTestCmd("--address", host, "--port", port); err == nil {
 			t.Error("expected an error")
+		}
+	})
+
+	// The server answers 200 with the web client's page for every path it
+	// does not know, so a check that only looked at the status passed
+	// against anything that was not the health endpoint.
+	t.Run("fails when the answer is 200 but not the health endpoint's", func(t *testing.T) {
+		answers := map[string]string{
+			"the web client's page": "<!doctype html><html><body>File Browser</body></html>",
+			"nothing":               "",
+			"another status":        `{"status":"starting"}`,
+			"other JSON":            `{"ok":true}`,
+			"a long page":           strings.Repeat("<p>File Browser</p>", 1000),
+		}
+
+		for name, answer := range answers {
+			t.Run(name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = w.Write([]byte(answer))
+				}))
+				defer srv.Close()
+				host, port := hostAndPort(t, srv)
+
+				if err := runHealthTestCmd("--address", host, "--port", port); err == nil {
+					t.Error("expected an error")
+				}
+			})
+		}
+	})
+
+	t.Run("succeeds against the answer of the server's own health endpoint", func(t *testing.T) {
+		server := &settings.Server{Root: t.TempDir()}
+		handler, err := fbhttp.NewHandler(nil, nil, nil, &storage.Storage{}, server, fstest.MapFS{
+			"index.html": &fstest.MapFile{Data: []byte("<html></html>")},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := httptest.NewServer(handler)
+		defer srv.Close()
+		host, port := hostAndPort(t, srv)
+
+		if err := runHealthTestCmd("--address", host, "--port", port); err != nil {
+			t.Errorf("unexpected error: %v", err)
 		}
 	})
 
@@ -374,5 +429,78 @@ func TestHealthCommandIsRegistered(t *testing.T) {
 		if want := rootCmd.Flags().Lookup(name).DefValue; flag.DefValue != want {
 			t.Errorf("--%s default = %q, want the server's %q", name, flag.DefValue, want)
 		}
+	}
+}
+
+// A server that takes the connection and then says nothing must not keep the
+// check waiting: the check has to give up by itself.
+func TestHealthGivesUpOnAServerThatDoesNotAnswer(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	// Take every connection, and never answer on it.
+	held := make(chan net.Conn, 16)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				close(held)
+				return
+			}
+			held <- conn
+		}
+	}()
+	defer func() {
+		listener.Close()
+		for conn := range held {
+			conn.Close()
+		}
+	}()
+
+	const timeout = 200 * time.Millisecond
+	target := healthTarget{url: "http://" + listener.Addr().String() + "/health"}
+
+	begin := time.Now()
+	result := make(chan error, 1)
+	go func() { result <- checkHealth(context.Background(), target, timeout) }()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("error = %v, want the deadline to have passed", err)
+		}
+		if elapsed := time.Since(begin); elapsed < timeout {
+			t.Errorf("gave up after %s, before its %s", elapsed, timeout)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the check is still waiting for an answer")
+	}
+}
+
+// Docker kills a health check that runs into the HEALTHCHECK's timeout, and
+// records no output for it. The command must give up first, so that its own
+// message says what went wrong.
+func TestHealthTimeoutIsBelowTheImagesHealthcheckTimeout(t *testing.T) {
+	dockerfile, err := os.ReadFile(filepath.Join("..", "Dockerfile"))
+	if err != nil {
+		// The Dockerfile is not among the files that the image is built from,
+		// where these tests run too.
+		t.Skipf("no Dockerfile to compare with: %v", err)
+	}
+
+	match := regexp.MustCompile(`(?m)^HEALTHCHECK\b.*--timeout=(\S+)`).FindSubmatch(dockerfile)
+	if match == nil {
+		t.Fatal("the Dockerfile's HEALTHCHECK has no --timeout")
+	}
+	dockerTimeout, err := time.ParseDuration(string(match[1]))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if healthTimeout >= dockerTimeout {
+		t.Errorf("healthTimeout = %s, want less than the HEALTHCHECK's %s", healthTimeout, dockerTimeout)
 	}
 }

@@ -44,11 +44,8 @@ You can do this by adding them in Settings > User Management > (edit user) > Com
 > 
 > If using a proxy manager then remember to enable websockets support for the File Browser proxy
 
-> [!NOTE]
-> 
-> If using Docker and you want to add a new command that is not in the base image then you will need to build a custom Docker image using `filebrowser/filebrowser` as a base image.  For example to add 7z:
-> 
-> ```docker
-> FROM filebrowser/filebrowser
-> RUN sudo apt install p7zip-full
-> ```
+## Docker
+
+The Docker image that is built from this repository holds the File Browser binary and nothing else that can be run: no shell, and none of the programs that a shell command would call. With the Command Runner turned on in that image, every hook and every command of the interactive shell fails, because the program it names is not there. The same goes for the hook that [`auth.method=hook`](authentication.md) runs.
+
+This is on purpose, and the image is not meant as a base to add programs to: it has no package manager either. Using these features in a container takes an image of your own, with the programs your commands need and the `filebrowser` binary, and everything the caution at the top of this page says applies to it.

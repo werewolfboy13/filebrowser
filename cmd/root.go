@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -193,7 +192,7 @@ user created with the credentials from options "username" and "password".`,
 		redisCacheURL := v.GetString("redisCacheUrl")
 		uploadCache, err := fbhttp.NewUploadCache(redisCacheURL)
 		if err != nil {
-			return fmt.Errorf("failed to initialize upload cache: %w", err)
+			return uploadCacheError(err, redisCacheURL)
 		}
 
 		server, err := getServerSettings(v, st.Storage)
@@ -264,6 +263,8 @@ user created with the credentials from options "username" and "password".`,
 		defer listener.Close()
 
 		log.Println("Listening on", listener.Addr().String())
+		// For the health command, which cannot see this process's flags.
+		defer recordListenAddress(server, listener)()
 		srv := newServer(handler)
 
 		go func() {
@@ -285,13 +286,8 @@ user created with the credentials from options "username" and "password".`,
 		sig := <-sigc
 		log.Println("Got signal:", sig)
 
-		shutdownCtx, shutdownRelease := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownRelease()
-
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Fatalf("HTTP shutdown error: %v", err)
-		}
-		log.Println("Graceful shutdown complete.")
+		// Returning, rather than exiting here, lets the database be closed.
+		shutdownServer(srv, shutdownTimeout)
 
 		return nil
 	}, storeOptions{allowsNoDatabase: true}),

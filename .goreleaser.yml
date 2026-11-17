@@ -47,23 +47,13 @@ archives:
       - goos: windows
         formats: ["zip"]
 
+# A tag with a suffix, such as v3.0.0-rc.1, becomes a prerelease on GitHub, which is not shown as
+# the latest release.
+release:
+  prerelease: auto
+
 # The Docker image is not built here. The Dockerfile builds File Browser from source, in a build
 # context that is the whole repository, where GoReleaser would give it a context with only the
 # binary it built. The release job of .github/workflows/ci.yaml builds and pushes the image.
 
-homebrew_casks:
-  - name: filebrowser
-    repository:
-      owner: filebrowser
-      name: homebrew-tap
-    commit_author:
-      name: FileBrowser Robot
-      email: robot@filebrowser.org
-    homepage: https://github.com/filebrowser/filebrowser
-    description: File Browser is a create-your-own-cloud-kind of software where you can install it on a server, direct it to a path and then access your files through a nice web interface
-    hooks:
-      post:
-        install: |
-          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/filebrowser"]
-          end
+# No Homebrew cask is published: the tap it went to belongs to the File Browser project.
