@@ -87,7 +87,7 @@ func tusPostHandler(cache UploadCache) handleFunc {
 		// if file exists
 		if file != nil {
 			if file.IsDir {
-				return http.StatusBadRequest, fmt.Errorf("cannot upload to a directory %s", file.RealPath())
+				return http.StatusBadRequest, fmt.Errorf("cannot upload to a directory %s", r.URL.Path)
 			}
 
 			// Existing files will remain untouched unless explicitly instructed to override
@@ -233,11 +233,11 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 
 	switch {
 	case file.IsDir:
-		return http.StatusBadRequest, fmt.Errorf("cannot upload to a directory %s", file.RealPath())
+		return http.StatusBadRequest, fmt.Errorf("cannot upload to a directory %s", r.URL.Path)
 	case file.Size != uploadOffset:
 		return http.StatusConflict, fmt.Errorf(
 			"%s file size doesn't match the provided offset: %d",
-			file.RealPath(),
+			r.URL.Path,
 			uploadOffset,
 		)
 	}
