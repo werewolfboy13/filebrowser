@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
@@ -178,6 +179,8 @@ func resourcePostHandler(fileCache FileCache) handleFunc {
 			}
 		}
 
+		sweepStaleUploads(d, r.URL.Path)
+
 		err = d.RunHook(func() error {
 			info, writeErr := writeFile(d.user.Fs, r.URL.Path, r.Body, d.settings.FileMode, d.settings.DirMode)
 			if writeErr != nil {
@@ -216,6 +219,8 @@ var resourcePutHandler = withUser(func(w http.ResponseWriter, r *http.Request, d
 	if !exists {
 		return http.StatusNotFound, nil
 	}
+
+	sweepStaleUploads(d, r.URL.Path)
 
 	err = d.RunHook(func() error {
 		info, writeErr := writeFile(d.user.Fs, r.URL.Path, r.Body, d.settings.FileMode, d.settings.DirMode)
@@ -355,6 +360,9 @@ func addVersionSuffix(source string, afs afero.Fs) string {
 	return source
 }
 
+// writeFile stores the content read from in at dst, creating the directories
+// leading to it. The content only takes the place of an existing file once it
+// has been received completely: see fileutils.WriteFileAtomic.
 func writeFile(afs afero.Fs, dst string, in io.Reader, fileMode, dirMode fs.FileMode) (os.FileInfo, error) {
 	dir, _ := path.Split(dst)
 	err := afs.MkdirAll(dir, dirMode)
@@ -362,30 +370,53 @@ func writeFile(afs afero.Fs, dst string, in io.Reader, fileMode, dirMode fs.File
 		return nil, err
 	}
 
-	file, err := afs.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileMode)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
+	return fileutils.WriteFileAtomic(afs, dst, in, fileMode)
+}
 
-	_, err = io.Copy(file, in)
-	if err != nil {
-		return nil, err
-	}
+// uploadSweeps remembers when the temporary files of a directory were last
+// looked at, so that a burst of uploads into one directory lists it once.
+var uploadSweeps = struct {
+	sync.Mutex
+	last map[string]time.Time
+}{last: map[string]time.Time{}}
 
-	// Sync the file to ensure all data is written to storage.
-	// to prevent file corruption.
-	if err := file.Sync(); err != nil {
-		return nil, err
-	}
+const (
+	// staleUploadAge is how long a temporary upload file is left alone after
+	// it was last written. An upload in progress touches its file with every
+	// chunk, so anything older was abandoned by a crash or a restart.
+	staleUploadAge = 24 * time.Hour
 
-	// Gets the info about the file.
-	info, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
+	uploadSweepInterval = time.Hour
+	uploadSweepMemory   = 1024
+)
 
-	return info, nil
+// sweepStaleUploads removes the temporary upload files in the directory of
+// dst that have not been written for staleUploadAge. They are never listed and
+// cannot be addressed through the API, so this is what cleans up after a
+// crash or a restart in the middle of an upload.
+func sweepStaleUploads(d *data, dst string) {
+	dir, _ := path.Split(dst)
+	if dir == "" {
+		dir = "/"
+	}
+	key := filepath.Clean(d.user.FullPath(dir))
+
+	now := time.Now()
+	uploadSweeps.Lock()
+	if last, ok := uploadSweeps.last[key]; ok && now.Sub(last) < uploadSweepInterval {
+		uploadSweeps.Unlock()
+		return
+	}
+	if len(uploadSweeps.last) >= uploadSweepMemory {
+		clear(uploadSweeps.last)
+	}
+	uploadSweeps.last[key] = now
+	uploadSweeps.Unlock()
+
+	// A directory that does not exist yet has nothing to sweep.
+	_ = fileutils.RemoveStaleTemps(d.user.Fs, dir, func(info os.FileInfo) bool {
+		return now.Sub(info.ModTime()) > staleUploadAge
+	})
 }
 
 func delThumbs(ctx context.Context, fileCache FileCache, file *files.FileInfo) error {

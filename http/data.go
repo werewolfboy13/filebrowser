@@ -8,6 +8,7 @@ import (
 
 	"github.com/tomasen/realip"
 
+	"github.com/filebrowser/filebrowser/v2/fileutils"
 	"github.com/filebrowser/filebrowser/v2/rules"
 	"github.com/filebrowser/filebrowser/v2/runner"
 	"github.com/filebrowser/filebrowser/v2/settings"
@@ -35,7 +36,17 @@ type data struct {
 
 // Check implements rules.Checker.
 func (d *data) Check(path string) bool {
-	if d.user.HideDotfiles && rules.MatchHidden(d.rulePath(path)) {
+	rulePath := d.rulePath(path)
+
+	if d.user.HideDotfiles && rules.MatchHidden(rulePath) {
+		return false
+	}
+
+	// The temporary file an upload is written to is an internal detail of the
+	// upload: it is not listed and cannot be read, replaced or removed by
+	// name. Like the dotfile check, this is not part of CheckRules, so it does
+	// not stop a user from operating on a directory that contains one.
+	if fileutils.IsTempName(gopath.Base(rulePath)) {
 		return false
 	}
 
