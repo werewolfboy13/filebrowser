@@ -15,6 +15,7 @@ import (
 
 	"github.com/filebrowser/filebrowser/v2/auth"
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
+	"github.com/filebrowser/filebrowser/v2/rules"
 	"github.com/filebrowser/filebrowser/v2/users"
 )
 
@@ -160,6 +161,10 @@ var userPostHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *
 		return http.StatusBadRequest, fberrors.ErrShareRequiresDownload
 	}
 
+	if err := rules.Validate(req.Data.Rules); err != nil {
+		return http.StatusBadRequest, err
+	}
+
 	userHome, err := d.settings.MakeUserDir(req.Data.Username, req.Data.Scope, d.server.Root)
 	if err != nil {
 		log.Printf("create user: failed to mkdir user home dir: [%s]", userHome)
@@ -213,6 +218,21 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 			if req.Data.Perm.Share && !req.Data.Perm.Download {
 				return http.StatusBadRequest, fberrors.ErrShareRequiresDownload
 			}
+		}
+	}
+
+	// Rules are only checked when this request stores them: a partial update
+	// of other fields must not fail over rules it does not touch.
+	storesRules := len(req.Which) == 0
+	for _, field := range req.Which {
+		switch cases.Title(language.English, cases.NoLower).String(field) {
+		case "Rules", "All":
+			storesRules = true
+		}
+	}
+	if storesRules {
+		if err := rules.Validate(req.Data.Rules); err != nil {
+			return http.StatusBadRequest, err
 		}
 	}
 

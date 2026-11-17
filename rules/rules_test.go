@@ -91,3 +91,61 @@ func TestMatchHidden(t *testing.T) {
 		}
 	}
 }
+
+// A regex rule that cannot be used (no pattern, or one that does not compile)
+// must never panic. It fails closed: a deny rule then denies every path, and an
+// allow rule allows none.
+func TestUnusableRegexRuleFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	unusable := map[string]*Regexp{
+		"missing pattern": nil,
+		"invalid pattern": {Raw: "("},
+	}
+
+	for name, re := range unusable {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			deny := &Rule{Regex: true, Allow: false, Regexp: re}
+			if !deny.Matches("/any/path", false) {
+				t.Error("unusable deny rule did not match: the path would be allowed")
+			}
+
+			allow := &Rule{Regex: true, Allow: true, Regexp: re}
+			if allow.Matches("/any/path", false) {
+				t.Error("unusable allow rule matched: the path would be allowed")
+			}
+
+			if err := deny.Validate(); err == nil {
+				t.Error("Validate accepted an unusable regex rule")
+			}
+		})
+	}
+
+	if re := (&Regexp{Raw: "("}); re.MatchString("x") {
+		t.Error("an invalid pattern matched")
+	}
+}
+
+func TestRuleValidate(t *testing.T) {
+	t.Parallel()
+
+	valid := []Rule{
+		{Path: "/docs"},
+		{Regex: true, Regexp: &Regexp{Raw: `\.txt$`}},
+		{Regex: true, Regexp: &Regexp{Raw: ""}},
+		// The pattern is ignored unless the rule is a regex rule.
+		{Path: "/docs", Regexp: &Regexp{Raw: "("}},
+	}
+	for i := range valid {
+		if err := valid[i].Validate(); err != nil {
+			t.Errorf("rule %d: unexpected error: %v", i, err)
+		}
+	}
+
+	r := &Rule{Regex: true, Regexp: &Regexp{Raw: `^/a/.*\.txt$`}}
+	if !r.Matches("/a/b.txt", false) || r.Matches("/b/b.txt", false) {
+		t.Error("a valid regex rule does not match as written")
+	}
+}

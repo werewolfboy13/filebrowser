@@ -49,6 +49,12 @@ var settingsPutHandler = withAdmin(func(_ http.ResponseWriter, r *http.Request, 
 		return http.StatusBadRequest, err
 	}
 
+	// A rule that cannot be evaluated would break, or silently change, every
+	// later access check, so it is refused here rather than stored.
+	if err := rules.Validate(req.Rules); err != nil {
+		return http.StatusBadRequest, err
+	}
+
 	d.settings.Signup = req.Signup
 	d.settings.CreateUserDir = req.CreateUserDir
 	d.settings.MinimumPasswordLength = req.MinimumPasswordLength
