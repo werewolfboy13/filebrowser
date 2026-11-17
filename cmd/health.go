@@ -42,8 +42,9 @@ var healthCmd = &cobra.Command{
 	Use:   "health",
 	Short: "Check that a running File Browser answers",
 	Long: `Requests /health from a running File Browser and fails when the
-answer is not 200 OK with the status "OK" in it. It is meant for health checks, such as the one of the
-Docker image, where there is no shell and no HTTP client to do it with.
+answer is not 200 OK with the status "OK" in it. It is meant for health
+checks, such as the one of the Docker image, where there is no shell and no
+HTTP client to do it with. It gives up after 2 seconds.
 
 Where the server listens is looked up in this order:
 
