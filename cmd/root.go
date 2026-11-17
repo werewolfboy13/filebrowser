@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -285,13 +284,8 @@ user created with the credentials from options "username" and "password".`,
 		sig := <-sigc
 		log.Println("Got signal:", sig)
 
-		shutdownCtx, shutdownRelease := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownRelease()
-
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Fatalf("HTTP shutdown error: %v", err)
-		}
-		log.Println("Graceful shutdown complete.")
+		// Returning, rather than exiting here, lets the database be closed.
+		shutdownServer(srv, shutdownTimeout)
 
 		return nil
 	}, storeOptions{allowsNoDatabase: true}),

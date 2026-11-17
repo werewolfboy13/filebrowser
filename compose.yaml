@@ -19,6 +19,9 @@ services:
         GIT_SHA: ${GIT_SHA:-}
     image: ${FILEBROWSER_IMAGE:-filebrowser:local}
     restart: unless-stopped
+    # When it is told to stop, the server gives the requests in progress 8 seconds to finish, then
+    # cuts them off and closes the database. This has to be longer, or Docker kills it first.
+    stop_grace_period: 15s
     # The container needs no capability, no new privilege and no writable root filesystem: what it
     # writes goes to the volumes and the tmpfs mount below.
     cap_drop:
