@@ -290,7 +290,13 @@ func tusPostHandler(cache UploadCache) handleFunc {
 			uploadPath := r.URL.Path
 			remove = func() error { return d.user.Fs.Remove(uploadPath) }
 		}
-		cache.Register(uploadKey, uploadInfo{Length: uploadLength, Override: override}, remove)
+		cache.Register(uploadKey, uploadInfo{Length: uploadLength, Override: override, Owner: d.user.ID}, remove)
+
+		// The cache removes the temporary file when the upload expires, if
+		// it can. This is what does when it cannot: see tusTemps.
+		if !direct {
+			tusTemps.track(d.user.Fs, tmp, tusTempKey(d, tmp))
+		}
 
 		return http.StatusCreated, nil
 	})
@@ -483,9 +489,16 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 
 // tusDeleteHandler cancels an upload in progress. It discards what the upload
 // has written so far, which is its temporary file, and never the destination.
+//
+// Whoever created the upload may cancel it. That used to take the Delete
+// permission, from the time when cancelling removed the destination; a user
+// without it could not cancel an upload of their own, which then stayed
+// behind, out of reach, until it expired. Cancelling somebody else's upload
+// still takes the Delete permission.
 func tusDeleteHandler(cache UploadCache) handleFunc {
 	return withUser(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
-		if r.URL.Path == "/" || !d.user.Perm.Delete {
+		// Without either permission there is nothing the user could cancel.
+		if r.URL.Path == "/" || (!d.user.Perm.Delete && !d.user.Perm.Create) {
 			return http.StatusForbidden, nil
 		}
 		if !d.Check(r.URL.Path) {
@@ -498,9 +511,13 @@ func tusDeleteHandler(cache UploadCache) handleFunc {
 		}
 
 		uploadKey := tusUploadKey(d, r.URL.Path)
-		_, err = cache.GetLength(uploadKey)
+		upload, err := cache.Get(uploadKey)
 		if err != nil {
 			return http.StatusNotFound, err
+		}
+
+		if !d.user.Perm.Delete && (upload.Owner == 0 || upload.Owner != d.user.ID) {
+			return http.StatusForbidden, nil
 		}
 
 		release, ok := tusAcquire(d, r)
@@ -513,7 +530,12 @@ func tusDeleteHandler(cache UploadCache) handleFunc {
 		// writes to its destination directly does so because the destination
 		// was there before it (a symbolic link, or a file in a directory that
 		// takes no new one), and cancelling an upload is not deleting a file.
-		if temp {
+		//
+		// temp says that writePath is the temporary file of this upload: a
+		// regular file under the name tusTempPath gives it. That name cannot
+		// be given to anything through the API (see data.Check), so this
+		// never removes a file somebody stored.
+		if temp && fileutils.IsTempName(gopath.Base(writePath)) {
 			err = d.user.Fs.Remove(writePath)
 			if err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return errToStatus(err), err

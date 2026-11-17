@@ -22,6 +22,10 @@ type uploadInfo struct {
 	// is at its destination. The requests that carry the data do not say, and
 	// the destination is only written when the last of them arrives.
 	Override bool
+
+	// Owner is the ID of the user who created the upload, who may cancel
+	// it. It is 0 when that is not known.
+	Owner uint
 }
 
 // UploadCache is an interface for tracking active uploads.
