@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
 	"net/url"
 	gopath "path"
@@ -308,6 +310,74 @@ func rawFileHandler(w http.ResponseWriter, r *http.Request, file *files.FileInfo
 	w.Header().Add("Content-Security-Policy", `script-src 'none';`)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "private")
+	if r.URL.Query().Get("inline") == "true" {
+		if err := sandboxInlineDocument(w, file.Name, fd); err != nil {
+			return http.StatusInternalServerError, err
+		}
+	}
 	http.ServeContent(w, r, file.Name, file.ModTime, fd)
 	return 0, nil
+}
+
+// inlineSandboxPolicy is the policy for a document served inline. A file
+// shown inline is rendered as a page of this site, under its address, and
+// anyone who may upload decides what is in it. Blocking scripts is not enough:
+// a form posts wherever it likes, and a redirect needs no script. The sandbox
+// takes those away (no forms, no scripts, no automatic redirect, no plug-ins,
+// and an origin of its own, so nothing of this site is within reach), and the
+// rest of the policy keeps the document from loading anything but images,
+// media and its own inline styles.
+const inlineSandboxPolicy = `sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'`
+
+// sandboxInlineDocument works out the type name will be served with, sets it,
+// and adds the sandbox policy when that type is one the browser renders as a
+// document: HTML, XHTML, SVG and XML.
+//
+// The type is determined here, the way http.ServeContent would (by extension,
+// then from the content), and set explicitly, so that the type the decision
+// was made on is the type that is sent: a file without a telling extension is
+// otherwise served as whatever its first bytes look like, HTML included.
+//
+// Other types are left alone. The policy of a response only matters when the
+// response is shown as a document of its own, so an image in an <img> or a
+// video in a <video> is not affected either way, but a sandbox would stop the
+// browser's PDF viewer, which the preview embeds.
+func sandboxInlineDocument(w http.ResponseWriter, name string, content io.ReadSeeker) error {
+	ctype := mime.TypeByExtension(filepath.Ext(name))
+	if ctype == "" {
+		var head [512]byte
+		n, err := io.ReadFull(content, head[:])
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return err
+		}
+		ctype = http.DetectContentType(head[:n])
+		if _, err := content.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+	}
+	w.Header().Set("Content-Type", ctype)
+
+	if rendersAsDocument(ctype) {
+		w.Header().Add("Content-Security-Policy", inlineSandboxPolicy)
+	}
+
+	return nil
+}
+
+// rendersAsDocument reports whether a browser renders the content type as a
+// document that can hold forms, links and embedded content. A type that
+// cannot be parsed is treated as one.
+func rendersAsDocument(ctype string) bool {
+	mediaType, _, err := mime.ParseMediaType(ctype)
+	if err != nil {
+		return true
+	}
+
+	switch mediaType {
+	case "text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml":
+		return true
+	}
+
+	// Every other XML vocabulary a browser may render or transform.
+	return strings.HasSuffix(mediaType, "+xml")
 }
