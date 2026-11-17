@@ -1,5 +1,6 @@
 import { fetchURL, removePrefix, createURL } from "./utils";
 import { baseURL } from "@/utils/constants";
+import { encodePath } from "@/utils/url";
 
 export async function fetch(url: string, password: string = "") {
   url = removePrefix(url);
@@ -38,28 +39,24 @@ export function download(
   token: string,
   ...files: string[]
 ) {
-  let url = `${baseURL}/api/public/dl/${hash}`;
+  let url = `${baseURL}/api/public/dl/${encodeURIComponent(hash)}`;
 
+  // Item paths are raw names: encode them (as api/files.ts does with its
+  // pre-encoded URLs) so '#', '?', '%' and ',' (the files= separator)
+  // survive. The server splits files= on ',' and unescapes each entry.
   if (files.length === 1) {
-    url += files[0] + "?";
+    url += encodePath(files[0]) + "?";
   } else {
-    let arg = "";
-
-    for (const file of files) {
-      arg += file + ",";
-    }
-
-    arg = arg.substring(0, arg.length - 1);
-    arg = encodeURIComponent(arg);
-    url += `/?files=${arg}&`;
+    const arg = files.map((file) => encodePath(file)).join(",");
+    url += `/?files=${encodeURIComponent(arg)}&`;
   }
 
   if (format) {
-    url += `algo=${format}&`;
+    url += `algo=${encodeURIComponent(format)}&`;
   }
 
   if (token) {
-    url += `token=${token}&`;
+    url += `token=${encodeURIComponent(token)}&`;
   }
 
   window.open(url);
