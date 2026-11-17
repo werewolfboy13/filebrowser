@@ -5,6 +5,7 @@
     tabindex="0"
     :draggable="isDraggable"
     @dragstart="dragStart"
+    @dragend="endListingDrag"
     @dragover="dragOver"
     @drop="drop"
     @click="itemClick"
@@ -54,6 +55,11 @@ import { filesize } from "@/utils";
 import dayjs from "dayjs";
 import { files as api } from "@/api";
 import * as upload from "@/utils/upload";
+import {
+  endListingDrag,
+  isOwnListingDrag,
+  startListingDrag,
+} from "@/utils/dragdrop";
 import { computed, inject, ref } from "vue";
 import { useRouter } from "vue-router";
 
@@ -130,7 +136,9 @@ const humanTime = () => {
   return dayjs(props.modified).fromNow();
 };
 
-const dragStart = () => {
+const dragStart = (event: DragEvent) => {
+  startListingDrag(event.dataTransfer);
+
   if (fileStore.selectedCount === 0) {
     fileStore.selected.push(props.index);
     return;
@@ -160,7 +168,16 @@ const dragOver = (event: Event) => {
 
 const drop = async (event: Event) => {
   if (!canDrop.value) return;
+  // Always swallow the drop: without a document-level upload handler (no
+  // create permission) the browser would otherwise open the dropped file.
   event.preventDefault();
+
+  // Only a row dragged within this page moves or copies the selection.
+  // Files dragged in from the desktop are uploaded into this folder by
+  // FileListing's document drop handler, and a row dragged over from
+  // another tab is not about this tab's selection.
+  if (!isOwnListingDrag((event as DragEvent).dataTransfer)) return;
+  endListingDrag();
 
   if (fileStore.selectedCount === 0) return;
 

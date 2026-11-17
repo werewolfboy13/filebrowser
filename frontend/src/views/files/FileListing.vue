@@ -371,6 +371,7 @@ import { useRoute, onBeforeRouteUpdate } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { storeToRefs } from "pinia";
 import { removePrefix } from "@/api/utils";
+import { isListingDrag } from "@/utils/dragdrop";
 
 const showLimit = ref<number>(50);
 const columnWidth = ref<number>(280);
@@ -795,6 +796,9 @@ const drop = async (event: DragEvent) => {
   let el: HTMLElement | null = event.target as HTMLElement;
 
   if (fileStore.req === null || dt === null || dt.files.length <= 0) return;
+  // A listing row being dragged around is a move/copy (ListingItem), never
+  // an upload, even if the browser attached a file (e.g. a thumbnail).
+  if (isListingDrag(dt)) return;
 
   for (let i = 0; i < 5; i++) {
     if (el !== null && !el.classList.contains("item")) {
