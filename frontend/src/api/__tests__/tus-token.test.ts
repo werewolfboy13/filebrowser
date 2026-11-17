@@ -127,6 +127,13 @@ describe("tus uploads and the session token (real tus-js-client, jsdom XHR)", ()
     expect(head?.xAuthLines).toBe(1);
   });
 
+  it("a chunk answered 423 (busy) is retried", async () => {
+    server.once((r) =>
+      r.method === "PATCH" ? { status: 423, body: "423 Locked" } : undefined
+    );
+    expect(await send()).toBe("resolved");
+  });
+
   it("the terminate request sent on abort carries the token once", async () => {
     server.onRequest = (r) => {
       if (r.method === "PATCH") {

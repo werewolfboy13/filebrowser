@@ -6,9 +6,25 @@ import { renew } from "@/utils/auth";
 
 const RETRY_BASE_DELAY = 1000;
 const RETRY_MAX_DELAY = 20000;
+// Retries of a 423 Locked answer when retries are turned off otherwise.
+const LOCKED_RETRY_DELAYS = [500, 1000, 2000, 4000, 8000];
 // Every upload in flight. A set, not a map by path: two uploads to the
 // same path (e.g. a retry with overwrite) must both be abortable.
 const CURRENT_UPLOADS = new Set<tus.Upload>();
+
+// A failed upload: the answer's body, with its status (0 when the server
+// could not be reached) and the method of the request that failed, so that
+// callers can tell e.g. a conflict on create (POST) from one on a chunk.
+export class UploadError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public method: string
+  ) {
+    super(message);
+    this.name = "UploadError";
+  }
+}
 
 export async function upload(
   filePath: string,
@@ -34,11 +50,14 @@ export async function upload(
   if (content === "") {
     return false;
   }
+  const retryDelays = computeRetryDelays(tusSettings);
   return new Promise<void | string>((resolve, reject) => {
     const upload = new tus.Upload(content, {
       endpoint: `${origin}${baseURL}${resourcePath}`,
       chunkSize: tusSettings.chunkSize,
-      retryDelays: computeRetryDelays(tusSettings),
+      // With retries turned off, still retry what the server asks to be
+      // retried (423, see onShouldRetry).
+      retryDelays: retryDelays ?? LOCKED_RETRY_DELAYS,
       parallelUploads: 1,
       storeFingerprintForResuming: false,
       // An upload can outlive the token it started with: send the current
@@ -74,10 +93,18 @@ export async function upload(
         // could not answer it or the upload was busy; a refusal (e.g. 403
         // without the Delete permission) stays a refusal.
         if (err.originalRequest?.getMethod() === "DELETE") {
-          return status === 0 || status === 423 || status >= 500;
+          if (status === 423) return true;
+          return retryDelays !== undefined && (status === 0 || status >= 500);
         }
 
-        return true;
+        // 423: another request for this upload is still being handled
+        // (e.g. a chunk sent again while the server still writes the first
+        // attempt). It is over shortly; always try again.
+        if (status === 423) {
+          return true;
+        }
+
+        return retryDelays !== undefined;
       },
       onError: function (error: Error | tus.DetailedError) {
         CURRENT_UPLOADS.delete(upload);
@@ -86,16 +113,19 @@ export async function upload(
           return reject(error);
         }
 
-        const message =
-          error instanceof tus.DetailedError
-            ? error.originalResponse === null
-              ? "000 No connection"
-              : error.originalResponse.getBody()
-            : "Upload failed";
+        let message = "Upload failed";
+        let status = 0;
+        let method = "";
+        if (error instanceof tus.DetailedError) {
+          const res = error.originalResponse;
+          message = res === null ? "000 No connection" : res.getBody();
+          status = res?.getStatus() ?? 0;
+          method = error.originalRequest?.getMethod() ?? "";
+        }
 
         console.error(error);
 
-        reject(new Error(message));
+        reject(new UploadError(message, status, method));
       },
       onProgress: function (bytesUploaded) {
         if (typeof onupload === "function") {
