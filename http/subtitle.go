@@ -14,6 +14,12 @@ import (
 
 var srtLineBreakTag = regexp.MustCompile(`(?i)<br(?:\s+[^>]*)?\s*/?>`)
 
+// maxSubtitleSize is the largest subtitle file that is converted to WebVTT.
+// The conversion holds the whole file in memory several times over (the raw
+// bytes, the parsed cues and the rendered output), so the limit is what bounds
+// the memory one request can use. Real subtitle files are far smaller.
+const maxSubtitleSize = 5 << 20 // 5 MiB
+
 var subtitleHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	if !d.user.Perm.Download {
 		return http.StatusAccepted, nil
@@ -44,22 +50,39 @@ func subtitleFileHandler(w http.ResponseWriter, r *http.Request, file *files.Fil
 		return http.StatusBadRequest, nil
 	}
 
+	// WebVTT is streamed to the client as it is; every other format is
+	// converted in memory and therefore limited in size. Stat follows a
+	// symlink, so the size is that of the file that will be read.
+	converted := !strings.HasSuffix(file.Name, ".vtt")
+	if converted {
+		info, err := file.Fs.Stat(file.Path)
+		if err != nil {
+			return errToStatus(err), err
+		}
+		if info.Size() > maxSubtitleSize {
+			return http.StatusRequestEntityTooLarge, nil
+		}
+	}
+
 	fd, err := file.Fs.Open(file.Path)
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
 	defer fd.Close()
 
+	// The size was checked above, but the file can grow before it is read.
+	limited := io.LimitReader(fd, maxSubtitleSize)
+
 	// load subtitle for conversion to vtt
 	var sub *astisub.Subtitles
 	if strings.HasSuffix(file.Name, ".srt") {
-		content, readErr := io.ReadAll(fd)
+		content, readErr := io.ReadAll(limited)
 		if readErr != nil {
 			return http.StatusInternalServerError, readErr
 		}
 		sub, err = astisub.ReadFromSRT(bytes.NewReader(normalizeSRTLineBreaks(content)))
 	} else if strings.HasSuffix(file.Name, ".ass") || strings.HasSuffix(file.Name, ".ssa") {
-		sub, err = astisub.ReadFromSSA(fd)
+		sub, err = astisub.ReadFromSSA(limited)
 	}
 	if err != nil {
 		return http.StatusInternalServerError, err
