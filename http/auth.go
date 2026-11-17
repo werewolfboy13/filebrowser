@@ -218,7 +218,8 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 			}
 			_ = json.Unmarshal(body, &cred)
 
-			attempt, retryAfter := d.limits.login.begin(limiterKey("login", clientAddr(r), cred.Username))
+			addr := clientAddr(r)
+			attempt, retryAfter := d.limits.login.begin(addr, limiterKey("login", addr, cred.Username))
 			if attempt == nil {
 				return tooManyAttempts(w, retryAfter)
 			}

@@ -220,6 +220,57 @@ func stalledRequest(t *testing.T, e *fullEnv, head, firstBytes string, patience 
 	return status, err == nil // nil means EOF: the server closed the connection
 }
 
+// Through the API: failed logins under throw-away user names do not push out
+// the key of an account that is being guessed.
+func TestLoginThrottleIsNotResetByAFlood(t *testing.T) {
+	e := newFullEnv(t)
+	clock := e.useFakeClock()
+	e.limits.login.maxKeys = 30 // the production value is 10000; the same code runs
+
+	for i := 0; i <= limiterFreeFailures; i++ {
+		_, _, _ = e.tryLogin("admin", "wrong-"+strconv.Itoa(i))
+	}
+	code, h, _ := e.tryLogin("admin", "wrong-again")
+	if code != http.StatusTooManyRequests {
+		t.Fatalf("control: the admin key is not waiting: %d", code)
+	}
+	wait, _ := strconv.Atoi(h.Get("Retry-After"))
+
+	// A flood of logins under names that do not exist, from the same address.
+	statuses := map[int]int{}
+	for i := 0; i < 60; i++ {
+		code, h, _ := e.tryLogin("nobody-"+strconv.Itoa(i), "x")
+		statuses[code]++
+		if code == http.StatusTooManyRequests && h.Get("Retry-After") == "" {
+			t.Fatal("a refused login carries no Retry-After")
+		}
+	}
+	if statuses[http.StatusTooManyRequests] == 0 {
+		t.Errorf("the flood was let through without a limit: %v", statuses)
+	}
+
+	if code, _, _ := e.tryLogin("admin", "wrong-after-flood"); code != http.StatusTooManyRequests {
+		t.Errorf("guess at the waiting account right after the flood = %d, want 429: its key was dropped", code)
+	}
+
+	// Once the wait is over the next guess is checked, and the one after it
+	// waits longer than before, not as if nothing had happened.
+	clock.Advance(time.Duration(wait+1) * time.Second)
+	if code, _, _ := e.tryLogin("admin", "wrong-later"); code != http.StatusForbidden {
+		t.Fatalf("guess after the wait = %d, want 403", code)
+	}
+	code, h, _ = e.tryLogin("admin", "wrong-later-still")
+	if next, _ := strconv.Atoi(h.Get("Retry-After")); code != http.StatusTooManyRequests || next < 2*wait {
+		t.Errorf("guess after that = %d with Retry-After %d, want 429 and at least %d", code, next, 2*wait)
+	}
+
+	// The account itself is fine, and so is anyone at another address.
+	clock.Advance(limiterMaxDelay)
+	if code, _, _ := e.tryLogin("admin", fullEnvAdminPassword); code != http.StatusOK {
+		t.Errorf("the right password after the wait = %d, want 200", code)
+	}
+}
+
 // renew trades a token for a renewed one.
 func (e *fullEnv) renew(token string) string {
 	e.t.Helper()

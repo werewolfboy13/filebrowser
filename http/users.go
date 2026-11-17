@@ -97,12 +97,13 @@ func confirmPassword(w http.ResponseWriter, d *data, password string) (int, erro
 
 	done := func(attemptOutcome) {}
 	if d.limits != nil {
-		key := limiterKey("password", strconv.FormatUint(uint64(d.user.ID), 10))
+		account := strconv.FormatUint(uint64(d.user.ID), 10)
+		key := limiterKey("password", account)
 		if d.loginToken {
-			key = limiterKey("password", strconv.FormatUint(uint64(d.user.ID), 10), "login", d.token)
+			key = limiterKey("password", account, "login", d.token)
 		}
 
-		attempt, retryAfter := d.limits.password.begin(key)
+		attempt, retryAfter := d.limits.password.begin(account, key)
 		if attempt == nil {
 			return tooManyAttempts(w, retryAfter)
 		}
