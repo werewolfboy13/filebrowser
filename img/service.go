@@ -7,11 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/gif"
+	"image/jpeg"
+	"image/png"
 	"io"
+	"strings"
 
-	"github.com/disintegration/imaging"
 	"github.com/dsoprea/go-exif/v3"
 	"github.com/marusama/semaphore/v2"
+	"golang.org/x/image/bmp"
+	"golang.org/x/image/tiff"
 
 	exifcommon "github.com/dsoprea/go-exif/v3/common"
 )
@@ -53,20 +58,28 @@ bmp
 */
 type Format int
 
-func (x Format) toImaging() imaging.Format {
+// jpegQuality is the quality resized images are encoded with as JPEG.
+const jpegQuality = 95
+
+// encode writes img in the format.
+func (x Format) encode(w io.Writer, img *image.NRGBA) error {
 	switch x {
-	case FormatJpeg:
-		return imaging.JPEG
 	case FormatPng:
-		return imaging.PNG
+		return png.Encode(w, img)
 	case FormatGif:
-		return imaging.GIF
+		return gif.Encode(w, img, &gif.Options{NumColors: 256})
 	case FormatTiff:
-		return imaging.TIFF
+		return tiff.Encode(w, img, &tiff.Options{Compression: tiff.Deflate, Predictor: true})
 	case FormatBmp:
-		return imaging.BMP
+		return bmp.Encode(w, img)
 	default:
-		return imaging.JPEG
+		// JPEG has no transparency. An opaque image is handed over as
+		// premultiplied RGBA, which is the same bytes and what the encoder
+		// is fastest with.
+		if img.Opaque() {
+			return jpeg.Encode(w, &image.RGBA{Pix: img.Pix, Stride: img.Stride, Rect: img.Rect}, &jpeg.Options{Quality: jpegQuality})
+		}
+		return jpeg.Encode(w, img, &jpeg.Options{Quality: jpegQuality})
 	}
 }
 
@@ -79,16 +92,16 @@ low
 */
 type Quality int
 
-func (x Quality) resampleFilter() imaging.ResampleFilter {
+func (x Quality) kernel() kernel {
 	switch x {
 	case QualityHigh:
-		return imaging.Lanczos
+		return lanczosKernel
 	case QualityMedium:
-		return imaging.Box
+		return boxKernel
 	case QualityLow:
-		return imaging.NearestNeighbor
+		return nearestKernel
 	default:
-		return imaging.Box
+		return boxKernel
 	}
 }
 
@@ -101,20 +114,16 @@ fill
 type ResizeMode int
 
 func (s *Service) FormatFromExtension(ext string) (Format, error) {
-	format, err := imaging.FormatFromExtension(ext)
-	if err != nil {
-		return -1, ErrUnsupportedFormat
-	}
-	switch format {
-	case imaging.JPEG:
+	switch strings.ToLower(strings.TrimPrefix(ext, ".")) {
+	case "jpg", "jpeg":
 		return FormatJpeg, nil
-	case imaging.PNG:
+	case "png":
 		return FormatPng, nil
-	case imaging.GIF:
+	case "gif":
 		return FormatGif, nil
-	case imaging.TIFF:
+	case "tif", "tiff":
 		return FormatTiff, nil
-	case imaging.BMP:
+	case "bmp":
 		return FormatBmp, nil
 	}
 	return -1, ErrUnsupportedFormat
@@ -146,11 +155,28 @@ func WithQuality(quality Quality) Option {
 	}
 }
 
-func (s *Service) Resize(ctx context.Context, in io.Reader, width, height int, out io.Writer, options ...Option) error {
+// ErrInvalidImage means that the image could not be processed although its
+// header looked fine: decoding or resizing it failed in a way the code doing
+// it did not expect.
+var ErrInvalidImage = errors.New("invalid image")
+
+// Resize reads an image from in, scales it to width x height according to the
+// options, and writes the result to out.
+//
+// Whatever goes wrong with an image is returned as an error, including a
+// panic in the decoder or in the resizing: both run in the calling goroutine,
+// so a file that trips one of them up fails its own request and nothing else.
+func (s *Service) Resize(ctx context.Context, in io.Reader, width, height int, out io.Writer, options ...Option) (err error) {
 	if err := s.sem.Acquire(ctx, 1); err != nil {
 		return err
 	}
 	defer s.sem.Release(1)
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%w: %v", ErrInvalidImage, r)
+		}
+	}()
 
 	// The wait for a worker can outlast the request.
 	if err := ctx.Err(); err != nil {
@@ -182,21 +208,90 @@ func (s *Service) Resize(ctx context.Context, in io.Reader, width, height int, o
 		}
 	}
 
-	img, err := imaging.Decode(wrappedReader, imaging.AutoOrientation(true))
+	// A JPEG can say that it has to be turned to be shown upright. That is in
+	// its header, which is kept aside while the decoder reads through it.
+	var header *headBuffer
+	if format == FormatJpeg {
+		header = &headBuffer{limit: orientationHeaderSize}
+		wrappedReader = io.TeeReader(wrappedReader, header)
+	}
+
+	img, _, err := decodeImage(wrappedReader)
 	if err != nil {
 		return err
 	}
 
+	orientation := 0
+	if header != nil {
+		orientation = jpegOrientation(header.buf)
+	}
+
+	return s.scale(ctx, img, orientation, width, height, out, config)
+}
+
+// decodeImage decodes an image in one of the registered formats. It is a
+// variable so that tests can stand in for a decoder that misbehaves.
+var decodeImage = image.Decode
+
+// orientationHeaderSize is how much of a JPEG file is kept to look for its
+// orientation in. The EXIF block comes first and is at most 64 KiB.
+const orientationHeaderSize = 128 << 10
+
+// headBuffer keeps the first limit bytes written to it.
+type headBuffer struct {
+	buf   []byte
+	limit int
+}
+
+func (h *headBuffer) Write(p []byte) (int, error) {
+	if room := h.limit - len(h.buf); room > 0 {
+		h.buf = append(h.buf, p[:min(room, len(p))]...)
+	}
+	return len(p), nil
+}
+
+// scale resizes the decoded image and writes it out.
+func (s *Service) scale(ctx context.Context, img image.Image, orientation, width, height int, out io.Writer, config resizeConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if width <= 0 || height <= 0 {
+		return fmt.Errorf("%w: cannot resize to %dx%d", ErrInvalidImage, width, height)
+	}
+
+	bounds := img.Bounds()
+	srcW, srcH := bounds.Dx(), bounds.Dy()
+	if srcW <= 0 || srcH <= 0 {
+		return fmt.Errorf("%w: the image is empty", ErrInvalidImage)
+	}
+
+	// The image is scaled as it is stored and turned afterwards, when it is
+	// small. For an image that lies on its side that means the target is
+	// given on its side too.
+	if orientation >= 5 {
+		width, height = height, width
+	}
+
+	var (
+		crop       = image.Rect(0, 0, srcW, srcH)
+		dstW, dstH int
+	)
 	switch config.resizeMode {
 	case ResizeModeFill:
-		img = imaging.Fill(img, width, height, imaging.Center, config.quality.resampleFilter())
+		crop = fillCrop(srcW, srcH, width, height)
+		dstW, dstH = width, height
 	case ResizeModeFit:
 		fallthrough
 	default:
-		img = imaging.Fit(img, width, height, config.quality.resampleFilter())
+		dstW, dstH = fitSize(srcW, srcH, width, height)
 	}
 
-	return imaging.Encode(out, img, config.format.toImaging())
+	resized, err := resample(ctx, img, crop, dstW, dstH, config.quality.kernel())
+	if err != nil {
+		return err
+	}
+
+	return config.format.encode(out, orient(resized, orientation))
 }
 
 func (s *Service) detectFormat(in io.Reader) (Format, io.Reader, error) {
