@@ -4,6 +4,7 @@ import vue from "@vitejs/plugin-vue";
 import VueI18nPlugin from "@intlify/unplugin-vue-i18n/vite";
 import legacy from "@vitejs/plugin-legacy";
 import { compression } from "vite-plugin-compression2";
+import { selfHostAce } from "./vite-plugins/ace.ts";
 
 // Custom elements from @videojs/html used in templates (VideoPlayer.vue).
 // Vue must not try to resolve them as Vue components.
@@ -25,6 +26,7 @@ const plugins = [
     targets: ["defaults"],
   }),
   compression({ include: /\.js$/, deleteOriginalAssets: false }),
+  selfHostAce(),
 ];
 
 const resolve = {
