@@ -50,8 +50,10 @@ vi.mock("tus-js-client", () => ({
       h.tusUploads.push(this);
     }
     start() {}
+    // like tus-js-client's, which settles when the terminate request does
     abort() {
       this.aborted = true;
+      return Promise.resolve();
     }
   },
 }));

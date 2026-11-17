@@ -149,11 +149,42 @@ describe("tus uploads and the session token (real tus-js-client, jsdom XHR)", ()
     expect(del?.xAuthLines).toBe(1);
   });
 
+  // The terminate DELETE needs the Delete permission: without it the server
+  // answers 403. That was retried like a failed chunk, and the rejection of
+  // abort()'s promise was left unhandled.
+  it("a refused terminate is neither retried nor left unhandled", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => unhandled.push(e);
+    process.on("unhandledRejection", onUnhandled);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (let i = 0; i < 3; i++) {
+        server.once((r) =>
+          r.method === "DELETE"
+            ? { status: 403, body: "403 Forbidden" }
+            : undefined
+        );
+      }
+      server.onRequest = (r) => {
+        if (r.method === "PATCH") {
+          server.onRequest = null;
+          tus.abortAllUploads();
+        }
+      };
+      expect(await send()).toBe("rejected: Upload aborted");
+      await until(() => server.seen.some((r) => r.method === "DELETE"));
+      await new Promise((r) => setTimeout(r, 100));
+      console.log("requests:", JSON.stringify(requests()));
+      expect(unhandled).toEqual([]);
+      expect(server.seen.filter((r) => r.method === "DELETE")).toHaveLength(1);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      warn.mockRestore();
+    }
+  });
+
   it("a response asking for renewal (X-Renew-Token: true) renews the session", async () => {
-    server.extraHeaders = {
-      "X-Renew-Token": "true",
-      "Access-Control-Expose-Headers": "X-Renew-Token",
-    };
+    server.extraHeaders = { "X-Renew-Token": "true" };
     expect(await send("small.bin", "abc")).toBe("resolved");
     expect(renew).toHaveBeenCalled();
     expect(renew).toHaveBeenCalledWith(TOKEN);

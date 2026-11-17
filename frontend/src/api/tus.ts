@@ -70,6 +70,13 @@ export async function upload(
           return false;
         }
 
+        // Cancelling (terminate) is only worth repeating when the server
+        // could not answer it or the upload was busy; a refusal (e.g. 403
+        // without the Delete permission) stays a refusal.
+        if (err.originalRequest?.getMethod() === "DELETE") {
+          return status === 0 || status === 423 || status >= 500;
+        }
+
         return true;
       },
       onError: function (error: Error | tus.DetailedError) {
@@ -135,7 +142,11 @@ function isTusSupported() {
 export function abortAllUploads() {
   for (const upload of [...CURRENT_UPLOADS]) {
     CURRENT_UPLOADS.delete(upload);
-    upload.abort(true);
+    upload
+      .abort(true)
+      .catch((e) =>
+        console.warn("could not cancel the upload on the server", e)
+      );
     upload.options!.onError!(new Error("Upload aborted"));
   }
 }
