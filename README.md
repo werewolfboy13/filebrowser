@@ -2,6 +2,10 @@
 > 
 > **File Browser is archived on 2026-09-01**. The last planned release has already shipped. There will be no further releases, bug fixes, or security fixes.   
 
+> [!NOTE]
+>
+> **This repository is a fork**, which continues from the last release of the archived project. Nothing here is published by the File Browser project. The `filebrowser/filebrowser` images on Docker Hub and the project's other downloads do not have the changes made here: this build has its own Docker image, which is built from this repository. See [Docker](#docker).
+
 <p align="center">
   <img src="./branding/banner.png" width="550"/>
 </p>
@@ -24,6 +28,33 @@ If you keep running File Browser, treat it as unmaintained software:
 - **Do not expose it directly to the internet.** Put it behind a reverse proxy that terminates TLS and performs its own authentication.
 - **Keep the command runner disabled.** It is off by default, so leave it off. See [#5199](https://github.com/filebrowser/filebrowser/issues/5199) and [`docs/command-execution.md`](docs/command-execution.md).
 - **Run it unprivileged, inside a container**, with only the directory you intend to serve mounted into it.
+
+## Docker
+
+The image is built from the [Dockerfile](Dockerfile) in this repository, on [Docker Hardened Images](https://docs.docker.com/dhi/), which take a `docker login dhi.io` to pull:
+
+```sh
+docker login dhi.io
+docker compose up --build
+```
+
+That builds the image, runs the tests of the client and the server in the build, and serves File Browser on `http://127.0.0.1:8000`. The password of the user `admin` is in the log of the first start (`docker compose logs`). Or without Compose:
+
+```sh
+docker build --pull -t filebrowser:local .
+docker run -v filebrowser_data:/srv -v filebrowser_database:/database -v filebrowser_config:/config -p 8080:80 filebrowser:local
+```
+
+What to know about the image:
+
+- It holds the server and nothing else: no shell, no init system, no `PUID` and `PGID`. The server runs as the user 1000, or as the one that `--user` names.
+- It needs no capability and no writable root filesystem, and [`compose.yaml`](compose.yaml) runs it that way.
+- It is configured with `FB_` environment variables, such as `FB_PORT`, or with `/config/settings.json`, which the server creates on its first start.
+- It checks its own health with `filebrowser health`. A health check from a Compose file that was written for the original image, with `/healthcheck.sh` or a shell command, has to go.
+- The Command Runner cannot run anything in it.
+- It can be built for `linux/amd64` and `linux/arm64` only.
+
+[`docs/installation.md`](docs/installation.md#docker) has the details, and what changes for an installation that used the original image.
 
 ## Documentation
 
