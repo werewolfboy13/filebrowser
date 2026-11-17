@@ -1,4 +1,8 @@
 import { useAuthStore } from "@/stores/auth";
+import { useClipboardStore } from "@/stores/clipboard";
+import { useFileStore } from "@/stores/file";
+import { useLayoutStore } from "@/stores/layout";
+import { useUploadStore } from "@/stores/upload";
 import router from "@/router";
 import type { JwtPayload } from "jwt-decode";
 import { jwtDecode } from "jwt-decode";
@@ -6,11 +10,18 @@ import { authMethod, baseURL, noAuth, logoutPage } from "./constants";
 import { StatusError } from "@/api/utils";
 import { setSafeTimeout } from "@/api/utils";
 
+// The auth cookie lets the server authenticate plain GETs (downloads,
+// previews). Over https, never let it travel over plain http.
+function setAuthCookie(value: string, extra = "") {
+  const secure = window.location.protocol === "https:" ? " Secure;" : "";
+  document.cookie = `auth=${value};${extra} Path=/; SameSite=Strict;${secure}`;
+}
+
 export function parseToken(token: string) {
   // falsy or malformed jwt will throw InvalidTokenError
   const data = jwtDecode<JwtPayload & { user: IUser }>(token);
 
-  document.cookie = `auth=${token}; Path=/; SameSite=Strict;`;
+  setAuthCookie(token);
 
   localStorage.setItem("jwt", token);
 
@@ -130,7 +141,15 @@ export async function signup(username: string, password: string) {
 }
 
 export function logout(reason?: string) {
-  document.cookie = "auth=; Max-Age=0; Path=/; SameSite=Strict;";
+  // Stop what still runs with this session (uploads; the pending ones would
+  // otherwise start without a token) while the token is still set, then
+  // drop per-session state so the next login on this tab starts clean.
+  useUploadStore().abort();
+  useClipboardStore().resetClipboard();
+  useFileStore().clearFile();
+  useLayoutStore().clearLayout();
+
+  setAuthCookie("", " Max-Age=0;");
 
   const authStore = useAuthStore();
   authStore.clearUser();
