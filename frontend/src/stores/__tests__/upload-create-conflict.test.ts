@@ -44,6 +44,8 @@ import { createApp } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { useUploadStore } from "@/stores/upload";
 import { useLayoutStore } from "@/stores/layout";
+import { useFileStore } from "@/stores/file";
+import { watch } from "vue";
 import Replace from "@/components/prompts/Replace.vue";
 
 const conflictOn = (method: string) =>
@@ -96,6 +98,38 @@ describe("a conflict reported when the upload is created", () => {
     expect(h.post).toHaveBeenCalledTimes(1); // nothing retried on its own
   });
 
+  // When the queue drains the store asks the listing to reload, and the
+  // listing (Files.vue fetchData) closes the open prompt when it does: the
+  // question vanished a moment after it appeared, a silent Skip. The batch
+  // is not over while a question is open.
+  it("the question stays until answered, and the listing reloads after", async () => {
+    const layout = useLayoutStore();
+    const files = useFileStore();
+    // what Files.vue does on reload
+    let reloads = 0;
+    watch(
+      () => files.reload,
+      (reload) => {
+        if (!reload) return;
+        reloads++;
+        files.reload = false;
+        layout.closeHovers();
+      },
+      { flush: "sync" }
+    );
+    h.post.mockRejectedValueOnce(conflictOn("POST"));
+    queue("a.pdf");
+    await settle();
+    await settle();
+    console.log("prompts after the queue drained:", layout.prompts.length);
+    expect(layout.currentPromptName).toBe("replace");
+    expect(reloads).toBe(0);
+
+    layout.closeHovers(); // Skip
+    await settle();
+    expect(reloads).toBe(1);
+  });
+
   it("Replace uploads the same file again, with override", async () => {
     h.post.mockRejectedValueOnce(conflictOn("POST"));
     h.post.mockResolvedValueOnce(undefined);
@@ -109,6 +143,7 @@ describe("a conflict reported when the upload is created", () => {
     expect(h.post).toHaveBeenCalledTimes(2);
     const [path, content, overwrite] = h.post.mock.calls[1];
     expect([path, content, overwrite]).toEqual(["/files/a.pdf", file, true]);
+    expect(useFileStore().reload).toBe(true); // the batch finished
   });
 
   it("Skip (or Cancel, or Escape) leaves it", async () => {

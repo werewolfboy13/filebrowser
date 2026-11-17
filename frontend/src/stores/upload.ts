@@ -105,7 +105,9 @@ export const useUploadStore = defineStore("upload", () => {
   const isActiveUploadsOnLimit = () => activeUploads.value.size < UPLOADS_LIMIT;
 
   const processUploads = async () => {
-    if (!hasActiveUploads() && !hasPendingUploads()) {
+    // The batch is not over while the user is asked about a conflict: its
+    // end reloads the listing, which closes any open prompt.
+    if (!hasActiveUploads() && !hasPendingUploads() && !hasConflicts()) {
       const fileStore = useFileStore();
       window.removeEventListener("beforeunload", beforeUnload);
       buttons.success("upload");
@@ -203,6 +205,8 @@ export const useUploadStore = defineStore("upload", () => {
   // bumped by abort(): answers to questions asked before it are ignored
   let conflictGeneration = 0;
 
+  const hasConflicts = () => asking !== null || conflicts.length > 0;
+
   const isCreateConflict = (err: any) =>
     err?.status === 409 && err?.method === "POST";
 
@@ -230,21 +234,26 @@ export const useUploadStore = defineStore("upload", () => {
         messageParams: { name: conflict.name },
       },
       confirm: () => {
+        // queue it first: closing finishes the batch if nothing is queued
+        if (generation === conflictGeneration) {
+          upload(
+            conflict.path,
+            conflict.name,
+            conflict.file,
+            true,
+            conflict.type
+          );
+        }
         layoutStore.closeHovers();
-        if (generation !== conflictGeneration) return;
-        upload(
-          conflict.path,
-          conflict.name,
-          conflict.file,
-          true,
-          conflict.type
-        );
       },
       // runs however the question is closed (Replace, Skip, Cancel, Escape)
       close: async () => {
         if (generation !== conflictGeneration) return "";
         asking = null;
         askNext();
+        // the last question answered: finish the batch (unless Replace
+        // queued an upload, which finishes it in turn)
+        processUploads();
         return "";
       },
     });
