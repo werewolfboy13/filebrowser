@@ -57,10 +57,23 @@ func TestTusPatchEnforcesUploadLength(t *testing.T) {
 	if rec := patchReq(strings.Repeat("A", 5000)); rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("over-length PATCH expected 413, got %d body=%q", rec.Code, rec.Body.String())
 	}
-	if fi, err := os.Stat(filepath.Join(userScope, "file.txt")); err != nil {
-		t.Fatalf("stat file.txt: %v", err)
-	} else if fi.Size() > 5 {
-		t.Fatalf("wrote %d bytes despite Upload-Length 5", fi.Size())
+	// The upload is collected in a temporary file next to the destination, so
+	// look at everything in the directory.
+	entries, err := os.ReadDir(userScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("the upload left no file on disk")
+	}
+	for _, entry := range entries {
+		fi, err := entry.Info()
+		if err != nil {
+			t.Fatalf("stat %s: %v", entry.Name(), err)
+		}
+		if fi.Size() > 5 {
+			t.Fatalf("wrote %d bytes to %s despite Upload-Length 5", fi.Size(), entry.Name())
+		}
 	}
 
 	// A correctly-sized upload still completes.

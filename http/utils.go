@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/spf13/afero"
+
 	libErrors "github.com/filebrowser/filebrowser/v2/errors"
 	imgErrors "github.com/filebrowser/filebrowser/v2/img"
 )
@@ -72,6 +74,16 @@ func renderJSON(w http.ResponseWriter, _ *http.Request, data interface{}) (int, 
 	}
 
 	return 0, nil
+}
+
+// lstatPath stats name without following a final symlink, where the
+// filesystem can.
+func lstatPath(afs afero.Fs, name string) (os.FileInfo, error) {
+	if lstater, ok := afs.(afero.Lstater); ok {
+		info, _, err := lstater.LstatIfPossible(name)
+		return info, err
+	}
+	return afs.Stat(name)
 }
 
 // decodeJSONBody decodes the JSON request body into v, reading at most

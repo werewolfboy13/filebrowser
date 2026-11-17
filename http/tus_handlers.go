@@ -1,11 +1,15 @@
 package fbhttp
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
+	gopath "path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,6 +17,7 @@ import (
 	"time"
 
 	"github.com/filebrowser/filebrowser/v2/files"
+	"github.com/filebrowser/filebrowser/v2/fileutils"
 	"github.com/spf13/afero"
 )
 
@@ -100,6 +105,42 @@ func tusAcquire(d *data, r *http.Request) (release func(), ok bool) {
 // web interface retries it.
 var errTusBusy = errors.New("another request for this upload is in progress")
 
+// tusTempPath returns the temporary file the data of an upload to dst is
+// written to until the upload is complete. The name is derived from the name
+// of dst, so that every request of an upload finds it without the upload cache
+// having to carry it, and it has a fixed length, so that it fits wherever the
+// name of dst does.
+func tusTempPath(dst string) string {
+	dir, name := gopath.Split(dst)
+	sum := sha256.Sum256([]byte(name))
+	return dir + fileutils.TempPrefix + "tus-" + hex.EncodeToString(sum[:16])
+}
+
+// tusUploadKey returns the key an upload to dst is registered under in the
+// upload cache: the real path of dst.
+func tusUploadKey(d *data, dst string) string {
+	return (&files.FileInfo{Fs: d.user.Fs, Path: dst}).RealPath()
+}
+
+// tusWritePath returns the file the data of an upload to dst is appended to.
+// That is its temporary file, which takes the place of dst once the upload is
+// complete, so that an upload that is interrupted or abandoned leaves dst
+// untouched. An upload that could not be given a temporary file (see
+// tusPostHandler) writes to dst itself, as every upload used to.
+func tusWritePath(d *data, dst string) (name string, temp bool, err error) {
+	tmp := tusTempPath(dst)
+
+	info, err := lstatPath(d.user.Fs, tmp)
+	switch {
+	case err == nil && info.Mode().IsRegular():
+		return tmp, true, nil
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return "", false, err
+	}
+
+	return dst, false, nil
+}
+
 func tusPostHandler(cache UploadCache) handleFunc {
 	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		if !d.user.Perm.Create || !d.Check(r.URL.Path) {
@@ -134,10 +175,9 @@ func tusPostHandler(cache UploadCache) handleFunc {
 			return errToStatus(err), err
 		}
 
-		fileFlags := os.O_CREATE | os.O_WRONLY
-
 		// if file exists
-		if file != nil {
+		exists := file != nil
+		if exists {
 			if file.IsDir {
 				return http.StatusBadRequest, fmt.Errorf("cannot upload to a directory %s", r.URL.Path)
 			}
@@ -151,48 +191,98 @@ func tusPostHandler(cache UploadCache) handleFunc {
 			if !d.user.Perm.Modify {
 				return http.StatusForbidden, nil
 			}
-
-			fileFlags |= os.O_TRUNC
 		}
 
-		openFile, err := d.user.Fs.OpenFile(r.URL.Path, fileFlags, d.settings.FileMode)
-		if err != nil {
-			return errToStatus(err), err
-		}
-		defer openFile.Close()
-
-		file, err = files.NewFileInfo(&files.FileOptions{
-			Fs:         d.user.Fs,
-			Path:       r.URL.Path,
-			Modify:     d.user.Perm.Modify,
-			Expand:     false,
-			ReadHeader: false,
-			Checker:    d,
-			Content:    false,
-		})
-		if err != nil {
-			return errToStatus(err), err
+		// The destination of an upload in progress does not exist yet, so the
+		// check above does not see it. A second upload to the same path would
+		// start the first one over; without override it is a conflict, as it
+		// was when the destination was created up front.
+		uploadKey := tusUploadKey(d, r.URL.Path)
+		if !exists && r.URL.Query().Get("override") != "true" {
+			if _, cacheErr := cache.GetLength(uploadKey); cacheErr == nil {
+				if _, temp, _ := tusWritePath(d, r.URL.Path); temp {
+					return http.StatusConflict, nil
+				}
+			}
 		}
 
+		// Validated before anything is touched: a request that is refused must
+		// not have created or emptied a file on its way.
 		uploadLength, err := getUploadLength(r)
 		if err != nil || uploadLength < 0 {
 			return http.StatusBadRequest, fmt.Errorf("invalid upload length: %w", err)
 		}
 
-		// Enables the user to utilize the PATCH endpoint for uploading file data.
-		// The removal callback deletes an abandoned upload through the user's
-		// scoped filesystem, so eviction cannot follow a symlink out of scope.
-		uploadPath := r.URL.Path
-		cache.Register(file.RealPath(), uploadLength, func() error {
-			return d.user.Fs.Remove(uploadPath)
-		})
+		sweepStaleUploads(d, r.URL.Path)
+
+		// The data is collected in a temporary file next to the destination,
+		// which is left alone until the upload is complete. Truncating the
+		// destination here, as this handler used to, destroyed the original
+		// as soon as an overwrite began, and the cleanup of an abandoned
+		// upload then deleted it, whether or not the user may delete files.
+		//
+		// Where replacing the destination with another file would change more
+		// than its content (it is a symbolic link or not a regular file), or
+		// where the directory takes no new file, the upload writes to the
+		// destination directly, as before.
+		tmp := tusTempPath(r.URL.Path)
+		direct := exists && (file.IsSymlink || !file.Mode.IsRegular())
+		if !direct {
+			tmpFile, tmpErr := d.user.Fs.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, d.settings.FileMode)
+			if tmpErr != nil {
+				direct = true
+			} else {
+				_ = tmpFile.Close()
+			}
+		}
+
+		if direct {
+			// A temporary file left by an earlier upload to this path would
+			// be taken for this one's.
+			_ = d.user.Fs.Remove(tmp)
+
+			fileFlags := os.O_CREATE | os.O_WRONLY
+			if exists {
+				fileFlags |= os.O_TRUNC
+			}
+			openFile, openErr := d.user.Fs.OpenFile(r.URL.Path, fileFlags, d.settings.FileMode)
+			if openErr != nil {
+				return errToStatus(openErr), openErr
+			}
+			_ = openFile.Close()
+		}
 
 		basePath := "/" + strings.Trim(strings.TrimSpace(d.server.BaseURL), "/")
 		if basePath == "/" {
 			basePath = ""
 		}
-
 		w.Header().Set("Location", basePath+"/api/tus"+r.URL.EscapedPath())
+
+		// An empty upload is complete as it is: no PATCH follows.
+		if uploadLength == 0 {
+			if !direct {
+				if err := fileutils.ReplaceWithTemp(d.user.Fs, tmp, r.URL.Path, d.settings.FileMode); err != nil {
+					return errToStatus(err), err
+				}
+			}
+			return http.StatusCreated, nil
+		}
+
+		// Enables the user to utilize the PATCH endpoint for uploading file data.
+		// The removal callback deletes an abandoned upload through the user's
+		// scoped filesystem, so eviction cannot follow a symlink out of scope.
+		// It only ever removes what this upload created: its temporary file,
+		// or the destination when that did not exist before.
+		var remove func() error
+		switch {
+		case !direct:
+			remove = func() error { return d.user.Fs.Remove(tmp) }
+		case !exists:
+			uploadPath := r.URL.Path
+			remove = func() error { return d.user.Fs.Remove(uploadPath) }
+		}
+		cache.Register(uploadKey, uploadLength, remove)
+
 		return http.StatusCreated, nil
 	})
 }
@@ -204,24 +294,22 @@ func tusHeadHandler(cache UploadCache) handleFunc {
 			return http.StatusForbidden, nil
 		}
 
-		file, err := files.NewFileInfo(&files.FileOptions{
-			Fs:         d.user.Fs,
-			Path:       r.URL.Path,
-			Modify:     d.user.Perm.Modify,
-			Expand:     false,
-			ReadHeader: d.server.TypeDetectionByHeader,
-			Checker:    d,
-		})
+		writePath, _, err := tusWritePath(d, r.URL.Path)
 		if err != nil {
 			return errToStatus(err), err
 		}
 
-		uploadLength, err := cache.GetLength(file.RealPath())
+		info, err := d.user.Fs.Stat(writePath)
+		if err != nil {
+			return errToStatus(err), err
+		}
+
+		uploadLength, err := cache.GetLength(tusUploadKey(d, r.URL.Path))
 		if err != nil {
 			return http.StatusNotFound, err
 		}
 
-		w.Header().Set("Upload-Offset", strconv.FormatInt(file.Size, 10))
+		w.Header().Set("Upload-Offset", strconv.FormatInt(info.Size(), 10))
 		w.Header().Set("Upload-Length", strconv.FormatInt(uploadLength, 10))
 
 		return http.StatusOK, nil
@@ -264,23 +352,21 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 	}
 	defer release()
 
-	file, err := files.NewFileInfo(&files.FileOptions{
-		Fs:         d.user.Fs,
-		Path:       r.URL.Path,
-		Modify:     d.user.Perm.Modify,
-		Expand:     false,
-		ReadHeader: d.server.TypeDetectionByHeader,
-		Checker:    d,
-	})
+	writePath, temp, err := tusWritePath(d, r.URL.Path)
+	if err != nil {
+		return errToStatus(err), err
+	}
 
+	info, err := d.user.Fs.Stat(writePath)
 	switch {
-	case errors.Is(err, afero.ErrFileNotFound):
+	case errors.Is(err, fs.ErrNotExist):
 		return http.StatusNotFound, nil
 	case err != nil:
 		return errToStatus(err), err
 	}
 
-	uploadLength, err := cache.GetLength(file.RealPath())
+	uploadKey := tusUploadKey(d, r.URL.Path)
+	uploadLength, err := cache.GetLength(uploadKey)
 	if err != nil {
 		return http.StatusNotFound, err
 	}
@@ -290,13 +376,13 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 	}
 
 	// Prevent the upload from being evicted during the transfer
-	stop := keepUploadActive(cache, file.RealPath())
+	stop := keepUploadActive(cache, uploadKey)
 	defer stop()
 
 	switch {
-	case file.IsDir:
+	case info.IsDir():
 		return http.StatusBadRequest, fmt.Errorf("cannot upload to a directory %s", r.URL.Path)
-	case file.Size != uploadOffset:
+	case info.Size() != uploadOffset:
 		return http.StatusConflict, fmt.Errorf(
 			"%s file size doesn't match the provided offset: %d",
 			r.URL.Path,
@@ -304,7 +390,7 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 		)
 	}
 
-	openFile, err := d.user.Fs.OpenFile(r.URL.Path, os.O_WRONLY|os.O_APPEND, d.settings.FileMode)
+	openFile, err := d.user.Fs.OpenFile(writePath, os.O_WRONLY|os.O_APPEND, d.settings.FileMode)
 	if err != nil {
 		return http.StatusInternalServerError, fmt.Errorf("could not open file: %w", err)
 	}
@@ -348,32 +434,44 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 	w.Header().Set("Upload-Offset", strconv.FormatInt(newOffset, 10))
 
 	if newOffset >= uploadLength {
-		cache.Complete(file.RealPath())
+		if temp {
+			// The upload is complete: only now does it take the place of the
+			// destination. The file has to be closed before it can be renamed
+			// on Windows.
+			if err := openFile.Close(); err != nil {
+				return http.StatusInternalServerError, fmt.Errorf("could not close file: %w", err)
+			}
+			if err := fileutils.ReplaceWithTemp(d.user.Fs, writePath, r.URL.Path, d.settings.FileMode); err != nil {
+				return http.StatusInternalServerError, fmt.Errorf("could not store the upload: %w", err)
+			}
+		}
+
+		cache.Complete(uploadKey)
 		_ = d.RunHook(func() error { return nil }, "upload", r.URL.Path, "", d.user)
 	}
 
 	return http.StatusNoContent, nil
 }
 
+// tusDeleteHandler cancels an upload in progress. It discards what the upload
+// has written so far, which is its temporary file; the destination is only
+// removed when the upload was writing to it directly.
 func tusDeleteHandler(cache UploadCache) handleFunc {
 	return withUser(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		if r.URL.Path == "/" || !d.user.Perm.Delete {
 			return http.StatusForbidden, nil
 		}
+		if !d.Check(r.URL.Path) {
+			return http.StatusForbidden, nil
+		}
 
-		file, err := files.NewFileInfo(&files.FileOptions{
-			Fs:         d.user.Fs,
-			Path:       r.URL.Path,
-			Modify:     d.user.Perm.Modify,
-			Expand:     false,
-			ReadHeader: d.server.TypeDetectionByHeader,
-			Checker:    d,
-		})
+		writePath, _, err := tusWritePath(d, r.URL.Path)
 		if err != nil {
 			return errToStatus(err), err
 		}
 
-		_, err = cache.GetLength(file.RealPath())
+		uploadKey := tusUploadKey(d, r.URL.Path)
+		_, err = cache.GetLength(uploadKey)
 		if err != nil {
 			return http.StatusNotFound, err
 		}
@@ -384,12 +482,12 @@ func tusDeleteHandler(cache UploadCache) handleFunc {
 		}
 		defer release()
 
-		err = d.user.Fs.RemoveAll(r.URL.Path)
-		if err != nil {
+		err = d.user.Fs.Remove(writePath)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return errToStatus(err), err
 		}
 
-		cache.Complete(file.RealPath())
+		cache.Complete(uploadKey)
 
 		return http.StatusNoContent, nil
 	})
