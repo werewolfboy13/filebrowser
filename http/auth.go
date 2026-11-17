@@ -210,6 +210,10 @@ var signupHandler = func(w http.ResponseWriter, r *http.Request, d *data) (int, 
 		Username: info.Username,
 	}
 
+	if err := user.ValidateLengths("Username"); err != nil {
+		return http.StatusBadRequest, err
+	}
+
 	d.settings.Defaults.Apply(user)
 
 	// Users signed up via the signup handler should never become admins, even

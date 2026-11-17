@@ -3,7 +3,6 @@ package fbhttp
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -176,8 +175,8 @@ var sharePostHandler = withPermShare(func(w http.ResponseWriter, r *http.Request
 	var s *share.Link
 	var body share.CreateBody
 	if r.Body != nil {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			return http.StatusBadRequest, fmt.Errorf("failed to decode body: %w", err)
+		if status, err := decodeJSONBody(w, r, &body); err != nil {
+			return status, fmt.Errorf("failed to decode body: %w", err)
 		}
 		defer r.Body.Close()
 	}

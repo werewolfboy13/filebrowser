@@ -1,6 +1,7 @@
 package users
 
 import (
+	"fmt"
 	"path/filepath"
 
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
@@ -93,6 +94,65 @@ func (u *User) Clean(baseScope string, followExternalSymlinks bool, fields ...st
 		scope := u.Scope
 		scope = filepath.Join(baseScope, filepath.Join("/", scope))
 		u.Fs = files.NewFs(afero.NewOsFs(), scope, followExternalSymlinks)
+	}
+
+	return nil
+}
+
+// Length limits, in bytes, for the text fields of a user. Locale, ViewMode,
+// AceEditorTheme and Sorting.By can be set by users on their own account, and
+// together with Username they are copied into every token and user listing,
+// so they are kept short.
+const (
+	MaxUsernameLength   = 256
+	MaxPreferenceLength = 64
+	MaxScopeLength      = 4096
+)
+
+// validatableFields are the fields ValidateLengths checks by default.
+var validatableFields = []string{
+	"Username",
+	"Scope",
+	"Locale",
+	"ViewMode",
+	"AceEditorTheme",
+	"Sorting",
+}
+
+// ValidateLengths reports whether the given fields (all of them, when none is
+// given) are within their length limits. It is meant for input that is about
+// to be stored, and is deliberately separate from Clean: Clean also runs when
+// a user is read, where a record written before these limits existed must
+// keep loading.
+func (u *User) ValidateLengths(fields ...string) error {
+	if len(fields) == 0 {
+		fields = validatableFields
+	}
+
+	for _, field := range fields {
+		var value string
+		limit := MaxPreferenceLength
+
+		switch field {
+		case "Username":
+			value, limit = u.Username, MaxUsernameLength
+		case "Scope":
+			value, limit = u.Scope, MaxScopeLength
+		case "Locale":
+			value = u.Locale
+		case "ViewMode":
+			value = string(u.ViewMode)
+		case "AceEditorTheme":
+			value = u.AceEditorTheme
+		case "Sorting":
+			value = u.Sorting.By
+		default:
+			continue
+		}
+
+		if len(value) > limit {
+			return fmt.Errorf("%s: %w (at most %d bytes)", field, fberrors.ErrFieldTooLong, limit)
+		}
 	}
 
 	return nil

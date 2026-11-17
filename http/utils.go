@@ -74,6 +74,26 @@ func renderJSON(w http.ResponseWriter, _ *http.Request, data interface{}) (int, 
 	return 0, nil
 }
 
+// decodeJSONBody decodes the JSON request body into v, reading at most
+// maxAuthBodySize bytes of it. It returns the status to answer with when the
+// body cannot be used: 413 when it is larger than the limit, 400 otherwise.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, v interface{}) (int, error) {
+	if r.Body == nil {
+		return http.StatusBadRequest, libErrors.ErrEmptyRequest
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodySize)
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return http.StatusRequestEntityTooLarge, err
+		}
+		return http.StatusBadRequest, err
+	}
+
+	return 0, nil
+}
+
 func errToStatus(err error) int {
 	switch {
 	case err == nil:

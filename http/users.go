@@ -1,7 +1,6 @@
 package fbhttp
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -38,28 +37,25 @@ func getUserID(r *http.Request) (uint, error) {
 	return uint(i), err
 }
 
-func getUser(_ http.ResponseWriter, r *http.Request) (*modifyUserRequest, error) {
-	if r.Body == nil {
-		return nil, fberrors.ErrEmptyRequest
-	}
-
+// getUser decodes a user create or update request. On failure it returns the
+// status to answer with.
+func getUser(w http.ResponseWriter, r *http.Request) (*modifyUserRequest, int, error) {
 	req := &modifyUserRequest{}
-	err := json.NewDecoder(r.Body).Decode(req)
-	if err != nil {
-		return nil, err
+	if status, err := decodeJSONBody(w, r, req); err != nil {
+		return nil, status, err
 	}
 
 	if req.What != "user" {
-		return nil, fberrors.ErrInvalidDataType
+		return nil, http.StatusBadRequest, fberrors.ErrInvalidDataType
 	}
 
 	// Every caller goes on to read the user object, so a request without one
 	// is refused here instead of being dereferenced there.
 	if req.Data == nil {
-		return nil, fberrors.ErrEmptyRequest
+		return nil, http.StatusBadRequest, fberrors.ErrEmptyRequest
 	}
 
-	return req, nil
+	return req, 0, nil
 }
 
 func withSelfOrAdmin(fn handleFunc) handleFunc {
@@ -112,17 +108,13 @@ var userGetHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 	return renderJSON(w, r, u)
 })
 
-var userDeleteHandler = withSelfOrAdmin(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
-	if r.Body == nil {
-		return http.StatusBadRequest, fberrors.ErrEmptyRequest
-	}
-
+var userDeleteHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	var body struct {
 		CurrentPassword string `json:"current_password"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		return http.StatusBadRequest, err
+	if status, err := decodeJSONBody(w, r, &body); err != nil {
+		return status, err
 	}
 
 	if d.settings.AuthMethod == auth.MethodJSONAuth {
@@ -140,9 +132,9 @@ var userDeleteHandler = withSelfOrAdmin(func(_ http.ResponseWriter, r *http.Requ
 })
 
 var userPostHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
-	req, err := getUser(w, r)
+	req, status, err := getUser(w, r)
 	if err != nil {
-		return http.StatusBadRequest, err
+		return status, err
 	}
 
 	if d.settings.AuthMethod == auth.MethodJSONAuth {
@@ -169,6 +161,10 @@ var userPostHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *
 	}
 
 	if err := rules.Validate(req.Data.Rules); err != nil {
+		return http.StatusBadRequest, err
+	}
+
+	if err := req.Data.ValidateLengths(); err != nil {
 		return http.StatusBadRequest, err
 	}
 
@@ -240,9 +236,9 @@ func userUpdateFields(which []string) (fields []string, all bool, err error) {
 }
 
 var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
-	req, err := getUser(w, r)
+	req, status, err := getUser(w, r)
 	if err != nil {
-		return http.StatusBadRequest, err
+		return status, err
 	}
 
 	fields, all, err := userUpdateFields(req.Which)
@@ -281,6 +277,11 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 		if err := rules.Validate(req.Data.Rules); err != nil {
 			return http.StatusBadRequest, err
 		}
+	}
+
+	// With no fields named, every field is stored and so every one is checked.
+	if err := req.Data.ValidateLengths(fields...); err != nil {
+		return http.StatusBadRequest, err
 	}
 
 	if all {
