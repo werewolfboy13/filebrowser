@@ -7,7 +7,8 @@ export const useAuthStore = defineStore("auth", {
   state: (): {
     user: IUser | null;
     jwt: string;
-    logoutTimer: number | null;
+    // cancels the inactivity logout of the current token
+    logoutTimer: (() => void) | null;
   } => ({
     user: null,
     jwt: "",
@@ -39,7 +40,8 @@ export const useAuthStore = defineStore("auth", {
     clearUser() {
       this.$reset();
     },
-    setLogoutTimer(logoutTimer: number | null) {
+    setLogoutTimer(logoutTimer: (() => void) | null) {
+      this.logoutTimer?.();
       this.logoutTimer = logoutTimer;
     },
   },

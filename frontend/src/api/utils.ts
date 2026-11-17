@@ -131,20 +131,28 @@ export function createURL(endpoint: string, searchParams = {}): string {
   return url.toString();
 }
 
-export function setSafeTimeout(callback: () => void, delay: number): number {
+// setTimeout for delays longer than browsers allow (about 24.8 days; a
+// longer delay fires at once): waits in steps of at most 24 hours. Returns
+// a function that cancels it, whichever step it is at.
+export function setSafeTimeout(
+  callback: () => void,
+  delay: number
+): () => void {
   const MAX_DELAY = 86_400_000;
   let remaining = delay;
+  let id: number;
 
-  function scheduleNext(): number {
+  function scheduleNext() {
     if (remaining <= MAX_DELAY) {
-      return window.setTimeout(callback, remaining);
+      id = window.setTimeout(callback, remaining);
     } else {
-      return window.setTimeout(() => {
+      id = window.setTimeout(() => {
         remaining -= MAX_DELAY;
         scheduleNext();
       }, MAX_DELAY);
     }
   }
 
-  return scheduleNext();
+  scheduleNext();
+  return () => window.clearTimeout(id);
 }

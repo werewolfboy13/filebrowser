@@ -35,10 +35,6 @@ export function parseToken(token: string) {
     return;
   }
 
-  if (authStore.logoutTimer) {
-    clearTimeout(authStore.logoutTimer);
-  }
-
   const expiresAt = new Date(data.exp! * 1000);
   const timeout = expiresAt.getTime() - Date.now();
   authStore.setLogoutTimer(
@@ -152,6 +148,9 @@ export function logout(reason?: string) {
   setAuthCookie("", " Max-Age=0;");
 
   const authStore = useAuthStore();
+  // $reset() would forget the inactivity timer without stopping it, and it
+  // would log out whoever logs in next on this tab.
+  authStore.setLogoutTimer(null);
   authStore.clearUser();
 
   localStorage.setItem("jwt", "");
