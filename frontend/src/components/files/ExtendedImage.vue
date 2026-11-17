@@ -10,7 +10,12 @@
     @mouseup="mouseUp"
     @wheel="wheelMove"
   >
-    <img class="image-ex-img image-ex-img-center" ref="imgex" @load="onLoad" />
+    <img
+      class="image-ex-img image-ex-img-center"
+      ref="imgex"
+      @load="onLoad"
+      @error="emit('error')"
+    />
   </div>
 </template>
 <script setup lang="ts">
@@ -24,6 +29,9 @@ interface IProps {
   classList?: any[];
   zoomStep?: number;
 }
+
+// the image could not be loaded (e.g. the server refused to make a preview)
+const emit = defineEmits<{ error: [] }>();
 
 const props = withDefaults(defineProps<IProps>(), {
   moveDisabledTime: () => 200,

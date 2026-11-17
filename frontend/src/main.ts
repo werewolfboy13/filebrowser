@@ -12,6 +12,7 @@ import router from "@/router";
 import i18n, { isRtl } from "@/i18n";
 import App from "@/App.vue";
 import CustomToast from "@/components/CustomToast.vue";
+import { lazyloadOptions } from "@/utils/lazyload";
 import { statusMessage } from "@/utils/errors";
 
 import dayjs from "dayjs";
@@ -31,7 +32,7 @@ const pinia = createPinia(router);
 const app = createApp(App);
 
 app.component(VueNumberInput.name || "vue-number-input", VueNumberInput);
-app.use(VueLazyload);
+app.use(VueLazyload, lazyloadOptions);
 app.use(Toast, {
   transition: "Vue-Toastification__bounce",
   maxToasts: 10,

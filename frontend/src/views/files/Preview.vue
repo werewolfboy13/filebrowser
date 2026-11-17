@@ -104,9 +104,19 @@
           </div>
         </div>
         <CsvViewer v-else-if="isCsv" :content="csvContent" :error="csvError" />
+        <div
+          v-else-if="fileStore.req?.type == 'image' && imageUnavailable"
+          class="info"
+        >
+          <div class="title">
+            <i class="material-icons">feedback</i>
+            {{ $t("files.noPreview") }}
+          </div>
+        </div>
         <ExtendedImage
           v-else-if="fileStore.req?.type == 'image'"
           :src="previewUrl"
+          @error="imageFailed"
         />
         <audio
           v-else-if="fileStore.req?.type == 'audio'"
@@ -267,6 +277,11 @@ const previousRaw = ref<string>("");
 const nextRaw = ref<string>("");
 const csvContent = ref<ArrayBuffer | string>("");
 const csvError = ref<string>("");
+// The big preview of the image could not be loaded: the server refuses to
+// scale an image beyond its size limit (413). Show the original instead,
+// if the user may download it, or say there is no preview.
+const bigFailed = ref<boolean>(false);
+const imageUnavailable = ref<boolean>(false);
 
 const player = ref<HTMLVideoElement | HTMLAudioElement | null>(null);
 
@@ -298,7 +313,7 @@ const previewUrl = computed(() => {
     return "";
   }
 
-  if (fileStore.req.type === "image" && !fullSize.value) {
+  if (fileStore.req.type === "image" && !fullSize.value && !bigFailed.value) {
     return api.getPreviewURL(fileStore.req, "big");
   }
 
@@ -414,6 +429,8 @@ const key = (event: KeyboardEvent) => {
   }
 };
 const updatePreview = async () => {
+  bigFailed.value = false;
+  imageUnavailable.value = false;
   if (player.value && player.value.paused && !player.value.ended) {
     autoPlay.value = false;
   }
@@ -475,6 +492,14 @@ const updatePreview = async () => {
   }
 };
 
+const imageFailed = () => {
+  if (!fullSize.value && !bigFailed.value && authStore.user?.perm.download) {
+    bigFailed.value = true;
+  } else {
+    imageUnavailable.value = true;
+  }
+};
+
 const prefetchUrl = (item: ResourceItem) => {
   if (item.type !== "image") {
     return "";
@@ -485,7 +510,10 @@ const prefetchUrl = (item: ResourceItem) => {
     : api.getPreviewURL(item, "big");
 };
 
-const toggleSize = () => (fullSize.value = !fullSize.value);
+const toggleSize = () => {
+  fullSize.value = !fullSize.value;
+  imageUnavailable.value = false;
+};
 
 const toggleNavigation = throttle(function () {
   showNav.value = true;

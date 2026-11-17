@@ -25,9 +25,10 @@
   >
     <div>
       <img
-        v-if="!readOnly && type === 'image' && isThumbsEnabled"
+        v-if="!readOnly && type === 'image' && isThumbsEnabled && !thumbFailed"
         v-lazy="thumbnailUrl"
         :alt="name"
+        @error="thumbFailed = true"
       />
       <i v-else class="material-icons"></i>
     </div>
@@ -60,7 +61,7 @@ import {
   isOwnListingDrag,
   startListingDrag,
 } from "@/utils/dragdrop";
-import { computed, inject, ref } from "vue";
+import { computed, inject, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 const touches = ref<number>(0);
@@ -112,6 +113,10 @@ const canDrop = computed(() => {
   return true;
 });
 
+// The server could not make a thumbnail (e.g. an image too large to
+// process): show the icon instead of a blank or broken image.
+const thumbFailed = ref<boolean>(false);
+
 const thumbnailUrl = computed(() => {
   const file = {
     path: props.path,
@@ -120,6 +125,8 @@ const thumbnailUrl = computed(() => {
 
   return api.getPreviewURL(file as Resource, "thumb");
 });
+
+watch(thumbnailUrl, () => (thumbFailed.value = false));
 
 const isThumbsEnabled = computed(() => {
   return enableThumbs;
