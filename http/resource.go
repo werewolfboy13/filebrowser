@@ -152,8 +152,15 @@ func resourcePostHandler(fileCache FileCache) handleFunc {
 			ReadHeader: d.server.TypeDetectionByHeader,
 			Checker:    d,
 		})
+		// Anything but a clean "not found" means something may already be at
+		// the path, so the failure cleanup below must leave it alone.
+		created := errors.Is(err, fs.ErrNotExist)
 		if err == nil {
-			if r.URL.Query().Get("override") != "true" {
+			// An existing directory is never something an upload can replace.
+			// Refusing it here also keeps it away from the failure cleanup
+			// below, which is gated by neither the Delete permission nor the
+			// rules on what the directory contains.
+			if file.IsDir || r.URL.Query().Get("override") != "true" {
 				return http.StatusConflict, nil
 			}
 
@@ -179,8 +186,10 @@ func resourcePostHandler(fileCache FileCache) handleFunc {
 			return nil
 		}, "upload", r.URL.Path, "", d.user)
 
-		if err != nil {
-			_ = d.user.Fs.RemoveAll(r.URL.Path)
+		// Clean up only a partial file this request created, and never
+		// recursively: whatever was at the path before is not ours to remove.
+		if err != nil && created {
+			_ = d.user.Fs.Remove(r.URL.Path)
 		}
 
 		return errToStatus(err), err
