@@ -373,6 +373,7 @@ import { storeToRefs } from "pinia";
 import { removePrefix } from "@/api/utils";
 import { isListingDrag } from "@/utils/dragdrop";
 import { withTrailingSlash } from "@/utils/url";
+import { isTypingTarget } from "@/utils/keyboard";
 
 const showLimit = ref<number>(50);
 const columnWidth = ref<number>(280);
@@ -556,6 +557,12 @@ const base64 = (name: string) => Base64.encodeURI(name);
 const keyEvent = (event: KeyboardEvent) => {
   // No prompts are shown
   if (layoutStore.currentPrompt !== null) {
+    return;
+  }
+
+  // Keys typed into a text field (e.g. the command shell) are not
+  // shortcuts for the files.
+  if (isTypingTarget(event.target)) {
     return;
   }
 

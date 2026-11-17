@@ -199,6 +199,7 @@ import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import type { Rendition } from "epubjs";
 import { getTheme } from "@/utils/theme";
+import { isTypingTarget } from "@/utils/keyboard";
 import { useI18n } from "vue-i18n";
 
 // CSV file size limit for preview (5MB)
@@ -379,6 +380,11 @@ const next = () => {
 
 const key = (event: KeyboardEvent) => {
   if (layoutStore.currentPrompt !== null) {
+    return;
+  }
+  // Keys typed into a text field (e.g. the command shell, which stays open
+  // over the preview) must not switch or close the preview.
+  if (isTypingTarget(event.target)) {
     return;
   }
   // Keys already handled inside the page must not also close the preview or

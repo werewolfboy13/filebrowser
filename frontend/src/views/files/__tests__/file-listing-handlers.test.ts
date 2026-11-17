@@ -240,3 +240,84 @@ describe("paste destination does not depend on a trailing slash", () => {
     );
   });
 });
+
+// The listing's window keydown handler acted on Delete / F2 / Ctrl+A /
+// Ctrl+C / Ctrl+X / Ctrl+V even when the key was typed into a text field
+// outside a prompt, most notably the command shell (a contenteditable
+// <pre>): Delete opened the delete dialog with its red button focused, so
+// the next Enter deleted the selection; Ctrl+A selected every file; Ctrl+V
+// after an earlier Ctrl+X moved files without a prompt.
+describe("listing shortcuts ignore keys typed into text fields", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stubBrowser();
+    harness.routePath = "/files/docs/";
+    harness.fileStore.req.items = [
+      { index: 0, name: "a.txt", url: "/files/docs/a.txt", isDir: false },
+      { index: 1, name: "b.txt", url: "/files/docs/b.txt", isDir: false },
+    ];
+    harness.fileStore.selected = [0];
+    harness.fileStore.selectedCount = 1;
+    harness.clipboard.key = "x";
+    harness.clipboard.path = "/files/inbox/";
+    harness.clipboard.items = [
+      {
+        from: "/files/inbox/report.pdf",
+        name: "report.pdf",
+        size: 1,
+        isDir: false,
+        modified: "",
+      },
+    ];
+  });
+
+  const targets = {
+    "the command shell": { tagName: "PRE", isContentEditable: true },
+    "a textarea": { tagName: "TEXTAREA", isContentEditable: false },
+    "an input": { tagName: "INPUT", isContentEditable: false },
+    "a select": { tagName: "SELECT", isContentEditable: false },
+  };
+  const key = (k: string, target: object, extra: object = {}) => ({
+    key: k,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    target,
+    preventDefault: vi.fn(),
+    ...extra,
+  });
+
+  for (const [where, target] of Object.entries(targets)) {
+    it(`Delete and F2 typed in ${where} open no dialog`, () => {
+      const { keyEvent } = setup();
+      keyEvent(key("Delete", target));
+      keyEvent(key("F2", target));
+      console.log(
+        "showHover calls:",
+        JSON.stringify(harness.showHover.mock.calls)
+      );
+      expect(harness.showHover).not.toHaveBeenCalled();
+    });
+
+    it(`Ctrl+A typed in ${where} does not select every file`, () => {
+      harness.fileStore.selected = [];
+      setup().keyEvent(key("a", target, { ctrlKey: true }));
+      expect(harness.fileStore.selected).toEqual([]);
+    });
+
+    it(`Ctrl+V / Ctrl+X typed in ${where} do not touch the file clipboard`, async () => {
+      const { keyEvent } = setup();
+      keyEvent(key("v", target, { ctrlKey: true }));
+      keyEvent(key("x", target, { ctrlKey: true }));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(harness.move).not.toHaveBeenCalled();
+      expect(harness.copy).not.toHaveBeenCalled();
+      expect(harness.clipboard.$patch).not.toHaveBeenCalled();
+    });
+  }
+
+  it("control: Delete on the page opens the delete dialog", () => {
+    setup().keyEvent(key("Delete", { tagName: "BODY" }));
+    expect(harness.showHover).toHaveBeenCalledWith("delete");
+  });
+});
