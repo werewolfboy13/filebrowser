@@ -1,7 +1,24 @@
-.venv
-dist
+# Version control, CI and editor files
+.git
+.github
+.claude
 .idea
+.vscode
+.venv
+.DS_Store
+
+# Not part of the build
+docs
+*.md
+Dockerfile*
+compose.yaml
+.dockerignore
+
+# Build output and local data. The image builds the client itself and copies it to frontend/dist.
+dist
+filebrowser
+filebrowser.exe
+*.db
 frontend/node_modules
 frontend/dist
-filebrowser.db
-docs/index.md
+frontend/test-results

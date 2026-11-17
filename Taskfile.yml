@@ -18,6 +18,16 @@ tasks:
       VERSION:
         sh: git describe --tags --abbrev=0 --match=v* | cut -c 2-
 
+  build:docker:
+    desc: Build the Docker image, which builds and tests frontend and backend itself
+    cmds:
+      - docker build --build-arg VERSION={{.VERSION}} --build-arg GIT_SHA={{.GIT_COMMIT}} -t filebrowser .
+    vars:
+      GIT_COMMIT:
+        sh: git log -n 1 --format=%h
+      VERSION:
+        sh: git describe --tags --abbrev=0 --match=v* | cut -c 2-
+
   build:
     desc: Build both frontend and backend
     cmds:
