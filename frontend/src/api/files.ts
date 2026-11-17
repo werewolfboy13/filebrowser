@@ -1,7 +1,7 @@
 import { useAuthStore } from "@/stores/auth";
 import { useLayoutStore } from "@/stores/layout";
 import { baseURL } from "@/utils/constants";
-import { upload as postTus, useTus } from "./tus";
+import { upload as postTus, UploadError, useTus } from "./tus";
 import { createURL, fetchURL, removePrefix, StatusError } from "./utils";
 import { isEncodableResponse, makeRawResource } from "@/utils/encodings";
 
@@ -186,10 +186,16 @@ async function postResources(
     request.onload = () => {
       if (request.status === 200) {
         resolve(request.responseText);
-      } else if (request.status === 409) {
-        reject(new Error(request.status.toString()));
       } else {
-        reject(new Error(request.responseText));
+        // with the status, like a failed tus upload: a 409 (the file
+        // exists) lets the upload store offer to replace it
+        reject(
+          new UploadError(
+            request.responseText || `${request.status}`,
+            request.status,
+            "POST"
+          )
+        );
       }
     };
 

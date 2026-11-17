@@ -134,6 +134,23 @@ describe("tus uploads and the session token (real tus-js-client, jsdom XHR)", ()
     expect(await send()).toBe("resolved");
   });
 
+  it("a create answered 409 is not retried and fails with status and method", async () => {
+    server.once((r) =>
+      r.method === "POST" ? { status: 409, body: "409 Conflict" } : undefined
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = await (
+      tus.upload(
+        "/files/c.bin",
+        new Blob(["x"]),
+        false,
+        () => {}
+      ) as Promise<unknown>
+    ).catch((e) => e);
+    expect([err.status, err.method]).toEqual([409, "POST"]);
+    expect(server.seen.map((r) => r.method)).toEqual(["POST"]);
+  });
+
   it("the terminate request sent on abort carries the token once", async () => {
     server.onRequest = (r) => {
       if (r.method === "PATCH") {

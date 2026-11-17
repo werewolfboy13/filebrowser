@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { useFileStore } from "./file";
+import { useLayoutStore } from "./layout";
 import { files as api } from "@/api";
 import buttons from "@/utils/buttons";
 import { computed, inject, markRaw, ref } from "vue";
@@ -66,6 +67,7 @@ export const useUploadStore = defineStore("upload", () => {
   };
 
   const abort = () => {
+    dropConflicts();
     // Resets the state by preventing the processing of the remaning uploads
     lastUpload.value = Infinity;
     tus.abortAllUploads();
@@ -136,7 +138,12 @@ export const useUploadStore = defineStore("upload", () => {
           .post(upload.path, upload.file!, upload.overwrite, onUpload)
           .catch((err) => {
             succeeded = false;
-            if (err.message !== "Upload aborted") $showError(err);
+            if (err.message === "Upload aborted") return;
+            if (isCreateConflict(err) && !upload.overwrite && upload.file) {
+              askReplace(upload, upload.file);
+              return;
+            }
+            $showError(err);
           });
       }
 
@@ -175,6 +182,83 @@ export const useUploadStore = defineStore("upload", () => {
     for (const upload of activeUploads.value) {
       sentBytes.value += upload.rawProgress.sentBytes - upload.sentBytes;
       upload.sentBytes = upload.rawProgress.sentBytes;
+    }
+  };
+
+  //
+  // CONFLICTS REPORTED ON CREATE
+  //
+  // The conflict dialog checks the listing before an upload starts. The
+  // server can still refuse to create the upload (409 without override):
+  // the file appeared meanwhile, or an unfinished upload to the same path
+  // is pending (see tusPostHandler; its temporary file is not listed).
+  // Ask, one file at a time, whether to replace it or skip it. Replacing
+  // overwrites the file, or starts the pending upload over; it is only
+  // ever done on the user's say-so.
+
+  type Conflict = Pick<Upload, "path" | "name" | "type"> & { file: File };
+  let conflicts: Conflict[] = [];
+  // the question being shown, if any
+  let asking: PopupProps | null = null;
+  // bumped by abort(): answers to questions asked before it are ignored
+  let conflictGeneration = 0;
+
+  const isCreateConflict = (err: any) =>
+    err?.status === 409 && err?.method === "POST";
+
+  const askReplace = (upload: Upload, file: File) => {
+    conflicts.push({
+      path: upload.path,
+      name: upload.name,
+      type: upload.type,
+      file,
+    });
+    askNext();
+  };
+
+  const askNext = () => {
+    if (asking !== null) return;
+    const conflict = conflicts.shift();
+    if (!conflict) return;
+
+    const layoutStore = useLayoutStore();
+    const generation = conflictGeneration;
+    layoutStore.showHover({
+      prompt: "replace",
+      props: {
+        messageKey: "prompts.uploadConflict",
+        messageParams: { name: conflict.name },
+      },
+      confirm: () => {
+        layoutStore.closeHovers();
+        if (generation !== conflictGeneration) return;
+        upload(
+          conflict.path,
+          conflict.name,
+          conflict.file,
+          true,
+          conflict.type
+        );
+      },
+      // runs however the question is closed (Replace, Skip, Cancel, Escape)
+      close: async () => {
+        if (generation !== conflictGeneration) return "";
+        asking = null;
+        askNext();
+        return "";
+      },
+    });
+    asking = layoutStore.prompts[layoutStore.prompts.length - 1];
+  };
+
+  const dropConflicts = () => {
+    conflictGeneration++;
+    conflicts = [];
+    if (asking !== null) {
+      const layoutStore = useLayoutStore();
+      const shown = asking;
+      layoutStore.prompts = layoutStore.prompts.filter((p) => p !== shown);
+      asking = null;
     }
   };
 

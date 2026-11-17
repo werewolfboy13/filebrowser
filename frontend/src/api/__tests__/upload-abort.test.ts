@@ -162,4 +162,16 @@ describe("aborting uploads", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(h.tusUploads).toHaveLength(1);
   });
+  it("a plain POST answered 409 fails with its status, for the replace question", async () => {
+    vi.spyOn(tus, "useTus").mockResolvedValue(false);
+    const p = files
+      .post("/files/x.bin", new Blob(["x"]), false)
+      .catch((e) => e);
+    await new Promise((r) => setTimeout(r, 0));
+    const xhr = h.xhrs[0];
+    Object.assign(xhr, { status: 409, responseText: "409 Conflict" });
+    xhr.onload();
+    const err = await p;
+    expect([err.status, err.method]).toEqual([409, "POST"]);
+  });
 });
