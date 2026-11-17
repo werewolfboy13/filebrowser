@@ -11,9 +11,9 @@ rice-box.go
 .DS_Store
 node_modules
 
-# local env files
-.env.local
-.env.*.local
+# Local environment files, such as the .env file that Compose reads. They hold secrets.
+.env
+.env.*
 
 # Log files
 npm-debug.log*

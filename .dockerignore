@@ -1,24 +1,40 @@
-# Version control, CI and editor files
-.git
-.github
-.claude
-.idea
-.vscode
-.venv
-.DS_Store
+# Only what the build needs is sent to Docker. Everything is left out first, and then the Go
+# module, the server's packages, the web client and the image's default settings are let back in.
+# A new top-level Go package has to be added here: the build fails without it.
+*
+!go.mod
+!go.sum
+!main.go
+!auth
+!cmd
+!diskcache
+!errors
+!files
+!fileutils
+!frontend
+!http
+!img
+!rules
+!runner
+!search
+!settings
+!share
+!storage
+!users
+!version
+!docker/defaults
 
-# Not part of the build
-docs
-*.md
-Dockerfile*
-compose.yaml
-.dockerignore
+# Local files that must not reach a build, wherever they are: secrets such as the .env file that
+# Compose reads, databases, backups, and files that would only make the build run again. These
+# come after the lines above, because the last pattern that matches a file decides.
+**/.env*
+**/*.db
+**/*.db.*
+**/*.bak
+**/.DS_Store
+**/*.md
 
-# Build output and local data. The image builds the client itself and copies it to frontend/dist.
-dist
-filebrowser
-filebrowser.exe
-*.db
-frontend/node_modules
+# Build output. The image installs the client's dependencies and builds the client itself.
+**/node_modules
 frontend/dist
 frontend/test-results
