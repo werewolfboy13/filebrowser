@@ -29,6 +29,13 @@ overrides:
   # DOMParser/parseFromString API epubjs calls, and epubjs only falls back to
   # xmldom when the browser has no native DOMParser/XMLSerializer (or on IE).
   "epubjs>@xmldom/xmldom": ^0.8.15
+  # @vue/test-utils (tests only) depends on js-beautify, whose command-line
+  # entry point pulls in glob 13 and, through editorconfig, minimatch 10,
+  # both with advisories fixed only in the next major. test-utils only calls
+  # js-beautify's html() formatter and never loads that CLI code, and both
+  # majors keep the API it uses (globSync, minimatch()).
+  "js-beautify>glob": ^14.0.2
+  "editorconfig>minimatch": ^11.0.1
 
 auditConfig:
   ignoreGhsas:
