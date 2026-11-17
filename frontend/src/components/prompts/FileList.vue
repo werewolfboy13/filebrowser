@@ -29,7 +29,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useFileStore } from "@/stores/file";
 import { useLayoutStore } from "@/stores/layout";
 
-import url from "@/utils/url";
+import url, { withTrailingSlash } from "@/utils/url";
 import { files } from "@/api";
 import { StatusError } from "@/api/utils.js";
 
@@ -176,7 +176,10 @@ export default {
         },
         props: {
           redirect: false,
-          base: this.current === this.$route.path ? null : this.current,
+          base:
+            this.current === withTrailingSlash(this.$route.path)
+              ? null
+              : this.current,
         },
       });
     },

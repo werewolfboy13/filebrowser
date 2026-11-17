@@ -63,6 +63,7 @@ import { files as api } from "@/api";
 import buttons from "@/utils/buttons";
 import * as upload from "@/utils/upload";
 import { removePrefix } from "@/api/utils";
+import { withTrailingSlash } from "@/utils/url";
 
 export default {
   name: "copy",
@@ -84,6 +85,9 @@ export default {
     copy: async function (event) {
       event.preventDefault();
       const items = [];
+      // the folder being viewed; its URL may lack the trailing slash
+      const intoCurrentFolder =
+        withTrailingSlash(this.$route.path) === this.dest;
 
       // Create a new promise for each file.
       for (const item of this.selected) {
@@ -95,7 +99,7 @@ export default {
           isDir: this.req.items[item].isDir,
           modified: this.req.items[item].modified,
           overwrite: false,
-          rename: this.$route.path === this.dest,
+          rename: intoCurrentFolder,
         });
       }
 
@@ -108,7 +112,7 @@ export default {
             buttons.success("copy");
             this.preselect = removePrefix(items[0].to);
 
-            if (this.$route.path === this.dest) {
+            if (intoCurrentFolder) {
               this.reload = true;
 
               return;

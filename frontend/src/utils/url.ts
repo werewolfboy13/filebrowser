@@ -28,6 +28,12 @@ export function encodeRFC5987ValueChars(str: string) {
   );
 }
 
+// Folder routes can come with or without the trailing slash (/files/docs
+// from a bookmark or a redirect, /files/docs/ from the listing).
+export function withTrailingSlash(path: string) {
+  return path.endsWith("/") ? path : path + "/";
+}
+
 export function encodePath(str: string) {
   return str
     .split("/")
@@ -39,4 +45,5 @@ export default {
   encodeRFC5987ValueChars,
   removeLastDir,
   encodePath,
+  withTrailingSlash,
 };

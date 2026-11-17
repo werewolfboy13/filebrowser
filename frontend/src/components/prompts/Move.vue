@@ -43,7 +43,7 @@
           id="focus-prompt"
           class="button button--flat"
           @click="move"
-          :disabled="$route.path === dest"
+          :disabled="isCurrentFolder"
           :aria-label="$t('buttons.move')"
           :title="$t('buttons.move')"
           tabindex="2"
@@ -65,6 +65,7 @@ import { files as api } from "@/api";
 import buttons from "@/utils/buttons";
 import * as upload from "@/utils/upload";
 import { removePrefix } from "@/api/utils";
+import { withTrailingSlash } from "@/utils/url";
 
 export default {
   name: "move",
@@ -80,6 +81,10 @@ export default {
     ...mapState(useFileStore, ["req", "selected"]),
     ...mapState(useAuthStore, ["user"]),
     ...mapWritableState(useFileStore, ["reload", "preselect"]),
+    // moving into the folder being viewed is a no-op
+    isCurrentFolder() {
+      return withTrailingSlash(this.$route.path) === this.dest;
+    },
     excludedFolders() {
       return this.selected
         .filter((idx) => this.req.items[idx].isDir)

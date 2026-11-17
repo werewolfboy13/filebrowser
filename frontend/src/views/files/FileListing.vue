@@ -372,6 +372,7 @@ import { useI18n } from "vue-i18n";
 import { storeToRefs } from "pinia";
 import { removePrefix } from "@/api/utils";
 import { isListingDrag } from "@/utils/dragdrop";
+import { withTrailingSlash } from "@/utils/url";
 
 const showLimit = ref<number>(50);
 const columnWidth = ref<number>(280);
@@ -646,19 +647,20 @@ const copyCut = (event: Event | KeyboardEvent): void => {
   clipboardStore.$patch({
     key: (event as KeyboardEvent).key,
     items,
-    path: route.path,
+    path: withTrailingSlash(route.path),
   });
 };
 
 const paste = async (event: Event) => {
   if ((event.target as HTMLElement).tagName?.toLowerCase() === "input") return;
 
-  // TODO router location should it be
+  // the folder being viewed; its URL may lack the trailing slash
+  const path = withTrailingSlash(route.path);
   const items: any[] = [];
 
   for (const item of clipboardStore.items) {
     const from = item.from.endsWith("/") ? item.from.slice(0, -1) : item.from;
-    const to = route.path + encodeURIComponent(item.name);
+    const to = path + encodeURIComponent(item.name);
     items.push({
       from,
       to,
@@ -667,7 +669,9 @@ const paste = async (event: Event) => {
       isDir: item.isDir,
       modified: item.modified,
       overwrite: false,
-      rename: clipboardStore.path == route.path,
+      rename:
+        clipboardStore.path !== undefined &&
+        withTrailingSlash(clipboardStore.path) === path,
     });
   }
 
@@ -675,7 +679,7 @@ const paste = async (event: Event) => {
     return;
   }
 
-  const preselect = removePrefix(route.path) + items[0].name;
+  const preselect = removePrefix(path) + items[0].name;
 
   let action = (overwrite?: boolean, rename?: boolean) => {
     api
@@ -700,7 +704,6 @@ const paste = async (event: Event) => {
     };
   }
 
-  const path = route.path.endsWith("/") ? route.path : route.path + "/";
   const conflict = await upload.checkConflict(items, path, true);
 
   if (conflict.length > 0) {
