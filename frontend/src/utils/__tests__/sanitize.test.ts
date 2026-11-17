@@ -54,6 +54,9 @@ describe("markdown preview sanitiser keeps ordinary markdown", () => {
     expect(out).toContain("<math");
     expect(out).toContain("<msup>");
     expect(out).toContain('mathcolor="#cc0000"'); // KaTeX error colour
+    // the TeX source (KaTeX's <annotation>) is not shown next to the formula
+    expect(out).not.toContain("E=mc^2");
+    expect(out).not.toMatch(/<\/mrow>\\notacommand/);
     expect(out).toContain("<details>");
   });
 });
@@ -118,6 +121,23 @@ describe("markdown preview sanitiser removes", () => {
     ],
     ["data-* attributes", '<p data-dir="true">x</p>', /data-dir/],
     ["javascript: links", '<a href="javascript:alert(1)">x</a>', /javascript:/],
+    // the app's CSS pins bare <header> and <nav> to the viewport
+    ["<header>", "<header>Session expired</header>", /<header/],
+    ["<nav>", "<nav>x</nav>", /<nav/],
+    ["<main>", "<main>x</main>", /<main/],
+    ["<aside>", "<aside>x</aside>", /<aside/],
+    ["<footer>", "<footer>x</footer>", /<footer/],
+    ["<section>", "<section>x</section>", /<section/],
+    ["<article>", "<article>x</article>", /<article/],
+    ["<body>", "<body>x</body>", /<body/],
+    ["<object>", '<object data="/x"></object>', /<object/],
+    ["<embed>", '<embed src="/x">', /<embed/],
+    [
+      "<link>",
+      '<link rel="stylesheet" href="https://a.example/x.css">',
+      /<link/,
+    ],
+    ["<marquee>", "<marquee>x</marquee>", /<marquee/],
   ];
   for (const [what, html, bad] of cases) {
     it(what, () => {

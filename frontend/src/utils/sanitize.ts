@@ -11,7 +11,9 @@ import DOMPurify from "dompurify";
 // the app's own scripts and CSS, and remote images track who opened the
 // file. This profile keeps what markdown produces (headings, emphasis,
 // lists and task lists, tables, code, links, same-origin and data: images,
-// <details>, KaTeX's MathML) and drops the rest.
+// <details>, KaTeX's MathML) and drops the rest: no SVG, styles, forms,
+// dialogs, media or sectioning elements, and no attributes that hook into
+// the app.
 
 const purifier = DOMPurify();
 
@@ -51,29 +53,117 @@ purifier.addHook("afterSanitizeAttributes", (node) => {
   }
 });
 
+// An allow-list of tags rather than a deny-list: the app's CSS styles some
+// bare tags (header and nav are position: fixed), so sectioning elements
+// like <header>, <nav>, <main> or <aside> must not get through either.
+const HTML_TAGS = [
+  "a",
+  "abbr",
+  "b",
+  "bdi",
+  "bdo",
+  "blockquote",
+  "br",
+  "caption",
+  "cite",
+  "code",
+  "col",
+  "colgroup",
+  "dd",
+  "del",
+  "details",
+  "dfn",
+  "div",
+  "dl",
+  "dt",
+  "em",
+  "figcaption",
+  "figure",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "hr",
+  "i",
+  "img",
+  "input", // GFM task lists; made inert above
+  "ins",
+  "kbd",
+  "li",
+  "mark",
+  "ol",
+  "p",
+  "pre",
+  "q",
+  "rp",
+  "rt",
+  "ruby",
+  "s",
+  "samp",
+  "small",
+  "span",
+  "strike",
+  "strong",
+  "sub",
+  "summary",
+  "sup",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "time",
+  "tr",
+  "u",
+  "ul",
+  "var",
+  "wbr",
+];
+
+// The MathML elements DOMPurify allows by default (what KaTeX renders).
+const MATHML_TAGS = [
+  "math",
+  "menclose",
+  "merror",
+  "mfenced",
+  "mfrac",
+  "mglyph",
+  "mi",
+  "mlabeledtr",
+  "mmultiscripts",
+  "mn",
+  "mo",
+  "mover",
+  "mpadded",
+  "mphantom",
+  "mprescripts",
+  "mroot",
+  "mrow",
+  "ms",
+  "mspace",
+  "msqrt",
+  "mstyle",
+  "msub",
+  "msubsup",
+  "msup",
+  "mtable",
+  "mtd",
+  "mtext",
+  "mtr",
+  "munder",
+  "munderover",
+];
+
 export function sanitizeMarkdownHtml(html: string): string {
   return purifier.sanitize(html, {
-    USE_PROFILES: { html: true, mathMl: true }, // no SVG
-    FORBID_TAGS: [
-      "style",
-      "form",
-      "button",
-      "select",
-      "option",
-      "optgroup",
-      "textarea",
-      "fieldset",
-      "legend",
-      "label",
-      "datalist",
-      "output",
-      "dialog",
-      "video",
-      "audio",
-      "source",
-      "track",
-      "picture",
-    ],
+    ALLOWED_TAGS: [...HTML_TAGS, ...MATHML_TAGS],
+    // KaTeX wraps each formula in <semantics> with an <annotation> holding
+    // the TeX source. DOMPurify does not allow those tags; drop the
+    // annotation with its text, or the source would show after the formula.
+    ADD_FORBID_CONTENTS: ["annotation", "annotation-xml"],
     FORBID_ATTR: [
       "style",
       "id",
