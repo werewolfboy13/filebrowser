@@ -18,7 +18,11 @@ import (
 
 // healthTimeout bounds the whole check, so that it ends even when the server
 // accepts the connection and then says nothing.
-const healthTimeout = 5 * time.Second
+//
+// It is shorter than the timeout of the Docker image's HEALTHCHECK, so that
+// the command ends by itself and says what went wrong. Docker kills a check
+// that runs into its timeout, and then has nothing to show for it.
+const healthTimeout = 2 * time.Second
 
 func init() {
 	rootCmd.AddCommand(healthCmd)
@@ -57,7 +61,7 @@ func runHealth(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	return checkHealth(cmd.Context(), target)
+	return checkHealth(cmd.Context(), target, healthTimeout)
 }
 
 // healthFlags are the flags that say where to look for the server.
@@ -161,8 +165,8 @@ func healthTargetFor(listen listenSettings) healthTarget {
 	return healthTarget{url: scheme + "://" + net.JoinHostPort(host, listen.port) + path}
 }
 
-func checkHealth(ctx context.Context, target healthTarget) error {
-	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
+func checkHealth(ctx context.Context, target healthTarget, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	transport := &http.Transport{

@@ -146,7 +146,9 @@ EXPOSE 80
 # the server as well as the environment, the settings file and the database. In a container
 # without /dev/shm (--ipc=none), where the server cannot write that down, the check goes by
 # FB_ADDRESS, FB_PORT and the settings file alone, and misses a server started with other flags:
-# point FB_HEALTH_FILE at a directory that the server can write to.
+# point FB_HEALTH_FILE at a directory that the server can write to. The command gives up by
+# itself after 2 seconds (healthTimeout in cmd/health.go), within the timeout here, so its own
+# message says what went wrong.
 HEALTHCHECK --start-period=2s --interval=5s --timeout=3s \
   CMD [ "/bin/filebrowser", "health" ]
 

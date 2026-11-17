@@ -2,11 +2,15 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -375,5 +379,78 @@ func TestHealthCommandIsRegistered(t *testing.T) {
 		if want := rootCmd.Flags().Lookup(name).DefValue; flag.DefValue != want {
 			t.Errorf("--%s default = %q, want the server's %q", name, flag.DefValue, want)
 		}
+	}
+}
+
+// A server that takes the connection and then says nothing must not keep the
+// check waiting: the check has to give up by itself.
+func TestHealthGivesUpOnAServerThatDoesNotAnswer(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	// Take every connection, and never answer on it.
+	held := make(chan net.Conn, 16)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				close(held)
+				return
+			}
+			held <- conn
+		}
+	}()
+	defer func() {
+		listener.Close()
+		for conn := range held {
+			conn.Close()
+		}
+	}()
+
+	const timeout = 200 * time.Millisecond
+	target := healthTarget{url: "http://" + listener.Addr().String() + "/health"}
+
+	begin := time.Now()
+	result := make(chan error, 1)
+	go func() { result <- checkHealth(context.Background(), target, timeout) }()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("error = %v, want the deadline to have passed", err)
+		}
+		if elapsed := time.Since(begin); elapsed < timeout {
+			t.Errorf("gave up after %s, before its %s", elapsed, timeout)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the check is still waiting for an answer")
+	}
+}
+
+// Docker kills a health check that runs into the HEALTHCHECK's timeout, and
+// records no output for it. The command must give up first, so that its own
+// message says what went wrong.
+func TestHealthTimeoutIsBelowTheImagesHealthcheckTimeout(t *testing.T) {
+	dockerfile, err := os.ReadFile(filepath.Join("..", "Dockerfile"))
+	if err != nil {
+		// The Dockerfile is not among the files that the image is built from,
+		// where these tests run too.
+		t.Skipf("no Dockerfile to compare with: %v", err)
+	}
+
+	match := regexp.MustCompile(`(?m)^HEALTHCHECK\b.*--timeout=(\S+)`).FindSubmatch(dockerfile)
+	if match == nil {
+		t.Fatal("the Dockerfile's HEALTHCHECK has no --timeout")
+	}
+	dockerTimeout, err := time.ParseDuration(string(match[1]))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if healthTimeout >= dockerTimeout {
+		t.Errorf("healthTimeout = %s, want less than the HEALTHCHECK's %s", healthTimeout, dockerTimeout)
 	}
 }
