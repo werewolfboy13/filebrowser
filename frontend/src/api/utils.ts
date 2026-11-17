@@ -7,7 +7,9 @@ export class StatusError extends Error {
   constructor(
     message: any,
     public status?: number,
-    public is_canceled?: boolean
+    public is_canceled?: boolean,
+    // seconds to wait before trying again (Retry-After), when given
+    public retryAfter?: number
   ) {
     super(message);
     this.name = "StatusError";
@@ -62,7 +64,9 @@ export async function fetchURL(
     const body = await res.text();
     const error = new StatusError(
       body || `${res.status} ${res.statusText}`,
-      res.status
+      res.status,
+      undefined,
+      retryAfterSeconds(res)
     );
 
     // The session is over (e.g. revoked by a password, permission or scope
@@ -100,6 +104,17 @@ export async function fetchURL(
       console.warn("could not renew the session", e);
     }
   }
+}
+
+// The wait a 429 (or 503) answer asks for, in whole seconds, from its
+// Retry-After header (seconds, or an HTTP date).
+export function retryAfterSeconds(res: Response): number | undefined {
+  const value = res.headers.get("Retry-After")?.trim();
+  if (!value) return undefined;
+  if (/^\d+$/.test(value)) return Number(value);
+  const date = Date.parse(value);
+  if (Number.isNaN(date)) return undefined;
+  return Math.max(0, Math.ceil((date - Date.now()) / 1000));
 }
 
 export async function fetchJSON<T>(url: string, opts?: any): Promise<T> {

@@ -202,3 +202,21 @@ describe("fetchURL and a token handed out with a response (X-Auth-Token)", () =>
     expect(h.push).toHaveBeenCalledWith({ path: "/login" });
   });
 });
+
+describe("fetchURL and Retry-After", () => {
+  it("a 429 error carries the wait the server asks for", async () => {
+    stubFetch(
+      async () =>
+        new Response("429 Too Many Requests\n", {
+          status: 429,
+          headers: { "Retry-After": "17" },
+        })
+    );
+    const err = await fetchURL("/api/users/2", { method: "PUT" }).catch(
+      (e) => e
+    );
+    expect(err.status).toBe(429);
+    expect(err.retryAfter).toBe(17);
+    expect(h.push).not.toHaveBeenCalled();
+  });
+});

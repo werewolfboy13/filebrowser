@@ -39,9 +39,15 @@
       </h2>
     </div>
     <div v-else-if="error">
-      <div v-if="error.status === 401">
+      <div v-if="error.status === 401 || error.status === 429">
         <div class="card floating" id="password" style="z-index: 9999999">
-          <div v-if="attemptedPasswordLogin" class="share__wrong__password">
+          <div v-if="error.status === 429" class="share__wrong__password">
+            {{ tooManyAttemptsMessage(t, error.retryAfter) }}
+          </div>
+          <div
+            v-else-if="attemptedPasswordLogin"
+            class="share__wrong__password"
+          >
             {{ t("login.wrongCredentials") }}
           </div>
           <div class="card-title">
@@ -318,6 +324,7 @@ import { computed, inject, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { StatusError } from "@/api/utils";
+import { tooManyAttemptsMessage } from "@/utils/errors";
 import { copy } from "@/utils/clipboard";
 
 const error = ref<StatusError | null>(null);

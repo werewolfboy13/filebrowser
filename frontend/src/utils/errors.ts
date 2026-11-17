@@ -1,0 +1,44 @@
+// Messages for the answers the server gives to a request that was fine
+// but cannot be served right now, or not in this form. They are shown
+// instead of the raw "429 Too Many Requests" and the like.
+//
+// - 429: too many failed password attempts (login, share password, the
+//   current password asked for by account changes); Retry-After says how
+//   long to wait.
+// - 408: a request body (e.g. the login form) did not arrive in time.
+// - 413: a request or the file it asks for is too large to process.
+// - 423: an upload is busy with another request.
+
+type Translate = (key: string, values?: Record<string, unknown>) => string;
+
+export function tooManyAttemptsMessage(
+  t: Translate,
+  retryAfter?: number
+): string {
+  if (retryAfter === undefined) return t("errors.tooManyAttemptsLater");
+  if (retryAfter > 90) {
+    return t("errors.tooManyAttemptsMinutes", {
+      minutes: Math.ceil(retryAfter / 60),
+    });
+  }
+  return t("errors.tooManyAttempts", { seconds: Math.max(1, retryAfter) });
+}
+
+// The message for an error with one of the statuses above, or null.
+export function statusMessage(t: Translate, error: unknown): string | null {
+  const { status, retryAfter } = (error ?? {}) as {
+    status?: number;
+    retryAfter?: number;
+  };
+  switch (status) {
+    case 429:
+      return tooManyAttemptsMessage(t, retryAfter);
+    case 408:
+      return t("errors.requestTimeout");
+    case 413:
+      return t("errors.tooLarge");
+    case 423:
+      return t("errors.locked");
+  }
+  return null;
+}

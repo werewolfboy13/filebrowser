@@ -7,8 +7,7 @@ import router from "@/router";
 import type { JwtPayload } from "jwt-decode";
 import { jwtDecode } from "jwt-decode";
 import { authMethod, baseURL, noAuth, logoutPage } from "./constants";
-import { StatusError } from "@/api/utils";
-import { setSafeTimeout } from "@/api/utils";
+import { retryAfterSeconds, setSafeTimeout, StatusError } from "@/api/utils";
 
 // The auth cookie lets the server authenticate plain GETs (downloads,
 // previews). Over https, never let it travel over plain http.
@@ -77,7 +76,9 @@ export async function login(
   } else {
     throw new StatusError(
       body || `${res.status} ${res.statusText}`,
-      res.status
+      res.status,
+      undefined,
+      retryAfterSeconds(res)
     );
   }
 }
@@ -111,7 +112,9 @@ async function requestRenew(jwt: string) {
   } else {
     throw new StatusError(
       body || `${res.status} ${res.statusText}`,
-      res.status
+      res.status,
+      undefined,
+      retryAfterSeconds(res)
     );
   }
 }
@@ -131,7 +134,9 @@ export async function signup(username: string, password: string) {
     const body = await res.text();
     throw new StatusError(
       body || `${res.status} ${res.statusText}`,
-      res.status
+      res.status,
+      undefined,
+      retryAfterSeconds(res)
     );
   }
 }

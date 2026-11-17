@@ -68,7 +68,13 @@
     "forbidden": "You don't have permissions to access this.",
     "internal": "Something really went wrong.",
     "notFound": "This location can't be reached.",
-    "connection": "The server can't be reached."
+    "connection": "The server can't be reached.",
+    "tooManyAttempts": "Too many attempts. Please wait {seconds} seconds before trying again.",
+    "tooManyAttemptsMinutes": "Too many attempts. Please wait {minutes} minutes before trying again.",
+    "tooManyAttemptsLater": "Too many attempts. Please wait a while before trying again.",
+    "requestTimeout": "The request took too long to reach the server. Please try again.",
+    "tooLarge": "This is too large for the server to process.",
+    "locked": "The server is still busy with an earlier request for this item. Please try again in a moment."
   },
   "files": {
     "body": "Body",

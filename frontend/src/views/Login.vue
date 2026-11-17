@@ -46,6 +46,7 @@
 
 <script setup lang="ts">
 import { StatusError } from "@/api/utils";
+import { tooManyAttemptsMessage } from "@/utils/errors";
 import * as auth from "@/utils/auth";
 import {
   name,
@@ -112,6 +113,8 @@ const submit = async (event: Event) => {
         error.value = t("login.usernameTaken");
       } else if (e.status === 403) {
         error.value = t("login.wrongCredentials");
+      } else if (e.status === 429) {
+        error.value = tooManyAttemptsMessage(t, e.retryAfter);
       } else if (e.status === 400) {
         const match = e.message.match(/minimum length is (\d+)/);
         if (match) {
