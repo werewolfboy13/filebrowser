@@ -43,8 +43,9 @@ services:
     # address to publish it as it is.
     ports:
       - '127.0.0.1:${FILEBROWSER_PORT:-8000}:80'
+    # The files to serve, the settings and the database.
     volumes:
-      - srv:/srv
+      - data:/srv
       - config:/config
       - database:/database
     # The server connects to Redis when it starts, and stops when it cannot.
@@ -95,7 +96,12 @@ networks:
   redis:
     internal: true
 
+# With the project name at the top, Docker names these filebrowser_data, filebrowser_config and
+# filebrowser_database. Those are the volumes of the `docker run` command in File Browser's own
+# documentation, so an installation that was started with it keeps its files, settings and users
+# here. Compose then warns that it did not create the volumes, which is expected. Under another
+# project name (-p), the volumes are new and empty.
 volumes:
-  srv:
+  data:
   config:
   database:
