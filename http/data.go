@@ -1,13 +1,19 @@
 package fbhttp
 
 import (
+	"errors"
+	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	gopath "path"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/tomasen/realip"
 
+	"github.com/filebrowser/filebrowser/v2/files"
 	"github.com/filebrowser/filebrowser/v2/fileutils"
 	"github.com/filebrowser/filebrowser/v2/rules"
 	"github.com/filebrowser/filebrowser/v2/runner"
@@ -32,6 +38,16 @@ type data struct {
 	// original scope — are still matched against the real path instead of the
 	// rebased one. Empty for regular requests.
 	checkerPrefix string
+
+	// scopeRoot is the on-disk root of the scope the rules are relative to. It
+	// is set, like checkerPrefix, when the user's filesystem is rebased; for
+	// regular requests it is empty and the root of the user's filesystem is
+	// used.
+	scopeRoot string
+
+	// resolved caches, for the length of the request, where paths on disk
+	// lead once symbolic links are followed. See resolvePath.
+	resolved map[string]string
 }
 
 // Check implements rules.Checker.
@@ -56,9 +72,33 @@ func (d *data) Check(path string) bool {
 // CheckRules reports whether the global and user rules allow path. Unlike
 // Check, it ignores HideDotfiles: hiding dotfiles is a display preference, so
 // it must not stop a user from operating on a tree that contains one.
+//
+// The rules are applied to the path as it is written and to the path it leads
+// to. They are written for the former, but the filesystem follows symbolic
+// links that stay inside the scope: without the second check, a link to a
+// denied file or directory would open it under a name no rule mentions.
 func (d *data) CheckRules(path string) bool {
-	path = d.rulePath(path)
+	rulePath := d.rulePath(path)
+	if !d.rulesAllow(rulePath) {
+		return false
+	}
 
+	// Without rules there is nothing a link could get around, and resolving
+	// costs a system call per path.
+	if len(d.settings.Rules) == 0 && len(d.user.Rules) == 0 {
+		return true
+	}
+
+	if resolved, ok := d.resolvedRulePath(path); ok && resolved != rulePath {
+		return d.rulesAllow(resolved)
+	}
+
+	return true
+}
+
+// rulesAllow evaluates the global and user rules against a path that is
+// already in the form the rules are written in.
+func (d *data) rulesAllow(path string) bool {
 	allow := true
 	for _, rule := range d.settings.Rules {
 		if rule.Matches(path, d.server.CaseInsensitiveFs) {
@@ -73,6 +113,117 @@ func (d *data) CheckRules(path string) bool {
 	}
 
 	return allow
+}
+
+// resolvedRulePath returns the path, in the form the rules are written in,
+// that path leads to once symbolic links are followed. It reports false when
+// that cannot be told or lies outside the scope the rules are relative to:
+// the scoped filesystem refuses such a path on its own, and when external
+// symlinks are allowed no rule can describe it.
+func (d *data) resolvedRulePath(path string) (string, bool) {
+	real, ok := d.realPath(path)
+	if !ok {
+		return "", false
+	}
+
+	root := d.scopeRoot
+	if root == "" {
+		root = filepath.Clean(d.user.FullPath("/"))
+	}
+	root, ok = d.resolvePath(root)
+	if !ok {
+		return "", false
+	}
+
+	rel, err := filepath.Rel(root, real)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+
+	return slashClean(filepath.ToSlash(rel)), true
+}
+
+// realPath returns where path, a path in the user's filesystem, is on disk
+// once symbolic links are followed.
+func (d *data) realPath(path string) (string, bool) {
+	if files.BasePath(d.user.Fs) == nil {
+		return "", false
+	}
+
+	return d.resolvePath(filepath.Clean(d.user.FullPath(slashClean(path))))
+}
+
+// maxLinkHops bounds the symbolic links followed while resolving one path, so
+// that a loop ends.
+const maxLinkHops = 255
+
+// resolvePath follows the symbolic links in the absolute path full and returns
+// where it leads. A path that does not exist resolves to where it would be
+// created: the nearest existing ancestor is resolved and the rest appended,
+// and a dangling link is followed to its target, which is where a write
+// through it would land. It reports false when the path cannot be resolved.
+//
+// Results are kept for the request. Listing a directory checks every entry
+// in it, and this way the directory itself is resolved once and each entry
+// costs a single lstat.
+func (d *data) resolvePath(full string) (string, bool) {
+	hops := 0
+	return d.resolvePathHops(full, &hops)
+}
+
+func (d *data) resolvePathHops(full string, hops *int) (string, bool) {
+	if cached, ok := d.resolved[full]; ok {
+		return cached, cached != ""
+	}
+
+	result, ok := d.resolvePathUncached(full, hops)
+	if d.resolved == nil {
+		d.resolved = map[string]string{}
+	}
+	if !ok {
+		result = ""
+	}
+	d.resolved[full] = result
+
+	return result, ok
+}
+
+func (d *data) resolvePathUncached(full string, hops *int) (string, bool) {
+	parent := filepath.Dir(full)
+	if parent == full {
+		// The root of the filesystem, or of a volume.
+		return full, true
+	}
+
+	realParent, ok := d.resolvePathHops(parent, hops)
+	if !ok {
+		return "", false
+	}
+
+	candidate := filepath.Join(realParent, filepath.Base(full))
+	info, err := os.Lstat(candidate)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return candidate, true
+	case err != nil:
+		return "", false
+	case info.Mode()&os.ModeSymlink == 0:
+		return candidate, true
+	}
+
+	if *hops++; *hops > maxLinkHops {
+		return "", false
+	}
+	target, err := os.Readlink(candidate)
+	if err != nil {
+		return "", false
+	}
+	if !filepath.IsAbs(target) {
+		// Relative to the directory that really holds the link.
+		target = filepath.Join(realParent, target)
+	}
+
+	return d.resolvePathHops(filepath.Clean(target), hops)
 }
 
 // rulePath canonicalizes path into the form the rules are written in.

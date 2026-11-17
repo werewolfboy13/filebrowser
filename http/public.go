@@ -69,6 +69,10 @@ var withHashFile = func(fn handleFunc) handleFunc {
 		// share is also symlink-confined: a link inside the shared subtree that
 		// points elsewhere in the owner's scope — outside the share — must not be
 		// followed.
+		//
+		// The rules stay relative to the owner's own scope, so its root is
+		// noted before the filesystem is replaced.
+		d.scopeRoot = filepath.Clean(d.user.FullPath("/"))
 		d.user.Fs = files.NewFs(d.user.Fs, basePath, d.server.FollowExternalSymlinks)
 
 		// the filesystem is now rebased onto basePath, so paths handed to the
