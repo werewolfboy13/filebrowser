@@ -3,11 +3,12 @@ package fbhttp
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/gorilla/mux"
 	"golang.org/x/text/cases"
@@ -188,30 +189,79 @@ var userPostHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *
 	return http.StatusCreated, nil
 })
 
+// userFields lists the fields a user update may name in "which", by their Go
+// field name. The value tells whether the field is a display preference: those
+// can be changed without confirming the current password. Every other field
+// decides who the user is or what they may reach, so changing it requires the
+// password when passwords are in use.
+var userFields = map[string]bool{
+	"Locale":                true,
+	"ViewMode":              true,
+	"SingleClick":           true,
+	"RedirectAfterCopyMove": true,
+	"HideDotfiles":          true,
+	"DateFormat":            true,
+	"AceEditorTheme":        true,
+	"Sorting":               true,
+
+	"Username":     false,
+	"Password":     false,
+	"Scope":        false,
+	"LockPassword": false,
+	"Perm":         false,
+	"Commands":     false,
+	"Rules":        false,
+}
+
+// userUpdateFields turns the "which" list of a user update into the Go field
+// names it stands for. An empty list and the single entry "all" both mean the
+// whole user, reported as all. Names are canonicalised exactly once, here, and
+// every later decision is made on the result: deciding on the raw spelling and
+// then updating by the canonical one is what let "ſcope" (which title-cases to
+// "Scope") past earlier checks.
+func userUpdateFields(which []string) (fields []string, all bool, err error) {
+	if len(which) == 0 {
+		return nil, true, nil
+	}
+
+	title := cases.Title(language.English, cases.NoLower)
+	for _, name := range which {
+		field := title.String(name)
+		if field == "All" && len(which) == 1 {
+			return nil, true, nil
+		}
+		if _, ok := userFields[field]; !ok {
+			return nil, false, fmt.Errorf("%w: unknown user field %q", fberrors.ErrInvalidRequestParams, name)
+		}
+		fields = append(fields, field)
+	}
+
+	return fields, false, nil
+}
+
 var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	req, err := getUser(w, r)
 	if err != nil {
 		return http.StatusBadRequest, err
 	}
 
+	fields, all, err := userUpdateFields(req.Which)
+	if err != nil {
+		return http.StatusBadRequest, err
+	}
+
 	if d.settings.AuthMethod == auth.MethodJSONAuth {
-		var sensibleFields = map[string]struct{}{
-			"all":          {},
-			"username":     {},
-			"password":     {},
-			"scope":        {},
-			"lockPassword": {},
-			"commands":     {},
-			"perm":         {},
+		// Allow-list: only an update that is limited to display preferences
+		// goes through without the current password.
+		needsPassword := all
+		for _, field := range fields {
+			if !userFields[field] {
+				needsPassword = true
+			}
 		}
 
-		for _, field := range req.Which {
-			if _, ok := sensibleFields[strings.ToLower(field)]; ok {
-				if !users.CheckPwd(req.CurrentPassword, d.user.Password) {
-					return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
-				}
-				break
-			}
+		if needsPassword && !users.CheckPwd(req.CurrentPassword, d.user.Password) {
+			return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
 		}
 	}
 
@@ -219,30 +269,21 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 		return http.StatusBadRequest, nil
 	}
 
-	for _, field := range req.Which {
-		if strings.ToLower(field) == "perm" || strings.ToLower(field) == "all" {
-			if req.Data.Perm.Share && !req.Data.Perm.Download {
-				return http.StatusBadRequest, fberrors.ErrShareRequiresDownload
-			}
+	if all || slices.Contains(fields, "Perm") {
+		if req.Data.Perm.Share && !req.Data.Perm.Download {
+			return http.StatusBadRequest, fberrors.ErrShareRequiresDownload
 		}
 	}
 
 	// Rules are only checked when this request stores them: a partial update
 	// of other fields must not fail over rules it does not touch.
-	storesRules := len(req.Which) == 0
-	for _, field := range req.Which {
-		switch cases.Title(language.English, cases.NoLower).String(field) {
-		case "Rules", "All":
-			storesRules = true
-		}
-	}
-	if storesRules {
+	if all || slices.Contains(fields, "Rules") {
 		if err := rules.Validate(req.Data.Rules); err != nil {
 			return http.StatusBadRequest, err
 		}
 	}
 
-	if len(req.Which) == 0 || (len(req.Which) == 1 && req.Which[0] == "all") {
+	if all {
 		if !d.user.Perm.Admin {
 			return http.StatusForbidden, nil
 		}
@@ -260,15 +301,10 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 			}
 			req.Data.Password = suser.Password
 		}
-
-		req.Which = []string{}
 	}
 
-	for k, v := range req.Which {
-		v = cases.Title(language.English, cases.NoLower).String(v)
-		req.Which[k] = v
-
-		if v == "Password" {
+	for _, field := range fields {
+		if field == "Password" {
 			if !d.user.Perm.Admin && d.user.LockPassword {
 				return http.StatusForbidden, nil
 			}
@@ -279,14 +315,13 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 			}
 		}
 
-		for _, f := range NonModifiableFieldsForNonAdmin {
-			if !d.user.Perm.Admin && v == f {
-				return http.StatusForbidden, nil
-			}
+		if !d.user.Perm.Admin && slices.Contains(NonModifiableFieldsForNonAdmin, field) {
+			return http.StatusForbidden, nil
 		}
 	}
 
-	err = d.store.Users.Update(req.Data, req.Which...)
+	// With no fields, Update stores the whole user.
+	err = d.store.Users.Update(req.Data, fields...)
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
