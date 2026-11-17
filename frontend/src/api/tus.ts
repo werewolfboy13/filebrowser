@@ -25,6 +25,10 @@ export async function upload(
   const resourcePath = `${tusEndpoint}${filePath}?override=${overwrite}`;
 
   const authStore = useAuthStore();
+  // Used when the session has ended (logout) while the upload still runs,
+  // so that its last requests (e.g. the terminate on abort) are not sent
+  // with an empty token.
+  const startJwt = authStore.jwt;
 
   // Exit early because of typescript, tus content can't be a string
   if (content === "") {
@@ -37,13 +41,15 @@ export async function upload(
       retryDelays: computeRetryDelays(tusSettings),
       parallelUploads: 1,
       storeFingerprintForResuming: false,
-      headers: {
-        "X-Auth": authStore.jwt,
-      },
       // An upload can outlive the token it started with: send the current
       // one with every request (create, HEAD, PATCH, terminate)...
+      //
+      // Set X-Auth here only, never also in `headers`: tus-js-client applies
+      // `headers` with setHeader and then calls onBeforeRequest, and
+      // XMLHttpRequest combines a header set twice into "tok, tok", which the
+      // server rejects with 401.
       onBeforeRequest: function (req) {
-        if (authStore.jwt) req.setHeader("X-Auth", authStore.jwt);
+        req.setHeader("X-Auth", authStore.jwt || startJwt);
       },
       // ...and renew it when the server says it is about to expire, as
       // fetchURL does for other API calls.
