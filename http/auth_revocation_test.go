@@ -31,7 +31,7 @@ func (e *fullEnv) works(token string) bool {
 // could be renewed for ever: changing a password did not end the sessions of
 // whoever had the old one (GHSA-v7vv-5wj2-gfcj, GHSA-7xwp-2cpp-p8r7). A change
 // of password now ends every session of the user, and the session that made
-// the change is handed a fresh token.
+// the change is handed a fresh token with the answer to it.
 func TestPasswordChangeEndsOtherSessions(t *testing.T) {
 	e := newFullEnv(t)
 	stolen := e.login("bob", fullEnvUserPassword)
@@ -45,42 +45,135 @@ func TestPasswordChangeEndsOtherSessions(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("password change = %d %q", code, body)
 	}
-	// This is what makes the web interface renew its token right away.
-	if h.Get("X-Renew-Token") != "true" {
-		t.Errorf("the password change did not ask the client to renew its token (X-Renew-Token %q)", h.Get("X-Renew-Token"))
+
+	// The answer carries the token the session goes on with. It is a
+	// credential, so the answer may not be stored, and the token is not in
+	// the body, where a client that only shows it would put it on the page.
+	fresh := h.Get("X-Auth-Token")
+	if strings.Count(fresh, ".") != 2 || fresh == mine {
+		t.Fatalf("the password change did not hand out a new token (X-Auth-Token %q)", fresh)
+	}
+	if cc := h.Get("Cache-Control"); !strings.Contains(cc, "no-store") {
+		t.Errorf("the answer carrying a token may be stored: Cache-Control %q", cc)
+	}
+	if strings.Contains(body, fresh) {
+		t.Error("the new token is in the response body")
+	}
+	// The old token must not be used for a renewal: it would be refused.
+	if h.Get("X-Renew-Token") == "true" {
+		t.Error("the password change asked the client to renew the token it just revoked")
+	}
+	if !e.works(fresh) {
+		t.Error("the token handed out with the password change does not work")
 	}
 
-	// The other session is over: no request, and no renewal.
-	if e.works(stolen) {
-		t.Error("a token issued before the password change still works")
-	}
-	if code, _, _ := e.do(http.MethodPost, "/api/renew", stolen, nil, nil); code != http.StatusUnauthorized {
-		t.Errorf("renewal of a token issued before the password change = %d, want 401", code)
-	}
-
-	// The session that changed the password renews once with its old token...
-	code, _, renewed := e.do(http.MethodPost, "/api/renew", mine, nil, nil)
-	if code != http.StatusOK || strings.Count(renewed, ".") != 2 {
-		t.Fatalf("renewal by the session that changed the password = %d %q", code, renewed)
-	}
-	if !e.works(renewed) {
-		t.Error("the renewed token does not work")
-	}
-	// ... and only once, and for nothing else.
-	if code, _, _ := e.do(http.MethodPost, "/api/renew", mine, nil, nil); code != http.StatusUnauthorized {
-		t.Errorf("second renewal with the old token = %d, want 401", code)
-	}
-	if e.works(mine) {
-		t.Error("the old token of the session that changed the password still works for requests")
+	// Every token from before the change is over, the one that made the
+	// change included: no request, and no renewal, not even once.
+	for name, token := range map[string]string{"another session": stolen, "the session that made the change": mine} {
+		if e.works(token) {
+			t.Errorf("the token of %s still works after the password change", name)
+		}
+		for i := 0; i < 2; i++ {
+			if code, _, _ := e.do(http.MethodPost, "/api/renew", token, nil, nil); code != http.StatusUnauthorized {
+				t.Errorf("renewal of the token of %s = %d, want 401", name, code)
+			}
+		}
 	}
 
 	// New sessions are unaffected, also one opened within the same second.
 	if !e.works(e.login("bob", "brand-new-password-77")) {
 		t.Error("a login after the password change does not work")
 	}
-	code, _, again := e.do(http.MethodPost, "/api/renew", renewed, nil, nil)
+	code, _, again := e.do(http.MethodPost, "/api/renew", fresh, nil, nil)
 	if code != http.StatusOK || !e.works(again) {
 		t.Errorf("an ordinary renewal after the change = %d", code)
+	}
+}
+
+// The session that changed its own password used to be let through one
+// renewal of its revoked token. That permission was tied to the token, not to
+// the client: whoever else held the same token and renewed first got a
+// session that outlived the password change, and the user's own renewal was
+// the one refused. A user who changes the password because the session was
+// stolen ended up locked out, with the thief logged in.
+func TestRevokedTokenCannotBeRenewedByAnyHolder(t *testing.T) {
+	e := newFullEnv(t)
+	tok := e.login("bob", fullEnvUserPassword) // held by the user and by someone else
+	time.Sleep(1100 * time.Millisecond)
+
+	change := `{"what":"user","which":["password"],"current_password":"` + fullEnvUserPassword + `","data":{"id":2,"password":"brand-new-password-77"}}`
+	code, h, _ := e.do(http.MethodPut, "/api/users/2", tok, strings.NewReader(change), nil)
+	if code != http.StatusOK {
+		t.Fatalf("own password change = %d", code)
+	}
+
+	// The other holder is first to ask for a renewal.
+	code, _, renewed := e.do(http.MethodPost, "/api/renew", tok, nil, nil)
+	if code != http.StatusUnauthorized {
+		t.Errorf("renewal of the revoked token by another holder = %d, want 401", code)
+	}
+	if code == http.StatusOK && e.works(renewed) {
+		t.Error("a second holder of the session token survives the password change")
+	}
+
+	// The user goes on with the token from the answer, whatever the other
+	// holder did in between.
+	if fresh := h.Get("X-Auth-Token"); !e.works(fresh) {
+		t.Errorf("the user's own session ended with the password change (X-Auth-Token %q)", fresh)
+	}
+}
+
+// Only the session that ends itself is handed a token, and only when it does.
+func TestNewTokenIsOnlyHandedToTheSessionThatEndedItself(t *testing.T) {
+	e := newFullEnv(t)
+	admin := e.login("admin", fullEnvAdminPassword)
+	bob := e.login("bob", fullEnvUserPassword)
+
+	requests := map[string]struct {
+		token, path, payload string
+	}{
+		"an administrator changes another account's password": {admin, "/api/users/2",
+			`{"what":"user","which":["password"],"current_password":"` + fullEnvAdminPassword + `","data":{"id":2,"password":"set-by-the-admin-123"}}`},
+		"an administrator changes another account's permissions": {admin, "/api/users/2",
+			`{"what":"user","which":["perm"],"current_password":"` + fullEnvAdminPassword + `","data":{"id":2,"perm":{"download":true}}}`},
+		"a change of one's own that ends no session": {admin, "/api/users/1",
+			`{"what":"user","which":["locale"],"data":{"id":1,"locale":"fr"}}`},
+		"a change that is refused": {admin, "/api/users/1",
+			`{"what":"user","which":["password"],"current_password":"wrong","data":{"id":1,"password":"never-stored-password-1"}}`},
+	}
+	for name, rq := range requests {
+		_, h, body := e.do(http.MethodPut, rq.path, rq.token, strings.NewReader(rq.payload), nil)
+		if got := h.Get("X-Auth-Token"); got != "" || strings.Count(body, ".") == 2 {
+			t.Errorf("%s: a token was handed out (X-Auth-Token %q, body %q)", name, got, body)
+		}
+	}
+	if e.works(bob) {
+		t.Fatal("control: bob's session survived the change of his password")
+	}
+	if !e.works(admin) {
+		t.Fatal("the administrator's session ended")
+	}
+
+	// An administrator who takes a permission away from their own account is
+	// handed a token that says so.
+	perm := e.user(1).Perm
+	perm.Share = false
+	data, _ := json.Marshal(perm)
+	payload := `{"what":"user","which":["perm"],"current_password":"` + fullEnvAdminPassword + `","data":{"id":1,"perm":` + string(data) + `}}`
+	code, h, body := e.do(http.MethodPut, "/api/users/1", admin, strings.NewReader(payload), nil)
+	fresh := h.Get("X-Auth-Token")
+	if code != http.StatusOK || fresh == "" {
+		t.Fatalf("own permission change = %d %q, X-Auth-Token %q", code, body, fresh)
+	}
+	var claims authToken
+	if _, _, err := jwt.NewParser().ParseUnverified(fresh, &claims); err != nil {
+		t.Fatal(err)
+	}
+	if claims.User.ID != 1 || claims.User.Perm.Share || !claims.User.Perm.Admin {
+		t.Errorf("the new token does not describe the account as it is now: %+v", claims.User)
+	}
+	if e.works(admin) || !e.works(fresh) {
+		t.Errorf("after the own permission change: old token works = %v, new token works = %v", e.works(admin), e.works(fresh))
 	}
 }
 
@@ -147,8 +240,8 @@ func TestAdminChangesEndSessionsOfTheAccount(t *testing.T) {
 			if code != http.StatusOK {
 				t.Fatalf("update = %d %q", code, body)
 			}
-			if h.Get("X-Renew-Token") == "true" {
-				t.Error("the admin's own session was asked to renew for a change to another account")
+			if h.Get("X-Renew-Token") == "true" || h.Get("X-Auth-Token") != "" {
+				t.Error("the admin's own session was asked to renew, or handed a token, for a change to another account")
 			}
 
 			if ended := !e.works(session); ended != tc.ends {
@@ -193,15 +286,18 @@ func TestOwnPasswordChangeThroughFullUpdateKeepsTheSession(t *testing.T) {
 	payload := `{"what":"user","which":["all"],"current_password":"` + fullEnvAdminPassword + `","data":` + string(data) + `}`
 
 	code, h, body := e.do(http.MethodPut, "/api/users/1", admin, strings.NewReader(payload), nil)
-	if code != http.StatusOK || h.Get("X-Renew-Token") != "true" {
-		t.Fatalf("own password change = %d %q, X-Renew-Token %q", code, body, h.Get("X-Renew-Token"))
+	fresh := h.Get("X-Auth-Token")
+	if code != http.StatusOK || fresh == "" {
+		t.Fatalf("own password change = %d %q, X-Auth-Token %q", code, body, fresh)
 	}
-	code, _, renewed := e.do(http.MethodPost, "/api/renew", admin, nil, nil)
-	if code != http.StatusOK || !e.works(renewed) {
-		t.Errorf("renewal after the own password change = %d", code)
+	if !e.works(fresh) {
+		t.Error("the token handed out with the own password change does not work")
 	}
-	if e.works(other) {
-		t.Error("the admin's other session survived the password change")
+	if code, _, _ := e.do(http.MethodGet, "/api/users", fresh, nil, nil); code != http.StatusOK {
+		t.Errorf("the new token is not an administrator's: user list = %d", code)
+	}
+	if e.works(other) || e.works(admin) {
+		t.Error("a session of the admin from before the password change survived it")
 	}
 }
 

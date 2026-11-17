@@ -239,7 +239,15 @@ func userUpdateFields(which []string) (fields []string, all bool, err error) {
 	return fields, false, nil
 }
 
-var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+// userPutHandler updates a user. tokenExpireTime is the lifetime of the token
+// handed to a session whose change ended its own token.
+func userPutHandler(tokenExpireTime time.Duration) handleFunc {
+	return withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+		return userPut(w, r, d, tokenExpireTime)
+	})
+}
+
+func userPut(w http.ResponseWriter, r *http.Request, d *data, tokenExpireTime time.Duration) (int, error) {
 	req, status, err := getUser(w, r)
 	if err != nil {
 		return status, err
@@ -354,13 +362,18 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 		return http.StatusInternalServerError, err
 	}
 
-	// The session that made the change was revoked with the others. Let it
-	// renew its token once, and tell the client to do so now: the web
-	// interface renews when it sees this header.
+	// The session that made the change was revoked with the others. It is
+	// handed a new token with this answer, issued for the account as it is
+	// stored now.
 	if revoke && req.Data.ID == d.user.ID {
-		renewGrace.allow(d.user.ID, d.token)
-		w.Header().Set("X-Renew-Token", "true")
+		updated, err := d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.user.ID)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		if err := replaceSessionToken(w, d, updated, tokenExpireTime); err != nil {
+			return http.StatusInternalServerError, err
+		}
 	}
 
 	return http.StatusOK, nil
-})
+}
