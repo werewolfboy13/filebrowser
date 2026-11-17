@@ -95,6 +95,45 @@ jobs:
         uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
       - run: task build
 
+  docker:
+    name: Build Docker image
+    # A version tag is built by the release job.
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    env:
+      # The Dockerfile's base images need a login to dhi.io. The secrets for it are not given to
+      # pull requests from forks, and a repository may not have them at all: the image is then
+      # not built, and the job says so instead of failing.
+      DHI_LOGIN: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+    steps:
+      - name: No login for Docker Hardened Images
+        if: env.DHI_LOGIN != 'true'
+        run: echo "::notice::The Docker image was not built, because the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are not available to this run."
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        if: env.DHI_LOGIN == 'true'
+      - name: Set up Docker Buildx
+        if: env.DHI_LOGIN == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Login to Docker Hardened Images
+        if: env.DHI_LOGIN == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: dhi.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # The same build as in the release job, for the runner's own platform and without a push,
+      # so that a Dockerfile that no longer builds is found before there is a tag. The Dockerfile
+      # runs the tests of the client and the server itself.
+      - name: Build Docker image
+        if: env.DHI_LOGIN == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          pull: true
+          push: false
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
   release:
     name: Release
     needs: ["lint-frontend", "test-frontend", "lint-backend", "test", "build"]
