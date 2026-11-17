@@ -314,6 +314,144 @@ func TestServerFilesAreNotServedThroughPublicShares(t *testing.T) {
 	}
 }
 
+// The identity check that catches other names of a protected file looked at the
+// path a lexical reading of a link's target leads to. A link whose target
+// climbs out of another link ("sub/../filebrowser.db", with sub leading into
+// the directory of the database) got around it, and around the path check:
+// the database, and with it the key that signs sessions, could be downloaded.
+func TestServerFilesAreRefusedThroughLinksThatClimbOutOfALink(t *testing.T) {
+	e := protectedEnv(t, true)
+	for _, dir := range []string{"state/x", "pub", "docs/deep"} {
+		if err := os.MkdirAll(filepath.Join(e.root, filepath.FromSlash(dir)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, l := range [][2]string{
+		{"pub/sub", "../state/x"},
+		{"pub/alias", "sub/../filebrowser.db"}, // the kernel: state/filebrowser.db
+		{"pub/statedir", "sub/.."},             // the kernel: state/
+		{"pub/docs", "../docs/deep"},
+		{"pub/cachealias", "docs/../../cache"}, // the kernel: cache/
+		{"pub/keyalias", "docs/../../tls/key.pem"},
+		{"pub/logalias", "docs/../../logs/filebrowser-2026-11-17T10-00-00.000.log"},
+	} {
+		if err := os.Symlink(l[1], filepath.Join(e.root, filepath.FromSlash(l[0]))); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+	database := filepath.Join(e.root, "state", "filebrowser.db")
+	before, err := os.Stat(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := []string{"cached thumbnail", "PRIVATE KEY", "older log"}
+
+	if err := e.st.Share.Save(&share.Link{Hash: "pubshare", Path: "/pub", UserID: 2}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, user := range []struct{ name, password string }{{"bob", fullEnvUserPassword}, {"admin", fullEnvAdminPassword}} {
+		tok := e.login(user.name, user.password)
+
+		if code, _, _ := e.do(http.MethodGet, "/api/raw/state/filebrowser.db", tok, nil, nil); code != http.StatusForbidden {
+			t.Fatalf("control: %s: database download = %d, want 403", user.name, code)
+		}
+
+		for _, p := range []string{"/pub/alias", "/pub/statedir/filebrowser.db", "/pub/cachealias/ab/thumb", "/pub/keyalias", "/pub/logalias"} {
+			for _, rq := range []struct{ method, path, body string }{
+				{http.MethodGet, "/api/raw" + p, ""},
+				{http.MethodGet, "/api/resources" + p, ""},
+				{http.MethodGet, "/api/resources" + p + "?checksum=md5", ""},
+				{http.MethodGet, "/api/preview/big" + p, ""},
+				{http.MethodPut, "/api/resources" + p, "overwritten"},
+				{http.MethodPost, "/api/resources" + p + "?override=true", "overwritten"},
+				{http.MethodPost, "/api/tus" + p + "?override=true", ""},
+				{http.MethodDelete, "/api/resources" + p, ""},
+				{http.MethodPatch, "/api/resources" + p + "?action=copy&destination=%2Fcopied", ""},
+				{http.MethodPost, "/api/share" + p, "{}"},
+			} {
+				code, _, body := e.do(rq.method, rq.path, tok, strings.NewReader(rq.body), map[string]string{"Upload-Length": "4"})
+				if code != http.StatusForbidden {
+					t.Errorf("%s: %s %s = %d (%d bytes), want 403", user.name, rq.method, rq.path, code, len(body))
+				}
+				for _, secret := range secrets {
+					if strings.Contains(body, secret) {
+						t.Errorf("%s: %s %s returned protected content", user.name, rq.method, rq.path)
+					}
+				}
+			}
+		}
+
+		_, _, listing := e.do(http.MethodGet, "/api/resources/pub/", tok, nil, nil)
+		_, _, statedir := e.do(http.MethodGet, "/api/resources/pub/statedir/", tok, nil, nil)
+		_, _, recursive := e.do(http.MethodGet, "/api/resources/recursive/pub", tok, nil, nil)
+		_, _, search := e.do(http.MethodGet, "/api/search/pub/?query=", tok, nil, nil)
+		for _, name := range []string{`"alias"`, `"cachealias"`, `"keyalias"`, `"logalias"`, `"filebrowser.db"`, `"thumb"`} {
+			for where, body := range map[string]string{"listing of /pub": listing, "listing of /pub/statedir": statedir, "recursive listing": recursive} {
+				if strings.Contains(body, `"name":`+name) {
+					t.Errorf("%s: the %s names %s", user.name, where, name)
+				}
+			}
+			if strings.Contains(search, strings.Trim(name, `"`)+`"`) {
+				t.Errorf("%s: the search names %s: %s", user.name, name, search)
+			}
+		}
+
+		for _, target := range []string{"/api/raw/pub/?algo=tar", "/api/raw/?algo=tar&files=" + url.QueryEscape("/pub/alias,/pub/statedir,/pub/cachealias")} {
+			_, _, archive := e.do(http.MethodGet, target, tok, nil, nil)
+			tr := tar.NewReader(strings.NewReader(archive))
+			for {
+				h, err := tr.Next()
+				if err != nil {
+					break
+				}
+				for _, name := range []string{"alias", "filebrowser.db", "thumb", "key.pem"} {
+					if strings.HasSuffix(h.Name, name) {
+						t.Errorf("%s: %s contains %s", user.name, target, h.Name)
+					}
+				}
+			}
+			for _, secret := range secrets {
+				if strings.Contains(archive, secret) {
+					t.Errorf("%s: %s contains protected content", user.name, target)
+				}
+			}
+		}
+	}
+
+	// And for a visitor of a public share of the directory holding the links.
+	for _, sub := range []string{"/alias", "/statedir/filebrowser.db", "/cachealias/ab/thumb", "/keyalias"} {
+		for _, endpoint := range []string{"/api/public/dl/", "/api/public/share/"} {
+			code, _, body := e.do(http.MethodGet, endpoint+"pubshare"+sub, "", nil, nil)
+			if code != http.StatusForbidden {
+				t.Errorf("anonymous GET %spubshare%s = %d (%d bytes), want 403", endpoint, sub, code, len(body))
+			}
+		}
+	}
+	_, _, archive := e.do(http.MethodGet, "/api/public/dl/pubshare?algo=tar", "", nil, nil)
+	for _, secret := range secrets {
+		if strings.Contains(archive, secret) {
+			t.Errorf("the archive of the share contains protected content")
+		}
+	}
+
+	after, err := os.Stat(database)
+	if err != nil || after.Size() != before.Size() {
+		t.Errorf("the database was changed through an alias: %v", err)
+	}
+	for path, want := range map[string]string{"tls/key.pem": "PRIVATE KEY", "cache/ab/thumb": "cached thumbnail"} {
+		if data, err := os.ReadFile(filepath.Join(e.root, filepath.FromSlash(path))); err != nil || string(data) != want {
+			t.Errorf("%s = %q, %v", path, data, err)
+		}
+	}
+	if pathExists(filepath.Join(e.root, "copied")) {
+		t.Error("/copied was created")
+	}
+	if links, err := e.st.Share.All(); err == nil && len(links) != 1 {
+		t.Errorf("a share of a protected path was created: %d shares", len(links))
+	}
+}
+
 // Without anything registered (the server's files are outside the root, as in
 // the container image) nothing is refused and nothing is looked up.
 func TestNothingIsProtectedByDefault(t *testing.T) {

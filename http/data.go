@@ -1,8 +1,6 @@
 package fbhttp
 
 import (
-	"errors"
-	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -51,9 +49,10 @@ type data struct {
 	// used.
 	scopeRoot string
 
-	// resolved caches, for the length of the request, where paths on disk
-	// lead once symbolic links are followed. See resolvePath.
-	resolved map[string]string
+	// resolver finds out where paths on disk lead once symbolic links are
+	// followed, and remembers, for the length of the request, the directories
+	// it went through. See resolvePath.
+	resolver files.PathResolver
 
 	// protectedInfo caches the identities of the server's own files. See
 	// protectedFiles.
@@ -121,6 +120,10 @@ func (d *data) CheckRules(path string) bool {
 // so the path is compared as written, with symbolic links followed, and, for
 // an existing file, by identity, which covers hard links.
 //
+// The identity is that of the file the kernel opens under the name, asked of
+// the kernel itself: whatever resolvePath makes of the name, no other name of
+// a protected file that exists gets past this.
+//
 // It costs nothing when nothing is registered, which is the case whenever
 // those files are kept outside the served directory.
 func (d *data) protected(path string) bool {
@@ -133,14 +136,11 @@ func (d *data) protected(path string) bool {
 		return true
 	}
 
-	resolved, ok := d.resolvePath(lexical)
-	if !ok {
-		resolved = lexical
-	} else if resolved != lexical && d.server.IsProtected(resolved) {
+	if resolved, ok := d.resolvePath(lexical); ok && resolved != lexical && d.server.IsProtected(resolved) {
 		return true
 	}
 
-	info, err := os.Stat(resolved)
+	info, err := os.Stat(lexical)
 	if err != nil || !info.Mode().IsRegular() {
 		return false
 	}
@@ -224,77 +224,20 @@ func (d *data) realPath(path string) (string, bool) {
 	return d.resolvePath(filepath.Clean(d.user.FullPath(slashClean(path))))
 }
 
-// maxLinkHops bounds the symbolic links followed while resolving one path, so
-// that a loop ends.
-const maxLinkHops = 255
-
-// resolvePath follows the symbolic links in the absolute path full and returns
-// where it leads. A path that does not exist resolves to where it would be
-// created: the nearest existing ancestor is resolved and the rest appended,
-// and a dangling link is followed to its target, which is where a write
-// through it would land. It reports false when the path cannot be resolved.
+// resolvePath follows the symbolic links in the absolute path full the way
+// the kernel does and returns where it leads; see files.EvalPath. A path that
+// does not exist resolves to where it would be created: the nearest existing
+// ancestor is resolved and the rest appended, and a dangling link is followed
+// to its target, which is where a write through it would land. It reports
+// false when the path cannot be resolved, which is when the kernel does not
+// open it either.
 //
-// Results are kept for the request. Listing a directory checks every entry
-// in it, and this way the directory itself is resolved once and each entry
-// costs a single lstat.
+// The directories on the way are kept for the request. Listing a directory
+// checks every entry in it, and this way the directory itself is resolved
+// once and each entry costs a single lstat. See files.PathResolver for the
+// bound on what is kept.
 func (d *data) resolvePath(full string) (string, bool) {
-	hops := 0
-	return d.resolvePathHops(full, &hops)
-}
-
-func (d *data) resolvePathHops(full string, hops *int) (string, bool) {
-	if cached, ok := d.resolved[full]; ok {
-		return cached, cached != ""
-	}
-
-	result, ok := d.resolvePathUncached(full, hops)
-	if d.resolved == nil {
-		d.resolved = map[string]string{}
-	}
-	if !ok {
-		result = ""
-	}
-	d.resolved[full] = result
-
-	return result, ok
-}
-
-func (d *data) resolvePathUncached(full string, hops *int) (string, bool) {
-	parent := filepath.Dir(full)
-	if parent == full {
-		// The root of the filesystem, or of a volume.
-		return full, true
-	}
-
-	realParent, ok := d.resolvePathHops(parent, hops)
-	if !ok {
-		return "", false
-	}
-
-	candidate := filepath.Join(realParent, filepath.Base(full))
-	info, err := os.Lstat(candidate)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return candidate, true
-	case err != nil:
-		return "", false
-	case info.Mode()&os.ModeSymlink == 0:
-		return candidate, true
-	}
-
-	if *hops++; *hops > maxLinkHops {
-		return "", false
-	}
-	target, err := os.Readlink(candidate)
-	if err != nil {
-		return "", false
-	}
-	if !filepath.IsAbs(target) {
-		// Relative to the directory that really holds the link.
-		target = filepath.Join(realParent, target)
-	}
-
-	return d.resolvePathHops(filepath.Clean(target), hops)
+	return d.resolver.Resolve(full)
 }
 
 // rulePath canonicalizes path into the form the rules are written in.
