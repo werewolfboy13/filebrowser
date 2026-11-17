@@ -381,6 +381,12 @@ const key = (event: KeyboardEvent) => {
   if (layoutStore.currentPrompt !== null) {
     return;
   }
+  // Keys already handled inside the page must not also close the preview or
+  // switch files, e.g. Escape closing the video player's settings menu (the
+  // player's menus call preventDefault() on it).
+  if (event.defaultPrevented) {
+    return;
+  }
   // When previewing a video, let arrow keys fall through to the video
   // player's own shortcuts for seeking instead of switching to the prev/next
   // file. Enter still advances.
