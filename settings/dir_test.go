@@ -1,6 +1,9 @@
 package settings
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/filebrowser/filebrowser/v2/users"
@@ -41,5 +44,50 @@ func TestCreateUserHomePreservesExplicitScope(t *testing.T) {
 	}
 	if user.Scope != "/custom" {
 		t.Errorf("explicit scope should be preserved, got %q", user.Scope)
+	}
+}
+
+// User home directories were created with mode 0777 (minus the umask) instead
+// of the configured directory mode, leaving a new user's home readable, and
+// with a permissive umask writable, by every local account.
+func TestMakeUserDirUsesTheConfiguredMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission bits are not meaningful on Windows")
+	}
+
+	// Make the result independent of the umask of the test process.
+	old := syscallUmask(0)
+	defer syscallUmask(old)
+
+	cases := map[string]struct {
+		dirMode os.FileMode
+		want    os.FileMode
+	}{
+		"configured mode":   {0o700, 0o700},
+		"default when zero": {0, DefaultDirMode},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			s := &Settings{CreateUserDir: true, UserHomeBasePath: "/users", DirMode: tc.dirMode}
+
+			scope, err := s.MakeUserDir("alice", "", root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scope != "/users/alice" {
+				t.Fatalf("scope = %q", scope)
+			}
+
+			for _, dir := range []string{"users", filepath.Join("users", "alice")} {
+				info, err := os.Stat(filepath.Join(root, dir))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := info.Mode().Perm(); got != tc.want {
+					t.Errorf("%s has mode %o, want %o", dir, got, tc.want)
+				}
+			}
+		})
 	}
 }
