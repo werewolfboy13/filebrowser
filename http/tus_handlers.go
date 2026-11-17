@@ -281,6 +281,8 @@ func tusPostHandler(cache UploadCache) handleFunc {
 		if uploadLength == 0 {
 			if !direct {
 				if err := fileutils.CommitTemp(d.user.Fs, tmp, r.URL.Path, d.settings.FileMode, override && d.user.Perm.Modify); err != nil {
+					// Nothing will come back for an upload without data.
+					_ = d.user.Fs.Remove(tmp)
 					return errToStatus(err), err
 				}
 			}
@@ -486,6 +488,10 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 				}
 				return http.StatusConflict, nil
 			case err != nil:
+				// The data is all here, in the temporary file, which is
+				// kept: the client can ask for it to be put in place again
+				// (a PATCH without data at the final offset), for as long as
+				// the upload is.
 				return http.StatusInternalServerError, fmt.Errorf("could not store the upload: %w", err)
 			}
 		}

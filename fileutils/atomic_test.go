@@ -437,6 +437,174 @@ func TestCommitTempWithoutReplacing(t *testing.T) {
 	}
 }
 
+// fullDiskFs is a filesystem on which the destination cannot be renamed over
+// (so the content has to be copied into it) and writes to it start to fail
+// after room more bytes, like a disk that fills up.
+type fullDiskFs struct {
+	afero.Fs
+	room int
+}
+
+func (f *fullDiskFs) Rename(string, string) error {
+	return errors.New("device or resource busy")
+}
+
+func (f *fullDiskFs) OpenFile(name string, flag int, perm os.FileMode) (afero.File, error) {
+	file, err := f.Fs.OpenFile(name, flag, perm)
+	if err != nil || IsTempName(filepath.Base(name)) || flag&(os.O_WRONLY|os.O_RDWR) == 0 {
+		return file, err
+	}
+	return &fullDiskFile{File: file, fs: f}, nil
+}
+
+type fullDiskFile struct {
+	afero.File
+	fs *fullDiskFs
+}
+
+func (f *fullDiskFile) Write(p []byte) (int, error) {
+	if len(p) <= f.fs.room {
+		f.fs.room -= len(p)
+		return f.File.Write(p)
+	}
+	n, _ := f.File.Write(p[:f.fs.room])
+	f.fs.room -= n
+	return n, errors.New("no space left on device")
+}
+
+// Where the content cannot be renamed into place it is copied into the
+// destination. That copy used to truncate the destination first and remove
+// the temporary file whatever happened: when it failed part way (a disk that
+// fills up), the old content was gone, the new content was incomplete, and
+// the only complete copy of it had just been deleted.
+func TestInPlaceCopyDoesNotLoseBothVersions(t *testing.T) {
+	const original = "ORIGINAL-CONTENT"
+	longer := strings.Repeat("N", 40)
+	tmp := "/" + TempPrefix + strings.Repeat("a", 32)
+
+	setup := func(t *testing.T, room int) (afs *fullDiskFs, root, target string) {
+		t.Helper()
+		base, root := newAtomicFs(t)
+		target = filepath.Join(root, "data.bin")
+		if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return &fullDiskFs{Fs: base, room: room}, root, target
+	}
+	content := func(t *testing.T, path string) string {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	t.Run("no room for what the new content is longer by", func(t *testing.T) {
+		afs, root, target := setup(t, 10)
+
+		// A one-off write: the destination is as it was, and nothing is left
+		// behind (the client still has what it sent).
+		if _, err := WriteFileAtomic(afs, "/data.bin", strings.NewReader(longer), 0o644, true); err == nil {
+			t.Fatal("the write reported success")
+		}
+		if got := content(t, target); got != original {
+			t.Errorf("after the failed write the destination holds %q, want the original", got)
+		}
+		if temps := tempsIn(t, root); len(temps) != 0 {
+			t.Errorf("temporary files left behind: %v", temps)
+		}
+
+		// An upload that is put in place at its end keeps its data, so that
+		// it can be put in place again once there is room.
+		afs.room = 10
+		if err := os.WriteFile(filepath.Join(root, tmp), []byte(longer), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := CommitTemp(afs, tmp, "/data.bin", 0o644, true); err == nil {
+			t.Fatal("CommitTemp reported success")
+		}
+		if got := content(t, target); got != original {
+			t.Errorf("after the failed CommitTemp the destination holds %q, want the original", got)
+		}
+		if got := content(t, filepath.Join(root, tmp)); got != longer {
+			t.Errorf("the complete temporary file holds %q after the failure", got)
+		}
+
+		afs.room = 1000
+		if err := CommitTemp(afs, tmp, "/data.bin", 0o644, true); err != nil {
+			t.Fatalf("CommitTemp with room again: %v", err)
+		}
+		if got := content(t, target); got != longer {
+			t.Errorf("the destination holds %q", got)
+		}
+		if temps := tempsIn(t, root); len(temps) != 0 {
+			t.Errorf("temporary files left behind: %v", temps)
+		}
+	})
+
+	t.Run("a failure while the old content is being overwritten", func(t *testing.T) {
+		// Nothing can put the old content back then. The complete new
+		// content must not be thrown away on top of that.
+		shorter := strings.Repeat("S", 12)
+		for name, write := range map[string]func(afs *fullDiskFs, root string) error{
+			"WriteFileAtomic": func(afs *fullDiskFs, _ string) error {
+				_, err := WriteFileAtomic(afs, "/data.bin", strings.NewReader(shorter), 0o644, true)
+				return err
+			},
+			"CommitTemp": func(afs *fullDiskFs, root string) error {
+				if err := os.WriteFile(filepath.Join(root, tmp), []byte(shorter), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return CommitTemp(afs, tmp, "/data.bin", 0o644, true)
+			},
+		} {
+			afs, root, target := setup(t, 5)
+			if err := write(afs, root); err == nil {
+				t.Fatalf("%s reported success", name)
+			}
+			temps := tempsIn(t, root)
+			if len(temps) != 1 || content(t, filepath.Join(root, temps[0])) != shorter {
+				t.Errorf("%s: the destination holds %q and the complete new content is gone (temporary files: %v)", name, content(t, target), temps)
+			}
+		}
+	})
+
+	t.Run("through a link whose target does not exist yet", func(t *testing.T) {
+		afs, root, _ := setup(t, 1000)
+		if err := os.Symlink("target.bin", filepath.Join(root, "link.bin")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, tmp), []byte(longer), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := CommitTemp(afs, tmp, "/link.bin", 0o644, true); err != nil {
+			t.Fatal(err)
+		}
+		if fi, err := os.Lstat(filepath.Join(root, "link.bin")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("the link was replaced (%v)", err)
+		}
+		if got := content(t, filepath.Join(root, "target.bin")); got != longer {
+			t.Errorf("the target of the link holds %q", got)
+		}
+	})
+
+	t.Run("it still works", func(t *testing.T) {
+		for _, replacement := range []string{longer, "short", original, ""} {
+			afs, root, target := setup(t, 1000)
+			if _, err := WriteFileAtomic(afs, "/data.bin", strings.NewReader(replacement), 0o644, true); err != nil {
+				t.Fatal(err)
+			}
+			if got := content(t, target); got != replacement {
+				t.Errorf("the destination holds %q, want %q", got, replacement)
+			}
+			if temps := tempsIn(t, root); len(temps) != 0 {
+				t.Errorf("temporary files left behind: %v", temps)
+			}
+		}
+	})
+}
+
 func TestWriteFileAtomicRefusesADirectory(t *testing.T) {
 	afs, root := newAtomicFs(t)
 	if err := os.MkdirAll(filepath.Join(root, "dir", "sub"), 0o755); err != nil {

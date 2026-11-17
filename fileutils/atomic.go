@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -124,11 +125,23 @@ func WriteFileAtomic(afs afero.Fs, dst string, in io.Reader, fileMode fs.FileMod
 	}
 
 	if err := CommitTemp(afs, tmp, dst, fileMode, replace); err != nil {
+		// Whoever sent the content still has it, so the temporary file is of
+		// no use, unless dst was left damaged: then it is the only complete
+		// copy of either version there is.
+		if !errors.Is(err, ErrDestinationDamaged) {
+			_ = afs.Remove(tmp)
+		}
 		return nil, err
 	}
 
 	return info, nil
 }
+
+// ErrDestinationDamaged is returned when the content could not be put in
+// place and the destination is no longer what it was either: writing into it
+// failed after part of it had been overwritten. The complete content is still
+// in the temporary file, which is kept.
+var ErrDestinationDamaged = errors.New("the destination was left incomplete")
 
 // fillFile copies in to the file, syncs it and closes it.
 func fillFile(file afero.File, in io.Reader) (os.FileInfo, error) {
@@ -164,6 +177,12 @@ func fillFile(file afero.File, in io.Reader) (os.FileInfo, error) {
 //
 // Without replace, dst is created and never replaced: when something is at
 // dst, tmp is removed and ErrExist returned. See placeNew.
+//
+// tmp is removed when it is in place, and when dst refuses it for good
+// (something is there that may not be replaced, or cannot take content).
+// When putting it in place fails for another reason (a full disk), tmp is
+// kept: it is complete, and the caller can try again or discard it. The error
+// is ErrDestinationDamaged if dst was changed on the way.
 func CommitTemp(afs afero.Fs, tmp, dst string, fileMode fs.FileMode, replace bool) error {
 	old, err := lstat(afs, dst)
 	exists := err == nil
@@ -199,13 +218,20 @@ func CommitTemp(afs afero.Fs, tmp, dst string, fileMode fs.FileMode, replace boo
 		// (a bind-mounted file), or is open elsewhere on Windows.
 	}
 
-	err = copyInPlace(afs, tmp, dst, fileMode)
-	_ = afs.Remove(tmp)
+	damaged, err := copyInPlace(afs, tmp, dst, fileMode)
+	switch {
+	case err == nil:
+		_ = afs.Remove(tmp)
+		return nil
+	case damaged:
+		return fmt.Errorf("%w: %w", ErrDestinationDamaged, err)
+	}
 	return err
 }
 
 // placeNew puts the complete temporary file tmp at dst if, and only if,
-// nothing is there, and removes tmp either way.
+// nothing is there. It removes tmp when it is in place and when something is
+// there, and keeps it when putting it there failed: see CommitTemp.
 //
 // Looking first and renaming then would leave a moment in which a file can
 // appear at dst and be replaced, and a rename replaces without asking. A hard
@@ -241,13 +267,17 @@ func placeNew(afs afero.Fs, tmp, dst string, fileMode fs.FileMode) error {
 	}
 
 	// Neither a link nor a rename: copy the content into a file created for
-	// it, which fails as well when the name is taken.
+	// it, which fails as well when the name is taken, and which is removed
+	// again when the copy fails.
 	in, err := afs.Open(tmp)
-	if err == nil {
-		_, err = writeNewInPlace(afs, dst, in, fileMode, false)
-		_ = in.Close()
+	if err != nil {
+		return err
 	}
-	_ = afs.Remove(tmp)
+	_, err = writeNewInPlace(afs, dst, in, fileMode, false)
+	_ = in.Close()
+	if err == nil || errors.Is(err, fberrors.ErrExist) {
+		_ = afs.Remove(tmp)
+	}
 	return err
 }
 
@@ -285,15 +315,97 @@ func link(afs afero.Fs, oldname, newname string) error {
 	return errNoHardLinks
 }
 
-// copyInPlace overwrites dst with the content of the file at src.
-func copyInPlace(afs afero.Fs, src, dst string, fileMode fs.FileMode) error {
+// copyInPlace makes the content of the file at src the content of dst, by
+// writing into dst. It reports whether a failure left dst changed.
+//
+// dst is not emptied first. What the new content is longer by is written
+// first, behind the old content: that is the part that needs room on the
+// disk, and when there is none, cutting it off again leaves dst exactly as
+// it was. Only then is the old content overwritten, which needs no room on
+// the filesystems this is likely to meet, and what is left of it cut off.
+// Emptying dst first, as this did, lost the old content to a disk that was
+// full before the new content was written.
+//
+// A failure while the old content is being overwritten cannot be undone: dst
+// is then a mix of both, and the caller is told.
+func copyInPlace(afs afero.Fs, src, dst string, fileMode fs.FileMode) (damaged bool, err error) {
 	in, err := afs.Open(src)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer in.Close()
 
-	_, err = writeInPlace(afs, dst, in, fileMode)
+	srcInfo, err := in.Stat()
+	if err != nil {
+		return false, err
+	}
+	newSize := srcInfo.Size()
+
+	// Created here if it is not there (it was a moment ago, or the rename
+	// that was tried first failed): then it is ours to remove again.
+	created := true
+	out, err := afs.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_EXCL, fileMode)
+	if errors.Is(err, fs.ErrExist) {
+		// Also a symbolic link whose target does not exist yet: the content
+		// goes through the link, which creates the target.
+		created = false
+		out, err = afs.OpenFile(dst, os.O_RDWR|os.O_CREATE, fileMode)
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		_ = out.Close()
+		if err != nil && created {
+			_ = afs.Remove(dst)
+			damaged = false
+		}
+	}()
+
+	outInfo, err := out.Stat()
+	if err != nil {
+		return false, err
+	}
+	oldSize := outInfo.Size()
+
+	if newSize > oldSize {
+		if err := copyRange(out, in, oldSize, newSize-oldSize); err != nil {
+			// Put it back the way it was.
+			if truncErr := out.Truncate(oldSize); truncErr != nil {
+				return true, err
+			}
+			return false, err
+		}
+	}
+
+	if err := copyRange(out, in, 0, min(oldSize, newSize)); err != nil {
+		return true, err
+	}
+	if newSize < oldSize {
+		if err := out.Truncate(newSize); err != nil {
+			return true, err
+		}
+	}
+
+	// Sync the file to ensure all data is written to storage.
+	if err := out.Sync(); err != nil {
+		return true, err
+	}
+	return false, nil
+}
+
+// copyRange copies n bytes at offset from in to the same place in out.
+func copyRange(out, in afero.File, offset, n int64) error {
+	if n == 0 {
+		return nil
+	}
+	if _, err := in.Seek(offset, io.SeekStart); err != nil {
+		return err
+	}
+	if _, err := out.Seek(offset, io.SeekStart); err != nil {
+		return err
+	}
+	_, err := io.CopyN(out, in, n)
 	return err
 }
 
