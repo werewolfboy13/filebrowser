@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"time"
 
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 	"github.com/filebrowser/filebrowser/v2/files"
@@ -179,6 +180,11 @@ func (a *HookAuth) SaveUser() (*users.User, error) {
 				return nil, err
 			}
 			u.Password = pass
+
+			// The password changed where the hook asks: the sessions that
+			// were opened with the old one end here, as they do when a
+			// password is changed through the API.
+			u.RevokeTokens(time.Now())
 		}
 
 		// update user with provided fields
@@ -205,28 +211,33 @@ func (a *HookAuth) GetUser(d *users.User) *users.User {
 		Share:    isAdmin || a.Fields.GetBoolean("user.perm.share", d.Perm.Share),
 		Download: isAdmin || a.Fields.GetBoolean("user.perm.download", d.Perm.Download),
 	}
-	user := users.User{
-		ID:                    d.ID,
-		Username:              d.Username,
-		Password:              d.Password,
-		Scope:                 a.Fields.GetString("user.scope", d.Scope),
-		Locale:                a.Fields.GetString("user.locale", d.Locale),
-		ViewMode:              users.ViewMode(a.Fields.GetString("user.viewMode", string(d.ViewMode))),
-		SingleClick:           a.Fields.GetBoolean("user.singleClick", d.SingleClick),
-		RedirectAfterCopyMove: a.Fields.GetBoolean("user.redirectAfterCopyMove", d.RedirectAfterCopyMove),
-		Sorting: files.Sorting{
-			Asc: a.Fields.GetBoolean("user.sorting.asc", d.Sorting.Asc),
-			By:  a.Fields.GetString("user.sorting.by", d.Sorting.By),
-		},
-		Commands:     a.Fields.GetArray("user.commands", d.Commands),
-		DateFormat:   a.Fields.GetBoolean("user.dateFormat", d.DateFormat),
-		HideDotfiles: a.Fields.GetBoolean("user.hideDotfiles", d.HideDotfiles),
-		Perm:         perms,
-		LockPassword: true,
 
-		// Not something a hook decides: the stored value is kept.
-		TokensNotBefore: d.TokensNotBefore,
+	// The user starts out as a copy of d, so that everything a hook has no
+	// field for stays as it is: the rules an administrator set for the user,
+	// the revocation mark, and whatever field is added to a user later. The
+	// user used to be built from the fields listed here, and a login then
+	// erased the others from the stored record.
+	user := *d
+
+	// Built for the scope d has, which the hook may be about to change. It
+	// is set up again, for the scope the user ends up with, where the user
+	// is stored or read.
+	user.Fs = nil
+
+	user.Scope = a.Fields.GetString("user.scope", d.Scope)
+	user.Locale = a.Fields.GetString("user.locale", d.Locale)
+	user.ViewMode = users.ViewMode(a.Fields.GetString("user.viewMode", string(d.ViewMode)))
+	user.SingleClick = a.Fields.GetBoolean("user.singleClick", d.SingleClick)
+	user.RedirectAfterCopyMove = a.Fields.GetBoolean("user.redirectAfterCopyMove", d.RedirectAfterCopyMove)
+	user.Sorting = files.Sorting{
+		Asc: a.Fields.GetBoolean("user.sorting.asc", d.Sorting.Asc),
+		By:  a.Fields.GetString("user.sorting.by", d.Sorting.By),
 	}
+	user.Commands = a.Fields.GetArray("user.commands", d.Commands)
+	user.DateFormat = a.Fields.GetBoolean("user.dateFormat", d.DateFormat)
+	user.HideDotfiles = a.Fields.GetBoolean("user.hideDotfiles", d.HideDotfiles)
+	user.Perm = perms
+	user.LockPassword = true
 
 	return &user
 }
