@@ -115,13 +115,31 @@ func newListenRecord(server *settings.Server, listener net.Listener) *listenReco
 //
 // A file that cannot be written is not an error: the health command then
 // looks for the server as it did before there was a record.
+//
+// The record of another server that is still running is left as it is, and
+// so is, when this server stops, a record that is no longer its own. A second
+// server in the same container, started with `docker exec` on a port and a
+// database of its own, took the record over and removed it when it stopped:
+// the container's own server was then looked for where it does not listen,
+// and reported as unhealthy until the container was restarted.
 func recordListenAddress(server *settings.Server, listener net.Listener) (remove func()) {
 	path := os.Getenv(envHealthFile)
 	if path == "" {
 		return func() {}
 	}
 
-	if err := writeListenRecord(path, newListenRecord(server, listener)); err != nil {
+	record := newListenRecord(server, listener)
+
+	// With the checks of the health command, so only a record that it would
+	// use counts. Without a start time there is no telling a server that
+	// runs from one that was killed, and the record is replaced, as before.
+	if other, ok := readListenRecord(path); ok && other.StartTime != "" && !other.writtenBy(record) {
+		log.Printf("WARNING: %s is the record of another File Browser that is running (process %d).", path, other.PID)
+		log.Printf("WARNING: It is left as it is: the health command checks that server, not this one.")
+		return func() {}
+	}
+
+	if err := writeListenRecord(path, record); err != nil {
 		// What an earlier server left there says nothing about this one.
 		// Should it not be this server's to remove either, the health
 		// command does not take its word: see readListenRecord.
@@ -131,7 +149,17 @@ func recordListenAddress(server *settings.Server, listener net.Listener) (remove
 		return func() {}
 	}
 
-	return func() { _ = os.Remove(path) }
+	return func() {
+		if current, _, ok := loadListenRecord(path); ok && current.writtenBy(record) {
+			_ = os.Remove(path)
+		}
+	}
+}
+
+// writtenBy reports whether the record comes from the process that wrote
+// other.
+func (r *listenRecord) writtenBy(other *listenRecord) bool {
+	return r.PID == other.PID && r.StartTime == other.StartTime
 }
 
 // writeListenRecord writes the record to path in one step, so that the health
@@ -172,6 +200,34 @@ func writeListenRecord(path string, record *listenRecord) (err error) {
 	return os.Rename(tmp.Name(), path)
 }
 
+// loadListenRecord returns what the file at path holds as a record, and the
+// file's details. It checks neither who wrote it nor whether that process
+// still runs: see readListenRecord.
+func loadListenRecord(path string) (*listenRecord, os.FileInfo, bool) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, false
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, nil, false
+	}
+
+	data, err := io.ReadAll(io.LimitReader(file, listenRecordMaxSize))
+	if err != nil {
+		return nil, nil, false
+	}
+
+	record := &listenRecord{}
+	if err := json.Unmarshal(data, record); err != nil {
+		return nil, nil, false
+	}
+
+	return record, info, true
+}
+
 // readListenRecord returns the record at path, if there is one, the server
 // that wrote it is still running, and it is that server's.
 //
@@ -184,24 +240,8 @@ func readListenRecord(path string) (*listenRecord, bool) {
 		return nil, false
 	}
 
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, false
-	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return nil, false
-	}
-
-	data, err := io.ReadAll(io.LimitReader(file, listenRecordMaxSize))
-	if err != nil {
-		return nil, false
-	}
-
-	record := &listenRecord{}
-	if err := json.Unmarshal(data, record); err != nil {
+	record, info, ok := loadListenRecord(path)
+	if !ok {
 		return nil, false
 	}
 	switch {

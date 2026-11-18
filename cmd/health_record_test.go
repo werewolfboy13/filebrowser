@@ -70,6 +70,22 @@ func writeRecordFile(t *testing.T, path string, record listenRecord) {
 	writeTestFile(t, path, string(data))
 }
 
+// otherRunningProcess returns the record of a server in another process
+// that is running: the process that started the tests. It skips the test
+// where the start time of a process cannot be read, because nothing tells a
+// process that runs from one that is gone there.
+func otherRunningProcess(t *testing.T) listenRecord {
+	t.Helper()
+
+	parent := os.Getppid()
+	startTime := processStartTime(parent)
+	if startTime == "" {
+		t.Skip("the start time of the parent process cannot be read on this system")
+	}
+
+	return listenRecord{PID: parent, StartTime: startTime, Address: "127.0.0.1", Port: "1"}
+}
+
 // The Docker image's health check runs `filebrowser health` with the
 // container's environment, but without the flags the server was started
 // with. A server started with `--port` or `--config` was looked for on the
@@ -344,6 +360,65 @@ func TestRecordListenAddress(t *testing.T) {
 
 		if got := readRecordFile(t, path); got.Address != "127.0.0.1" || got.Port != actualPort {
 			t.Errorf("record = %+v, want this server's", got)
+		}
+	})
+
+	t.Run("removes its record when the server stops", func(t *testing.T) {
+		path, remove := recordFor(t, &settings.Server{Port: "0"}, listener)
+
+		remove()
+
+		assertNoFile(t, path)
+	})
+
+	// A second server in the same container, started with `docker exec`,
+	// took over the record of the container's own server.
+	t.Run("leaves the record of another running server as it is", func(t *testing.T) {
+		other := otherRunningProcess(t)
+		path := filepath.Join(t.TempDir(), "health.json")
+		t.Setenv(envHealthFile, path)
+		writeRecordFile(t, path, other)
+
+		remove := recordListenAddress(&settings.Server{Address: "127.0.0.1", Port: "0"}, listener)
+		if got := readRecordFile(t, path); got != other {
+			t.Errorf("record = %+v, want the other server's: %+v", got, other)
+		}
+
+		// And when it stops, it removes nothing that is not its own.
+		remove()
+		if got := readRecordFile(t, path); got != other {
+			t.Errorf("record after the stop = %+v, want the other server's: %+v", got, other)
+		}
+	})
+
+	t.Run("replaces the record of a server that no longer runs", func(t *testing.T) {
+		other := otherRunningProcess(t)
+		other.StartTime = "1"
+		path := filepath.Join(t.TempDir(), "health.json")
+		t.Setenv(envHealthFile, path)
+		writeRecordFile(t, path, other)
+
+		recordListenAddress(&settings.Server{Address: "127.0.0.1", Port: "0"}, listener)
+
+		if got := readRecordFile(t, path); got.PID != os.Getpid() || got.Port != actualPort {
+			t.Errorf("record = %+v, want this server's", got)
+		}
+	})
+
+	// The record is another server's by the time this one stops: this one
+	// was killed and started again, or the file was replaced by hand.
+	t.Run("does not remove a record that is no longer its own", func(t *testing.T) {
+		path, remove := recordFor(t, &settings.Server{Port: "0"}, listener)
+
+		other := readRecordFile(t, path)
+		other.PID = os.Getppid()
+		other.StartTime = processStartTime(other.PID)
+		writeRecordFile(t, path, other)
+
+		remove()
+
+		if got := readRecordFile(t, path); got != other {
+			t.Errorf("record after the stop = %+v, want the other server's: %+v", got, other)
 		}
 	})
 
