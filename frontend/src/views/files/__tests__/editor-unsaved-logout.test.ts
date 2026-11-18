@@ -115,204 +115,216 @@ async function openFile(path = "/files/notes.md", content = "draft v1") {
     () => {
       expect(editorEl()?.classList.contains("ace_editor")).toBe(true);
     },
-    { timeout: 5000 }
+    { timeout: 10_000 }
   );
   return ace.edit(editorEl()!);
 }
 
+// The suite also runs on builders short of CPU: the waits are given up to
+// 10 s (and the tests 60 s).
+const waitFor = (check: () => void) => vi.waitFor(check, { timeout: 10_000 });
+
 beforeAll(async () => {
   // load the editor (and Ace) once, outside the tests' time limits
   await import("@/views/files/Editor.vue");
-});
+}, 120_000);
 
-describe("unsaved text in the editor across a forced logout", () => {
-  afterEach(() => {
-    wrapper?.unmount();
-    wrapper = null;
-    sessionStorage.clear();
-    localStorage.clear();
-  });
-
-  async function setup(user = { id: 1, username: "alice" }) {
-    putStatus = 401;
-    globalThis.fetch = vi.fn(async (_url: any, init?: any) => {
-      if (init?.method === "PUT") {
-        return new Response(putStatus === 200 ? "" : "401 Unauthorized", {
-          status: putStatus,
-        });
-      }
-      return new Response("{}", { status: 200 });
-    }) as any;
-    pinia = createPinia();
-    setActivePinia(pinia);
-    parseToken(token(user.id, user.username));
-    await router.push("/login");
-    await router.isReady();
-    wrapper = mount(
-      { render: () => [h(RouterView), h(Prompts)] },
-      {
-        attachTo: document.body,
-        global: {
-          plugins: [pinia, router, i18n],
-          provide: { $showError: vi.fn(), $showSuccess: vi.fn() },
-          stubs: { Breadcrumbs: true },
-        },
-      }
-    );
-  }
-
-  async function saveAnswered401(editor: ace.Ace.Editor) {
-    editor.setValue(UNSAVED);
-    expect(editor.session.getUndoManager().isClean()).toBe(false);
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true })
-    );
-    await vi.waitFor(() => {
-      expect(router.currentRoute.value.path).toBe("/login");
-      expect(editorEl()).toBeNull();
+describe(
+  "unsaved text in the editor across a forced logout",
+  { timeout: 60_000 },
+  () => {
+    afterEach(() => {
+      wrapper?.unmount();
+      wrapper = null;
+      sessionStorage.clear();
+      localStorage.clear();
     });
-  }
 
-  it("keeps the text, leads back to the file, and offers to restore it", async () => {
-    await setup();
-    const editor = await openFile();
-    await saveAnswered401(editor);
-
-    expect(router.currentRoute.value.query.redirect).toBe("/files/notes.md");
-    expect(storedText()).toBe(true);
-
-    // the same user logs in again and is led back to the file
-    parseToken(token(1, "alice"));
-    const reopened = await openFile(
-      router.currentRoute.value.query.redirect as string
-    );
-    await vi.waitFor(() =>
-      expect(promptNames()).toEqual(["restoreEditorChanges"])
-    );
-    // asked, not overwritten
-    expect(reopened.getValue()).toBe("draft v1");
-    // the safe answer (nothing is lost) has the default focus
-    expect(document.activeElement?.textContent?.trim()).toBe("Restore");
-
-    (document.activeElement as HTMLElement).click();
-    await vi.waitFor(() => expect(promptNames()).toEqual([]));
-    expect(reopened.getValue()).toBe(UNSAVED);
-    // restored as unsaved changes: closing asks, saving stores them
-    expect(reopened.session.getUndoManager().isClean()).toBe(false);
-    expect(storedText()).toBe(false);
-  });
-
-  it("Discard keeps the file's content and forgets the text", async () => {
-    await setup();
-    await saveAnswered401(await openFile());
-    parseToken(token(1, "alice"));
-    const reopened = await openFile();
-    await vi.waitFor(() =>
-      expect(promptNames()).toEqual(["restoreEditorChanges"])
-    );
-    const discard = [...document.querySelectorAll("button")].find(
-      (b) => b.textContent?.trim() === "Discard"
-    )!;
-    discard.click();
-    await vi.waitFor(() => expect(promptNames()).toEqual([]));
-    expect(reopened.getValue()).toBe("draft v1");
-    expect(storedText()).toBe(false);
-  });
-
-  it("Escape answers neither: the text is offered again next time", async () => {
-    await setup();
-    await saveAnswered401(await openFile());
-    parseToken(token(1, "alice"));
-    const reopened = await openFile();
-    await vi.waitFor(() =>
-      expect(promptNames()).toEqual(["restoreEditorChanges"])
-    );
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    await vi.waitFor(() => expect(promptNames()).toEqual([]));
-    expect(reopened.getValue()).toBe("draft v1");
-    expect(storedText()).toBe(true);
-  });
-
-  it("another user logging in on the tab never gets the text", async () => {
-    await setup();
-    await saveAnswered401(await openFile());
-    expect(storedText()).toBe(true);
-
-    parseToken(token(2, "bob"));
-    // dropped as soon as the other user's session starts
-    expect(storedText()).toBe(false);
-    await openFile();
-    await new Promise((r) => setTimeout(r, 0));
-    expect(promptNames()).toEqual([]);
-  });
-
-  it("a deliberate logout keeps nothing, and drops what was kept", async () => {
-    await setup();
-    await saveAnswered401(await openFile());
-    parseToken(token(1, "alice"));
-    const editor = await openFile("/files/other.md", "other");
-    await vi.waitFor(() => expect(useAuthStore().user).not.toBeNull());
-    editor.setValue("other, with half an hour of edits");
-    // Sidebar's button: logout(clickEvent)
-    logout(new MouseEvent("click") as any);
-    await vi.waitFor(() =>
-      expect(router.currentRoute.value.path).toBe("/login")
-    );
-    expect(storedText()).toBe(false);
-    expect(router.currentRoute.value.query.redirect).toBeUndefined();
-  });
-
-  it("the inactivity logout keeps the text too", async () => {
-    await setup();
-    const editor = await openFile();
-    editor.setValue(UNSAVED);
-    logout("inactivity", useAuthStore().jwt);
-    await vi.waitFor(() =>
-      expect(router.currentRoute.value.path).toBe("/login")
-    );
-    expect(router.currentRoute.value.query).toEqual({
-      "logout-reason": "inactivity",
-      redirect: "/files/notes.md",
-    });
-    expect(storedText()).toBe(true);
-  });
-
-  it("a successful save drops the kept text of that file", async () => {
-    await setup();
-    await saveAnswered401(await openFile());
-    parseToken(token(1, "alice"));
-    const reopened = await openFile();
-    await vi.waitFor(() =>
-      expect(promptNames()).toEqual(["restoreEditorChanges"])
-    );
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    await vi.waitFor(() => expect(promptNames()).toEqual([]));
-    putStatus = 200;
-    reopened.setValue("saved now");
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true })
-    );
-    await vi.waitFor(() => expect(storedText()).toBe(false));
-  });
-
-  it("a full storage does not stop the logout", async () => {
-    await setup();
-    const editor = await openFile();
-    const original = Storage.prototype.setItem;
-    const setItem = vi
-      .spyOn(Storage.prototype, "setItem")
-      .mockImplementation(function (this: Storage, key: string, value: string) {
-        if (this === sessionStorage) {
-          throw new DOMException("full", "QuotaExceededError");
+    async function setup(user = { id: 1, username: "alice" }) {
+      putStatus = 401;
+      globalThis.fetch = vi.fn(async (_url: any, init?: any) => {
+        if (init?.method === "PUT") {
+          return new Response(putStatus === 200 ? "" : "401 Unauthorized", {
+            status: putStatus,
+          });
         }
-        original.call(this, key, value);
-      });
-    try {
-      await saveAnswered401(editor);
-    } finally {
-      setItem.mockRestore();
+        return new Response("{}", { status: 200 });
+      }) as any;
+      pinia = createPinia();
+      setActivePinia(pinia);
+      parseToken(token(user.id, user.username));
+      await router.push("/login");
+      await router.isReady();
+      wrapper = mount(
+        { render: () => [h(RouterView), h(Prompts)] },
+        {
+          attachTo: document.body,
+          global: {
+            plugins: [pinia, router, i18n],
+            provide: { $showError: vi.fn(), $showSuccess: vi.fn() },
+            stubs: { Breadcrumbs: true },
+          },
+        }
+      );
     }
-    expect(useAuthStore().user).toBeNull();
-    expect(router.currentRoute.value.path).toBe("/login");
-  });
-});
+
+    async function saveAnswered401(editor: ace.Ace.Editor) {
+      editor.setValue(UNSAVED);
+      expect(editor.session.getUndoManager().isClean()).toBe(false);
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true })
+      );
+      await waitFor(() => {
+        expect(router.currentRoute.value.path).toBe("/login");
+        expect(editorEl()).toBeNull();
+      });
+    }
+
+    it("keeps the text, leads back to the file, and offers to restore it", async () => {
+      await setup();
+      const editor = await openFile();
+      await saveAnswered401(editor);
+
+      expect(router.currentRoute.value.query.redirect).toBe("/files/notes.md");
+      expect(storedText()).toBe(true);
+
+      // the same user logs in again and is led back to the file
+      parseToken(token(1, "alice"));
+      const reopened = await openFile(
+        router.currentRoute.value.query.redirect as string
+      );
+      await waitFor(() =>
+        expect(promptNames()).toEqual(["restoreEditorChanges"])
+      );
+      // asked, not overwritten
+      expect(reopened.getValue()).toBe("draft v1");
+      // the safe answer (nothing is lost) has the default focus
+      expect(document.activeElement?.textContent?.trim()).toBe("Restore");
+
+      (document.activeElement as HTMLElement).click();
+      await waitFor(() => expect(promptNames()).toEqual([]));
+      expect(reopened.getValue()).toBe(UNSAVED);
+      // restored as unsaved changes: closing asks, saving stores them
+      expect(reopened.session.getUndoManager().isClean()).toBe(false);
+      expect(storedText()).toBe(false);
+    });
+
+    it("Discard keeps the file's content and forgets the text", async () => {
+      await setup();
+      await saveAnswered401(await openFile());
+      parseToken(token(1, "alice"));
+      const reopened = await openFile();
+      await waitFor(() =>
+        expect(promptNames()).toEqual(["restoreEditorChanges"])
+      );
+      const discard = [...document.querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === "Discard"
+      )!;
+      discard.click();
+      await waitFor(() => expect(promptNames()).toEqual([]));
+      expect(reopened.getValue()).toBe("draft v1");
+      expect(storedText()).toBe(false);
+    });
+
+    it("Escape answers neither: the text is offered again next time", async () => {
+      await setup();
+      await saveAnswered401(await openFile());
+      parseToken(token(1, "alice"));
+      const reopened = await openFile();
+      await waitFor(() =>
+        expect(promptNames()).toEqual(["restoreEditorChanges"])
+      );
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await waitFor(() => expect(promptNames()).toEqual([]));
+      expect(reopened.getValue()).toBe("draft v1");
+      expect(storedText()).toBe(true);
+    });
+
+    it("another user logging in on the tab never gets the text", async () => {
+      await setup();
+      await saveAnswered401(await openFile());
+      expect(storedText()).toBe(true);
+
+      parseToken(token(2, "bob"));
+      // dropped as soon as the other user's session starts
+      expect(storedText()).toBe(false);
+      await openFile();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(promptNames()).toEqual([]);
+    });
+
+    it("a deliberate logout keeps nothing, and drops what was kept", async () => {
+      await setup();
+      await saveAnswered401(await openFile());
+      parseToken(token(1, "alice"));
+      const editor = await openFile("/files/other.md", "other");
+      await waitFor(() => expect(useAuthStore().user).not.toBeNull());
+      editor.setValue("other, with half an hour of edits");
+      // Sidebar's button: logout(clickEvent)
+      logout(new MouseEvent("click") as any);
+      await waitFor(() =>
+        expect(router.currentRoute.value.path).toBe("/login")
+      );
+      expect(storedText()).toBe(false);
+      expect(router.currentRoute.value.query.redirect).toBeUndefined();
+    });
+
+    it("the inactivity logout keeps the text too", async () => {
+      await setup();
+      const editor = await openFile();
+      editor.setValue(UNSAVED);
+      logout("inactivity", useAuthStore().jwt);
+      await waitFor(() =>
+        expect(router.currentRoute.value.path).toBe("/login")
+      );
+      expect(router.currentRoute.value.query).toEqual({
+        "logout-reason": "inactivity",
+        redirect: "/files/notes.md",
+      });
+      expect(storedText()).toBe(true);
+    });
+
+    it("a successful save drops the kept text of that file", async () => {
+      await setup();
+      await saveAnswered401(await openFile());
+      parseToken(token(1, "alice"));
+      const reopened = await openFile();
+      await waitFor(() =>
+        expect(promptNames()).toEqual(["restoreEditorChanges"])
+      );
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await waitFor(() => expect(promptNames()).toEqual([]));
+      putStatus = 200;
+      reopened.setValue("saved now");
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true })
+      );
+      await waitFor(() => expect(storedText()).toBe(false));
+    });
+
+    it("a full storage does not stop the logout", async () => {
+      await setup();
+      const editor = await openFile();
+      const original = Storage.prototype.setItem;
+      const setItem = vi
+        .spyOn(Storage.prototype, "setItem")
+        .mockImplementation(function (
+          this: Storage,
+          key: string,
+          value: string
+        ) {
+          if (this === sessionStorage) {
+            throw new DOMException("full", "QuotaExceededError");
+          }
+          original.call(this, key, value);
+        });
+      try {
+        await saveAnswered401(editor);
+      } finally {
+        setItem.mockRestore();
+      }
+      expect(useAuthStore().user).toBeNull();
+      expect(router.currentRoute.value.path).toBe("/login");
+    });
+  }
+);

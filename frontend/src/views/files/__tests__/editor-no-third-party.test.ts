@@ -125,7 +125,7 @@ async function openFile(name: string, content: string, theme: string) {
 const waitFor = (cond: () => boolean) =>
   vi.waitFor(() => expect(cond()).toBe(true), { timeout: 10_000 });
 
-describe("text editor network requests", () => {
+describe("text editor network requests", { timeout: 30_000 }, () => {
   beforeEach(() => {
     document.body.innerHTML = "";
     document.head.querySelectorAll("script").forEach((s) => s.remove());

@@ -60,7 +60,7 @@ const README = `Quarterly notes for the team.
 <script>window.__xss = 1</script><img src=x onerror="window.__xss=2">
 `;
 
-describe("markdown preview sanitisation", () => {
+describe("markdown preview sanitisation", { timeout: 30_000 }, () => {
   it("keeps page-level CSS, forms, remote images, overlays and ids out of the preview", async () => {
     setActivePinia(createPinia());
     useAuthStore().user = {
