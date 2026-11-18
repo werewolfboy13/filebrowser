@@ -212,6 +212,50 @@ describe("a conflict reported when the upload is created", () => {
   });
 });
 
+// Abort starts the queue over. It used to do so only once the last aborted
+// upload had settled, and that dropped the files queued in the meantime;
+// an aborted upload can settle late (a plain POST reads the whole file
+// first when the page is not served over http(s)).
+describe("abort and a late-settling upload", () => {
+  it("a file queued after abort is uploaded, and the late settlement changes nothing", async () => {
+    let settleBig!: (e: Error) => void;
+    let finishNext!: () => void;
+    h.post
+      .mockImplementationOnce(
+        () => new Promise((_, reject) => (settleBig = reject))
+      )
+      .mockImplementationOnce(
+        () => new Promise<void>((resolve) => (finishNext = resolve))
+      );
+    queue("big.iso");
+    await settle();
+    const store = useUploadStore();
+    store.abort(); // the transport is mocked: big.iso settles later
+    const next = queue("next.pdf");
+    await settle();
+    settleBig(new Error("Upload aborted"));
+    await settle();
+    console.log(
+      "posts:",
+      JSON.stringify(h.post.mock.calls.map((c) => c[0])),
+      "| pending after:",
+      store.pendingUploadCount
+    );
+    expect(h.post.mock.calls.map((c) => c[0])).toEqual([
+      "/files/big.iso",
+      "/files/next.pdf",
+    ]);
+    expect(store.pendingUploadCount).toBe(1);
+    expect(store.totalBytes).toBe(next.size);
+    expect(useFileStore().reload).toBe(false);
+
+    finishNext();
+    await settle();
+    expect(store.pendingUploadCount).toBe(0);
+    expect(useFileStore().reload).toBe(true); // the new batch finished
+  });
+});
+
 describe("the Replace dialog", () => {
   async function show(confirm = vi.fn()) {
     const layout = useLayoutStore();

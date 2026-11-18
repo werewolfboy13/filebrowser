@@ -67,19 +67,16 @@ export const useUploadStore = defineStore("upload", () => {
   };
 
   const abort = () => {
+    // bumps the generation: what settles from now on for an upload started
+    // before is ignored (see processUploads)
     dropConflicts();
-    // Resets the state by preventing the processing of the remaning uploads
-    lastUpload.value = Infinity;
     tus.abortAllUploads();
     api.abortResourceUploads();
-    // The queue is restarted (reset) when the last active upload settles.
-    // With none active, e.g. on logout while nothing is uploading, nothing
-    // would settle and the queue would stay stopped: the first file of the
-    // next upload would be dropped.
-    if (!hasActiveUploads()) {
-      window.removeEventListener("beforeunload", beforeUnload);
-      reset();
-    }
+    // Start the queue over at once. The aborted uploads can settle later,
+    // and files queued meanwhile (e.g. after logging in again) belong to
+    // the next batch: waiting for them dropped those files.
+    window.removeEventListener("beforeunload", beforeUnload);
+    reset();
   };
 
   //
@@ -124,7 +121,9 @@ export const useUploadStore = defineStore("upload", () => {
       }
 
       const upload = nextUpload();
+      const started = generation;
       let succeeded = true;
+      let conflict = false;
 
       if (upload.type === "dir") {
         await api.post(upload.path).catch((err) => {
@@ -142,13 +141,16 @@ export const useUploadStore = defineStore("upload", () => {
             succeeded = false;
             if (err.message === "Upload aborted") return;
             if (isCreateConflict(err) && !upload.overwrite && upload.file) {
-              askReplace(upload, upload.file);
+              conflict = true;
               return;
             }
             $showError(err);
           });
       }
 
+      // aborted meanwhile: the queue has started over without this upload
+      if (started !== generation) return;
+      if (conflict) askReplace(upload, upload.file!);
       finishUpload(upload, succeeded);
     }
   };
@@ -202,8 +204,9 @@ export const useUploadStore = defineStore("upload", () => {
   let conflicts: Conflict[] = [];
   // the question being shown, if any
   let asking: PopupProps | null = null;
-  // bumped by abort(): answers to questions asked before it are ignored
-  let conflictGeneration = 0;
+  // bumped by abort(): answers to questions asked before it, and uploads
+  // started before it, are ignored
+  let generation = 0;
 
   const hasConflicts = () => asking !== null || conflicts.length > 0;
 
@@ -226,7 +229,7 @@ export const useUploadStore = defineStore("upload", () => {
     if (!conflict) return;
 
     const layoutStore = useLayoutStore();
-    const generation = conflictGeneration;
+    const asked = generation;
     layoutStore.showHover({
       prompt: "replace",
       props: {
@@ -235,7 +238,7 @@ export const useUploadStore = defineStore("upload", () => {
       },
       confirm: () => {
         // queue it first: closing finishes the batch if nothing is queued
-        if (generation === conflictGeneration) {
+        if (asked === generation) {
           upload(
             conflict.path,
             conflict.name,
@@ -248,7 +251,7 @@ export const useUploadStore = defineStore("upload", () => {
       },
       // runs however the question is closed (Replace, Skip, Cancel, Escape)
       close: async () => {
-        if (generation !== conflictGeneration) return "";
+        if (asked !== generation) return "";
         asking = null;
         askNext();
         // the last question answered: finish the batch (unless Replace
@@ -261,7 +264,7 @@ export const useUploadStore = defineStore("upload", () => {
   };
 
   const dropConflicts = () => {
-    conflictGeneration++;
+    generation++;
     conflicts = [];
     if (asking !== null) {
       const layoutStore = useLayoutStore();
