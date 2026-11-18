@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/filebrowser/filebrowser/v2/rules"
 )
 
 // protectedPath is a file or directory of the server itself that lies inside
@@ -118,11 +120,21 @@ func isRotatedLog(name, logFile string, fold bool) bool {
 
 	ext := filepath.Ext(logFile)
 	prefix := strings.TrimSuffix(filepath.Base(logFile), ext)
+	base := filepath.Base(name)
 
-	base := strings.TrimSuffix(filepath.Base(name), ".gz")
-	if fold {
-		base, prefix, ext = strings.ToLower(base), strings.ToLower(prefix), strings.ToLower(ext)
+	if rotatedCopy(base, prefix, ext) {
+		return true
 	}
+	if fold && rotatedCopy(strings.ToLower(base), strings.ToLower(prefix), strings.ToLower(ext)) {
+		return true
+	}
+	return rotatedCopy(rules.CanonicalName(base, fold), rules.CanonicalName(prefix, fold), rules.CanonicalName(ext, fold))
+}
+
+// rotatedCopy reports whether base is prefix and ext with the stamp of a
+// rotation between them, possibly compressed.
+func rotatedCopy(base, prefix, ext string) bool {
+	base = strings.TrimSuffix(base, ".gz")
 	if !strings.HasPrefix(base, prefix) || !strings.HasSuffix(base, ext) || len(base) < len(prefix)+len(ext) {
 		return false
 	}
@@ -151,18 +163,28 @@ func withResolved(path string) []string {
 	return paths
 }
 
+// samePath reports whether a and b are the same path, or could be to the
+// filesystem: with fold, it ignores case, and it always ignores how a name is
+// composed. See rules.CanonicalName, which errs on the side of taking two
+// names for one; that is the side to err on for a path that is refused. What
+// lower-casing alone takes for the same stays the same.
 func samePath(a, b string, fold bool) bool {
-	if fold {
-		return strings.EqualFold(a, b)
+	if a == b || (fold && strings.EqualFold(a, b)) {
+		return true
 	}
-	return a == b
+	return rules.CanonicalName(a, fold) == rules.CanonicalName(b, fold)
 }
 
 // strictlyInside reports whether path lies below dir, and is not dir itself.
+// Names are compared as samePath compares them.
 func strictlyInside(path, dir string, fold bool) bool {
-	if fold {
-		path, dir = strings.ToLower(path), strings.ToLower(dir)
+	if below(path, dir) || (fold && below(strings.ToLower(path), strings.ToLower(dir))) {
+		return true
 	}
+	return below(rules.CanonicalName(path, fold), rules.CanonicalName(dir, fold))
+}
+
+func below(path, dir string) bool {
 	if !strings.HasSuffix(dir, string(os.PathSeparator)) {
 		dir += string(os.PathSeparator)
 	}

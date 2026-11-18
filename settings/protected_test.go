@@ -152,3 +152,57 @@ func TestIsProtected(t *testing.T) {
 		t.Error("folding widened the match")
 	}
 }
+
+// A filesystem that ignores case does so in full, and one that normalises
+// names ignores how they are composed (APFS does both): the cache directory
+// "cache-files" is also "cache-ﬁles" there, and a rotated log
+// "filebrowser-....log" is also "ﬁlebrowser-....log". The server's own files
+// are refused under those spellings too. An existing regular file is also
+// compared by identity (see the http package); a directory, what is in it,
+// and a rotated log are known by their names alone.
+func TestIsProtectedInEverySpelling(t *testing.T) {
+	root := filepath.Join(string(os.PathSeparator), "srv")
+
+	folded := &Server{Root: root, CaseInsensitiveFs: true}
+	folded.Protect(filepath.Join(root, "cache-files"))
+	folded.Protect(filepath.Join(root, "stra\u00dfe.db"))
+	folded.Protect(filepath.Join(root, "caf\u00e9.db"))
+	folded.ProtectLog(filepath.Join(root, "logs", "filebrowser.log"))
+	for _, p := range []string{
+		"cache-\ufb01les",
+		"cache-\ufb01les/ab/cd/thumb",
+		"CACHE-\ufb01LES/ab/cd/thumb",
+		"STRASSE.DB",
+		"strasse.db",
+		"cafe\u0301.db",
+		"CAFE\u0301.DB",
+		"logs/\ufb01lebrowser.log",
+		"logs/\ufb01lebrowser-2026-11-17T10-00-00.000.log",
+		"LOGS/\ufb01LEBROWSER-2026-11-17T10-00-00.000.LOG.gz",
+		"logs/filebrowser-2026-11-17T10-00-00.000.log.GZ",
+	} {
+		if !folded.IsProtected(filepath.Join(root, filepath.FromSlash(p))) {
+			t.Errorf("%+q is not protected on a filesystem that ignores case", p)
+		}
+	}
+	for _, p := range []string{"cache-\ufb01lesx/thumb", "strassen.db", "cafe.db", "logs/\ufb01lebrowser-notes.log"} {
+		if folded.IsProtected(filepath.Join(root, filepath.FromSlash(p))) {
+			t.Errorf("%+q is reported as protected", p)
+		}
+	}
+
+	// How a name is composed is ignored on every filesystem; case is not.
+	exact := &Server{Root: root}
+	exact.Protect(filepath.Join(root, "caf\u00e9"))
+	exact.ProtectLog(filepath.Join(root, "logs", "caf\u00e9.log"))
+	for _, p := range []string{"cafe\u0301", "cafe\u0301/thumb", "logs/cafe\u0301.log", "logs/cafe\u0301-2026-11-17T10-00-00.000.log"} {
+		if !exact.IsProtected(filepath.Join(root, filepath.FromSlash(p))) {
+			t.Errorf("%+q is not protected", p)
+		}
+	}
+	for _, p := range []string{"CAF\u00c9", "CAFE\u0301/thumb", "logs/CAFE\u0301.log"} {
+		if exact.IsProtected(filepath.Join(root, filepath.FromSlash(p))) {
+			t.Errorf("%+q is reported as protected on a filesystem that tells case apart", p)
+		}
+	}
+}
