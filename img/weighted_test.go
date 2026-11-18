@@ -24,6 +24,23 @@ func waitersOf(t *testing.T, w *weighted, n int) {
 	t.Fatalf("the semaphore never had %d requests waiting", n)
 }
 
+// acquireSoon is acquire for a request that has no reason to wait. A request
+// that waits all the same fails the test here, instead of keeping it waiting
+// until the whole test run is cut off.
+func acquireSoon(t *testing.T, w *weighted, n int64) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- w.acquire(context.Background(), n) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("a request for %d of %d waits although nothing stands in its way", n, w.size)
+	}
+}
+
 func TestWeightedSemaphore(t *testing.T) {
 	ctx := context.Background()
 	w := newWeighted(100)
@@ -68,10 +85,9 @@ func TestWeightedSemaphore(t *testing.T) {
 	w.release(90)
 	w.release(5)
 
-	// A request for more than everything is one for everything.
-	if err := w.acquire(ctx, 1000); err != nil {
-		t.Fatal(err)
-	}
+	// A request for more than everything is one for everything. Taken as it
+	// is, it could never be granted, and would wait for ever.
+	acquireSoon(t, w, 1000)
 	if w.used != 100 {
 		t.Errorf("in use after a request for more than the capacity: %d", w.used)
 	}
@@ -170,4 +186,65 @@ func TestWeightedSemaphoreNeverOvercommits(t *testing.T) {
 	if w.used != 0 || len(w.waiters) != 0 {
 		t.Errorf("after everything was released: in use %d, %d waiting", w.used, len(w.waiters))
 	}
+}
+
+// A request that gives up just as it is granted its share has to hand it
+// back: nobody is going to release what the caller was told it did not get.
+// Kept, it is gone from the budget for good, and with enough of them every
+// image waits for ever.
+//
+// Which of the two a waiting request sees first, its grant or the end of its
+// context, is up to the scheduler, so the moment is made here: with the lock
+// of the semaphore held, the context is ended, the request is given the time
+// to notice, and its share is then granted the way release grants it.
+func TestWeightedSemaphoreHandsBackAGrantItGaveUpOn(t *testing.T) {
+	const size, rounds = 100, 200
+	w := newWeighted(size)
+	handedBack := 0
+
+	for i := 0; i < rounds; i++ {
+		acquireSoon(t, w, size)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() { result <- w.acquire(ctx, 60) }()
+		waitersOf(t, w, 1)
+
+		w.mu.Lock()
+		cancel()
+		// Long enough for the request to wake up to its context and come to
+		// a halt at the lock.
+		time.Sleep(time.Millisecond)
+		w.used -= size
+		w.grant()
+		granted := len(w.waiters) == 0
+		w.mu.Unlock()
+		if !granted {
+			t.Fatal("the waiting request was not granted its share")
+		}
+
+		switch err := <-result; {
+		case err == nil:
+			// It saw the grant first, and holds its share like any other.
+			w.release(60)
+		case errors.Is(err, context.Canceled):
+			handedBack++
+		default:
+			t.Fatal(err)
+		}
+
+		w.mu.Lock()
+		used, waiting := w.used, len(w.waiters)
+		w.mu.Unlock()
+		if used != 0 || waiting != 0 {
+			t.Fatalf("round %d: %d of %d in use with %d waiting after a request that gave up as it was granted; want nothing in use", i, used, size, waiting)
+		}
+	}
+
+	if handedBack == 0 {
+		t.Errorf("none of %d requests gave up after it was granted: the test did not get to the case it is for", rounds)
+	}
+
+	// Everything is still there to be had.
+	acquireSoon(t, w, size)
 }
