@@ -400,3 +400,77 @@ describe("fetchURL, renewals and handed-out tokens racing each other", () => {
     expect(useAuthStore().jwt).toBe(NEW);
   });
 });
+
+// Every tab shares the auth cookie and the stored token. After tab A
+// changed the password (and stored its new token), tab B's next request
+// is refused (its token is revoked) and tab B logs out: that must not
+// clear what tab A stored, or tab A's previews and downloads (sent with
+// the cookie) fail and reloading it lands on the login page.
+describe("two tabs sharing the cookie and the stored token", () => {
+  const cookieToken = () =>
+    document.cookie
+      .split("; ")
+      .find((c) => c.startsWith("auth="))
+      ?.slice("auth=".length) ?? "";
+  const name = (t: string | null) =>
+    t === NEW ? "NEW" : t === OLD ? "OLD" : JSON.stringify(t);
+
+  it("the other tab's forced logout leaves the token this tab stored", async () => {
+    const tabB = createPinia();
+    const tabA = createPinia();
+    setActivePinia(tabB);
+    parseToken(OLD);
+    setActivePinia(tabA);
+    parseToken(OLD);
+    stubFetch(async (url, init) => {
+      if (url === "/api/users/2") {
+        return new Response("", {
+          status: 200,
+          headers: { "X-Auth-Token": NEW },
+        });
+      }
+      return xAuth(init) === NEW
+        ? new Response("{}")
+        : new Response("401 Unauthorized\n", { status: 401 });
+    });
+
+    await fetchURL("/api/users/2", { method: "PUT", body: "{}" }); // tab A
+    setActivePinia(tabB);
+    expect(await outcome(fetchURL("/api/resources/", {}))).toBe(
+      "rejected: 401"
+    );
+    console.log(
+      "after tab B's 401:",
+      JSON.stringify({
+        tabB: name(useAuthStore().jwt),
+        cookie: name(cookieToken()),
+        ls: name(localStorage.getItem("jwt")),
+      })
+    );
+    // tab B is logged out...
+    expect(useAuthStore().jwt).toBe("");
+    expect(h.push).toHaveBeenCalledWith({ path: "/login" });
+    // ...and what tab A stored is still there
+    expect(localStorage.getItem("jwt")).toBe(NEW);
+    expect(cookieToken()).toBe(NEW);
+    setActivePinia(tabA);
+    expect(useAuthStore().jwt).toBe(NEW);
+  });
+
+  it("a forced logout still clears them when they hold this tab's token", async () => {
+    stubFetch(async () => new Response("401 Unauthorized\n", { status: 401 }));
+    await outcome(fetchURL("/api/resources/", {}));
+    expect(useAuthStore().jwt).toBe("");
+    expect(localStorage.getItem("jwt")).toBe("");
+    expect(cookieToken()).toBe("");
+  });
+
+  it("logging out on purpose clears them whatever they hold", () => {
+    const tabB = createPinia();
+    setActivePinia(tabB);
+    parseToken(OLD);
+    localStorage.setItem("jwt", NEW); // stored by another tab
+    logout();
+    expect(localStorage.getItem("jwt")).toBe("");
+  });
+});

@@ -46,7 +46,7 @@ export function parseToken(token: string) {
   const timeout = expiresAt.getTime() - Date.now();
   authStore.setLogoutTimer(
     setSafeTimeout(() => {
-      logout("inactivity");
+      logout("inactivity", token);
     }, timeout)
   );
 }
@@ -157,9 +157,17 @@ export async function signup(username: string, password: string) {
   }
 }
 
-export function logout(reason?: string) {
+// endedToken: the session ends because this token was refused or has
+// expired (not on the user's request). The auth cookie and the stored token
+// are shared by every tab of the app: they are then cleared only if they
+// still hold that token. Another tab may have stored a newer one since,
+// e.g. after changing the password, which revoked this tab's token.
+export function logout(reason?: string, endedToken?: string) {
   // answers to requests sent before this are for the session that ends here
   startEpoch(true);
+  const stored = localStorage.getItem("jwt");
+  const sharedIsOurs =
+    endedToken === undefined || !stored || stored === endedToken;
   // Stop what still runs with this session (uploads; the pending ones would
   // otherwise start without a token) while the token is still set, then
   // drop per-session state so the next login on this tab starts clean.
@@ -168,7 +176,7 @@ export function logout(reason?: string) {
   useFileStore().clearFile();
   useLayoutStore().clearLayout();
 
-  setAuthCookie("", " Max-Age=0;");
+  if (sharedIsOurs) setAuthCookie("", " Max-Age=0;");
 
   const authStore = useAuthStore();
   // $reset() would forget the inactivity timer without stopping it, and it
@@ -176,7 +184,7 @@ export function logout(reason?: string) {
   authStore.setLogoutTimer(null);
   authStore.clearUser();
 
-  localStorage.setItem("jwt", "");
+  if (sharedIsOurs) localStorage.setItem("jwt", "");
   if (noAuth) {
     window.location.reload();
   } else if (logoutPage !== "/login") {

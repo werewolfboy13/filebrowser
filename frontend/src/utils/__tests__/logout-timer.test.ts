@@ -94,5 +94,18 @@ describe("inactivity timer across logout and login", () => {
       path: "/login",
       query: { "logout-reason": "inactivity" },
     });
+    expect(localStorage.getItem("jwt")).toBe("");
+  });
+
+  // The stored token is shared by every tab: an idle tab whose token
+  // expires must not clear the newer token an active tab stored.
+  it("at expiry, a newer token stored by another tab is left alone", () => {
+    parseToken(jwt(3600, 1));
+    const other = jwt(7200, 2);
+    localStorage.setItem("jwt", other); // another tab renewed
+    vi.advanceTimersByTime(HOUR + MIN);
+    expect(h.push).toHaveBeenCalled(); // this tab is logged out...
+    expect(useAuthStore().jwt).toBe("");
+    expect(localStorage.getItem("jwt")).toBe(other); // ...the other is not
   });
 });

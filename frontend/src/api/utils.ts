@@ -114,7 +114,7 @@ export async function fetchURL(
     // password, answered after the server revoked the old token. Older
     // servers send X-Renew-Token with such a 401; it is not acted on.
     if (auth && res.status == 401) {
-      if (isCurrent()) logout();
+      if (isCurrent()) logout(undefined, sentJwt);
       throw error;
     }
 
@@ -134,7 +134,7 @@ export async function fetchURL(
     } catch (e) {
       // The token was refused: the session is over.
       if (e instanceof StatusError && e.status === 401) {
-        if (isCurrent()) logout();
+        if (isCurrent()) logout(undefined, sentJwt);
         throw new StatusError(e.message, 401);
       }
       // Otherwise (no connection) the request itself still succeeded; the
