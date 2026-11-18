@@ -69,7 +69,7 @@
     "internal": "Something really went wrong.",
     "notFound": "This location can't be reached.",
     "connection": "The server can't be reached.",
-    "tooManyAttempts": "Too many attempts. Please wait {seconds} seconds before trying again.",
+    "tooManyAttempts": "Too many attempts. Please wait {seconds} second before trying again. | Too many attempts. Please wait {seconds} seconds before trying again.",
     "tooManyAttemptsMinutes": "Too many attempts. Please wait {minutes} minutes before trying again.",
     "tooManyAttemptsLater": "Too many attempts. Please wait a while before trying again.",
     "requestTimeout": "The request took too long to reach the server. Please try again.",

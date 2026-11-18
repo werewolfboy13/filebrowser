@@ -10,19 +10,32 @@
 // - 423: an upload is busy with another request.
 // - 403: the user may not do this (the server says no more than that).
 
-type Translate = (key: string, values?: Record<string, unknown>) => string;
+// plural: the count that picks the singular or plural form of a message
+// ("1 second" | "{seconds} seconds")
+type Translate = (
+  key: string,
+  values?: Record<string, unknown>,
+  plural?: number
+) => string;
+
+// The longest wait shown as such (the server asks for minutes); past it,
+// or for a value too large to be one, "a while".
+const MAX_WAIT_SHOWN = 24 * 60 * 60;
 
 export function tooManyAttemptsMessage(
   t: Translate,
   retryAfter?: number
 ): string {
-  if (retryAfter === undefined) return t("errors.tooManyAttemptsLater");
+  if (retryAfter === undefined || !(retryAfter <= MAX_WAIT_SHOWN)) {
+    return t("errors.tooManyAttemptsLater");
+  }
   if (retryAfter > 90) {
     return t("errors.tooManyAttemptsMinutes", {
       minutes: Math.ceil(retryAfter / 60),
     });
   }
-  return t("errors.tooManyAttempts", { seconds: Math.max(1, retryAfter) });
+  const seconds = Math.max(1, retryAfter);
+  return t("errors.tooManyAttempts", { seconds }, seconds);
 }
 
 // The message for an error with one of the statuses above, or null.

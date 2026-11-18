@@ -88,7 +88,10 @@ app.provide("$showSuccess", (message: string) => {
 app.provide("$showError", (error: Error | string, displayReport = true) => {
   const $toast = useToast();
   const { message, isReport } = errorToast(
-    (key, values) => i18n.global.t(key, values ?? {}),
+    (key, values, plural) =>
+      plural === undefined
+        ? i18n.global.t(key, values ?? {})
+        : i18n.global.t(key, values ?? {}, plural),
     error,
     !disableExternal && displayReport
   );
