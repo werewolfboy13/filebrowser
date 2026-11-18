@@ -26,6 +26,13 @@ type uploadInfo struct {
 	// Owner is the ID of the user who created the upload, who may cancel
 	// it. It is 0 when that is not known.
 	Owner uint
+
+	// Direct tells that the upload writes to its destination itself. Every
+	// other upload writes to a temporary file, and only ever to that: see
+	// tusWritePath. An upload of which it is not known (one registered by a
+	// version that did not say) is taken to write to a temporary file, so
+	// that it is never the destination that is written to by mistake.
+	Direct bool
 }
 
 // UploadCache is an interface for tracking active uploads.
@@ -47,6 +54,11 @@ type UploadCache interface {
 
 	// GetLength returns the expected file size for an active upload
 	GetLength(filePath string) (int64, error)
+
+	// Has reports whether an upload is registered, without that counting as
+	// a request for it: unlike Get, it does not keep the upload alive. When
+	// the cache cannot tell, it says that there is one.
+	Has(filePath string) bool
 
 	// Touch refreshes the TTL for an active upload
 	Touch(filePath string)
@@ -106,6 +118,10 @@ func (c *memoryUploadCache) Get(filePath string) (uploadInfo, error) {
 func (c *memoryUploadCache) GetLength(filePath string) (int64, error) {
 	upload, err := c.Get(filePath)
 	return upload.Length, err
+}
+
+func (c *memoryUploadCache) Has(filePath string) bool {
+	return c.cache.Has(filePath)
 }
 
 func (c *memoryUploadCache) Touch(filePath string) {

@@ -40,7 +40,9 @@ const (
 //
 // It remembers the temporary file of every upload created here, with the
 // filesystem of the user who created it, and looks at them every
-// tusSweepInterval. One that has not changed for tusAbandonedAge is removed.
+// tusSweepInterval. One that has not changed for tusAbandonedAge is removed,
+// once its upload is no longer registered: until then the upload can be
+// continued, and its temporary file is the only place it writes to.
 //
 // "Not changed" is judged by this process's clock: the size and the
 // modification time of the file are compared with what they were at the last
@@ -84,6 +86,11 @@ type tusTempFile struct {
 	fs   afero.Fs
 	path string
 
+	// cache and uploadKey are where the upload is registered, and what it
+	// is known by there.
+	cache     UploadCache
+	uploadKey string
+
 	// created identifies the file that was created for the upload.
 	created os.FileInfo
 
@@ -95,8 +102,9 @@ type tusTempFile struct {
 }
 
 // track starts keeping an eye on the temporary file at path, which was just
-// created for an upload through afs, the filesystem of the uploading user.
-func (s *tusSweeper) track(afs afero.Fs, path string, key string) {
+// created through afs, the filesystem of the uploading user, for the upload
+// that cache knows by uploadKey.
+func (s *tusSweeper) track(afs afero.Fs, path string, key string, cache UploadCache, uploadKey string) {
 	// The name is ours by construction. Anything else is not something to
 	// ever remove.
 	if !fileutils.IsTempName(gopath.Base(path)) {
@@ -126,8 +134,11 @@ func (s *tusSweeper) track(afs afero.Fs, path string, key string) {
 	}
 
 	s.files[key] = &tusTempFile{
-		fs:      afs,
-		path:    path,
+		fs:        afs,
+		path:      path,
+		cache:     cache,
+		uploadKey: uploadKey,
+
 		created: info,
 		size:    info.Size(),
 		modTime: info.ModTime(),
@@ -219,10 +230,15 @@ func (s *tusSweeper) look(f *tusTempFile, now time.Time) (done bool) {
 		return false
 	}
 
+	// Quiet for long enough. That alone does not make it abandoned: a client
+	// that only asks how far its upload is, or a chunk that stalls, keeps the
+	// upload registered without a byte being written. Such an upload is
+	// looked at again later.
+	//
 	// Removed through the user's filesystem, like everything the upload did.
 	// A failure leaves it to the sweep of its directory.
-	_ = f.fs.Remove(f.path)
-	return true
+	kept, _ := tusDiscardAbandoned(f.cache, f.uploadKey, f.fs, f.path)
+	return !kept
 }
 
 // tusTempKey returns the key the temporary file at path, in the filesystem of

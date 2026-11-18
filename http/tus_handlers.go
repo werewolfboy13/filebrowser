@@ -84,8 +84,11 @@ var tusBusy = struct {
 // reports false, without waiting, when another request already is; otherwise
 // the returned function must be called when the work is done.
 func tusAcquire(d *data, r *http.Request) (release func(), ok bool) {
-	key := tusUploadKey(d, r.URL.Path)
+	return tusAcquireKey(tusUploadKey(d, r.URL.Path))
+}
 
+// tusAcquireKey is tusAcquire for the upload known by key.
+func tusAcquireKey(key string) (release func(), ok bool) {
 	tusBusy.Lock()
 	defer tusBusy.Unlock()
 
@@ -133,23 +136,61 @@ func tusUploadKey(d *data, dst string) string {
 	return lexical
 }
 
-// tusWritePath returns the file the data of an upload to dst is appended to.
-// That is its temporary file, which takes the place of dst once the upload is
-// complete, so that an upload that is interrupted or abandoned leaves dst
-// untouched. An upload that could not be given a temporary file (see
-// tusPostHandler) writes to dst itself, as every upload used to.
-func tusWritePath(d *data, dst string) (name string, temp bool, err error) {
-	tmp := tusTempPath(dst)
-
-	info, err := lstatPath(d.user.Fs, tmp)
-	switch {
-	case err == nil && info.Mode().IsRegular():
-		return tmp, true, nil
-	case err != nil && !errors.Is(err, fs.ErrNotExist):
-		return "", false, err
+// tusWritePath returns the file the data of the registered upload to dst is
+// appended to. That is its temporary file, which takes the place of dst once
+// the upload is complete, so that an upload that is interrupted or abandoned
+// leaves dst untouched, and so that it is decided in one place, when it is
+// complete, whether the upload may replace what is at dst. An upload that was
+// created to write to dst itself (see tusPostHandler) does that.
+//
+// When the temporary file is gone, the error is fs.ErrNotExist and the upload
+// is over. It never goes on at dst instead: whatever is there is not what the
+// upload wrote, and appending to it asked nobody whether the upload may.
+func tusWritePath(d *data, dst string, upload uploadInfo) (name string, temp bool, err error) {
+	if upload.Direct {
+		return dst, false, nil
 	}
 
-	return dst, false, nil
+	tmp := tusTempPath(dst)
+	info, err := lstatPath(d.user.Fs, tmp)
+	switch {
+	case err != nil:
+		return "", false, err
+	case !info.Mode().IsRegular():
+		// Not something an upload created.
+		return "", false, &fs.PathError{Op: "upload", Path: tmp, Err: fs.ErrNotExist}
+	}
+	return tmp, true, nil
+}
+
+// tusPending reports whether the registered upload to dst is still there to
+// be continued: an upload that has lost its temporary file is not.
+func tusPending(d *data, dst string, upload uploadInfo) bool {
+	_, _, err := tusWritePath(d, dst, upload)
+	return err == nil
+}
+
+// tusDiscardAbandoned removes the temporary file at path, which was created
+// through afs for the upload known by key, unless that upload is registered:
+// an upload that is registered is not abandoned, and its file is all it has.
+// It reports whether the file is still the upload's.
+//
+// It is called some time after the upload was last heard of, and another
+// upload to the same destination can have started since. That one has the
+// same temporary file, so the look at the cache and the removal are done with
+// the upload held, like every request for it; when a request has it, it is
+// alive.
+func tusDiscardAbandoned(cache UploadCache, key string, afs afero.Fs, path string) (kept bool, err error) {
+	release, ok := tusAcquireKey(key)
+	if !ok {
+		return true, nil
+	}
+	defer release()
+
+	if cache.Has(key) {
+		return true, nil
+	}
+	return false, afs.Remove(path)
 }
 
 func tusPostHandler(cache UploadCache) handleFunc {
@@ -218,10 +259,8 @@ func tusPostHandler(cache UploadCache) handleFunc {
 		// was when the destination was created up front.
 		uploadKey := tusUploadKey(d, r.URL.Path)
 		if !exists && !override {
-			if _, cacheErr := cache.GetLength(uploadKey); cacheErr == nil {
-				if _, temp, _ := tusWritePath(d, r.URL.Path); temp {
-					return http.StatusConflict, nil
-				}
+			if pending, cacheErr := cache.Get(uploadKey); cacheErr == nil && !pending.Direct && tusPending(d, r.URL.Path, pending) {
+				return http.StatusConflict, nil
 			}
 		}
 
@@ -297,17 +336,21 @@ func tusPostHandler(cache UploadCache) handleFunc {
 		var remove func() error
 		switch {
 		case !direct:
-			remove = func() error { return d.user.Fs.Remove(tmp) }
+			userFs := d.user.Fs
+			remove = func() error {
+				_, err := tusDiscardAbandoned(cache, uploadKey, userFs, tmp)
+				return err
+			}
 		case !exists:
 			uploadPath := r.URL.Path
 			remove = func() error { return d.user.Fs.Remove(uploadPath) }
 		}
-		cache.Register(uploadKey, uploadInfo{Length: uploadLength, Override: override, Owner: d.user.ID}, remove)
+		cache.Register(uploadKey, uploadInfo{Length: uploadLength, Override: override, Owner: d.user.ID, Direct: direct}, remove)
 
 		// The cache removes the temporary file when the upload expires, if
 		// it can. This is what does when it cannot: see tusTemps.
 		if !direct {
-			tusTemps.track(d.user.Fs, tmp, tusTempKey(d, tmp))
+			tusTemps.track(d.user.Fs, tmp, tusTempKey(d, tmp), cache, uploadKey)
 		}
 
 		return http.StatusCreated, nil
@@ -321,8 +364,18 @@ func tusHeadHandler(cache UploadCache) handleFunc {
 			return http.StatusForbidden, nil
 		}
 
-		writePath, _, err := tusWritePath(d, r.URL.Path)
+		upload, err := cache.Get(tusUploadKey(d, r.URL.Path))
 		if err != nil {
+			return http.StatusNotFound, err
+		}
+
+		// The offset is how much the upload has written, to the file it
+		// writes to. Without that file there is no upload to report on.
+		writePath, _, err := tusWritePath(d, r.URL.Path, upload)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return http.StatusNotFound, nil
+		case err != nil:
 			return errToStatus(err), err
 		}
 
@@ -331,13 +384,8 @@ func tusHeadHandler(cache UploadCache) handleFunc {
 			return errToStatus(err), err
 		}
 
-		uploadLength, err := cache.GetLength(tusUploadKey(d, r.URL.Path))
-		if err != nil {
-			return http.StatusNotFound, err
-		}
-
 		w.Header().Set("Upload-Offset", strconv.FormatInt(info.Size(), 10))
-		w.Header().Set("Upload-Length", strconv.FormatInt(uploadLength, 10))
+		w.Header().Set("Upload-Length", strconv.FormatInt(upload.Length, 10))
 
 		return http.StatusOK, nil
 	})
@@ -379,8 +427,21 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 	}
 	defer release()
 
-	writePath, temp, err := tusWritePath(d, r.URL.Path)
+	uploadKey := tusUploadKey(d, r.URL.Path)
+	upload, err := cache.Get(uploadKey)
 	if err != nil {
+		return http.StatusNotFound, err
+	}
+	uploadLength := upload.Length
+
+	writePath, temp, err := tusWritePath(d, r.URL.Path, upload)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// The upload has lost its temporary file, and with it what it had
+		// written: it is over, and the client has to start again.
+		cache.Complete(uploadKey)
+		return http.StatusNotFound, nil
+	case err != nil:
 		return errToStatus(err), err
 	}
 
@@ -391,13 +452,6 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 	case err != nil:
 		return errToStatus(err), err
 	}
-
-	uploadKey := tusUploadKey(d, r.URL.Path)
-	upload, err := cache.Get(uploadKey)
-	if err != nil {
-		return http.StatusNotFound, err
-	}
-	uploadLength := upload.Length
 
 	if uploadOffset > uploadLength {
 		return http.StatusBadRequest, fmt.Errorf("upload offset %d exceeds declared length %d", uploadOffset, uploadLength)
@@ -521,11 +575,6 @@ func tusDeleteHandler(cache UploadCache) handleFunc {
 			return http.StatusForbidden, nil
 		}
 
-		writePath, temp, err := tusWritePath(d, r.URL.Path)
-		if err != nil {
-			return errToStatus(err), err
-		}
-
 		uploadKey := tusUploadKey(d, r.URL.Path)
 		upload, err := cache.Get(uploadKey)
 		if err != nil {
@@ -541,6 +590,16 @@ func tusDeleteHandler(cache UploadCache) handleFunc {
 			return http.StatusLocked, errTusBusy
 		}
 		defer release()
+
+		writePath, temp, err := tusWritePath(d, r.URL.Path, upload)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			// Nothing is left of the upload to cancel.
+			cache.Complete(uploadKey)
+			return http.StatusNotFound, nil
+		case err != nil:
+			return errToStatus(err), err
+		}
 
 		// Only the temporary file is the upload's to remove. An upload that
 		// writes to its destination directly does so because the destination

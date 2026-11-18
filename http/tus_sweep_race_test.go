@@ -28,7 +28,7 @@ func TestTusSweepSharesItsFilesWithNewUploadsSafely(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(scope, name(i)[1:]), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		s.track(afs, name(i), name(i))
+		s.track(afs, name(i), name(i), unregistered{}, name(i))
 	}
 	for i := 0; i < full; i++ {
 		create(i)

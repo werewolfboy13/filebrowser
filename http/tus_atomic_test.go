@@ -44,10 +44,12 @@ func (c *recordingUploadCache) abandon(t *testing.T) {
 		t.Fatal("no upload was registered")
 	}
 	for path, remove := range c.removal {
+		// As when an upload expires: it is gone from the cache by the time
+		// its cleanup runs.
+		c.UploadCache.Complete(path)
 		if remove != nil {
 			_ = remove()
 		}
-		c.UploadCache.Complete(path)
 	}
 	c.removal = map[string]func() error{}
 }

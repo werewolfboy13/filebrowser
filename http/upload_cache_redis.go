@@ -81,15 +81,30 @@ func (c *redisUploadCache) GetLength(filePath string) (int64, error) {
 	return upload.Length, err
 }
 
+// Has reports whether the key of the upload exists. It reads the key without
+// extending its life.
+func (c *redisUploadCache) Has(filePath string) bool {
+	n, err := c.client.Exists(context.Background(), c.filePathKey(filePath)).Result()
+	if err != nil {
+		log.Printf("failed to look up upload in redis cache: %v", err)
+		return true
+	}
+	return n > 0
+}
+
 // encodeUploadInfo writes an upload as the value kept in redis: its length,
 // followed by ":" and a field for each thing that is more than the length
-// alone ("o" for an override, "u" and the ID of the owner). An upload
-// without any is the bare number this cache has always stored. Fields that
-// are not known are skipped when reading, so that more can be added.
+// alone ("o" for an override, "u" and the ID of the owner, "d" for an upload
+// that writes to its destination directly). An upload without any is the
+// bare number this cache has always stored. Fields that are not known are
+// skipped when reading, so that more can be added.
 func encodeUploadInfo(upload uploadInfo) string {
 	value := strconv.FormatInt(upload.Length, 10)
 	if upload.Override {
 		value += ":o"
+	}
+	if upload.Direct {
+		value += ":d"
 	}
 	if upload.Owner != 0 {
 		value += ":u" + strconv.FormatUint(uint64(upload.Owner), 10)
@@ -110,6 +125,8 @@ func decodeUploadInfo(value string) (uploadInfo, error) {
 		switch {
 		case field == "o":
 			upload.Override = true
+		case field == "d":
+			upload.Direct = true
 		case strings.HasPrefix(field, "u"):
 			if owner, err := strconv.ParseUint(field[1:], 10, 0); err == nil {
 				upload.Owner = uint(owner)

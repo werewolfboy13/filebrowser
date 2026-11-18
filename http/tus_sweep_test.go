@@ -26,6 +26,14 @@ func (c redisLikeUploadCache) Register(filePath string, upload uploadInfo, _ fun
 	c.UploadCache.Register(filePath, upload, nil)
 }
 
+// unregistered is an upload cache in which no upload is registered: the
+// temporary files the tests below hand to the sweeper belong to none.
+type unregistered struct {
+	UploadCache
+}
+
+func (unregistered) Has(string) bool { return false }
+
 // useTusSweepClock puts the sweeper of abandoned uploads on a clock the test
 // moves, and empties it before and after.
 func useTusSweepClock(t *testing.T) *fakeClock {
@@ -158,7 +166,7 @@ func TestTusSweepRemovesOnlyTheFileOfTheUpload(t *testing.T) {
 
 	// Something that is not a temporary file is never watched.
 	write(filepath.Join(scope, "a", "report.txt"))
-	tusTemps.track(afs, "/a/report.txt", filepath.Join(scope, "a", "report.txt"))
+	tusTemps.track(afs, "/a/report.txt", filepath.Join(scope, "a", "report.txt"), unregistered{}, "")
 	if tusTempsWatched() != 0 {
 		t.Fatal("a file without a temporary name is watched")
 	}
@@ -166,7 +174,7 @@ func TestTusSweepRemovesOnlyTheFileOfTheUpload(t *testing.T) {
 	// The file was replaced by another one of the same name.
 	tmp := filepath.Join(scope, "a", name)
 	write(tmp)
-	tusTemps.track(afs, "/a/"+name, tmp)
+	tusTemps.track(afs, "/a/"+name, tmp, unregistered{}, "")
 	// (Written before the first one is removed, so that it is another file
 	// for certain, and not one that was given the same place on the disk.)
 	write(filepath.Join(scope, "a", "other"))
@@ -187,7 +195,7 @@ func TestTusSweepRemovesOnlyTheFileOfTheUpload(t *testing.T) {
 	// Its directory was swapped for a link out of the scope, where a file of
 	// the same name lies: the scoped filesystem does not follow it.
 	write(filepath.Join(scope, "b", name))
-	tusTemps.track(afs, "/b/"+name, filepath.Join(scope, "b", name))
+	tusTemps.track(afs, "/b/"+name, filepath.Join(scope, "b", name), unregistered{}, "")
 	write(filepath.Join(outside, name))
 	if err := os.RemoveAll(filepath.Join(scope, "b")); err != nil {
 		t.Fatal(err)
@@ -213,7 +221,7 @@ func TestTusSweepRemovesOnlyTheFileOfTheUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(filepath.Join(scope, "c", name))
-	tusTemps.track(afs, "/c/"+name, filepath.Join(scope, "c", name))
+	tusTemps.track(afs, "/c/"+name, filepath.Join(scope, "c", name), unregistered{}, "")
 	if err := os.Rename(filepath.Join(scope, "c"), filepath.Join(scope, "moved")); err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +247,7 @@ func TestTusSweepRemovesOnlyTheFileOfTheUpload(t *testing.T) {
 		sum[0], sum[1] = "0123456789abcdef"[i%16], "0123456789abcdef"[i/16]
 		p := "/a/" + fileutils.TempPrefix + "tus-" + string(sum)
 		write(filepath.Join(scope, filepath.FromSlash(p)))
-		tusTemps.track(afs, p, filepath.Join(scope, filepath.FromSlash(p)))
+		tusTemps.track(afs, p, filepath.Join(scope, filepath.FromSlash(p)), unregistered{}, "")
 	}
 	if watched := tusTempsWatched(); watched != 8 {
 		t.Errorf("%d files are watched, limit 8", watched)
@@ -254,7 +262,8 @@ func TestUploadInfoEncoding(t *testing.T) {
 		{Length: 1 << 40},
 		{Length: 10, Override: true},
 		{Length: 10, Owner: 7},
-		{Length: 123456, Override: true, Owner: 4294967295},
+		{Length: 10, Direct: true},
+		{Length: 123456, Override: true, Owner: 4294967295, Direct: true},
 	} {
 		got, err := decodeUploadInfo(encodeUploadInfo(upload))
 		if err != nil || got != upload {
@@ -266,6 +275,13 @@ func TestUploadInfoEncoding(t *testing.T) {
 	}
 	if got, err := decodeUploadInfo("42:x:o:future"); err != nil || got != (uploadInfo{Length: 42, Override: true}) {
 		t.Errorf("a value with fields this version does not know = %+v, %v", got, err)
+	}
+	// A value from before uploads said where they write: to a temporary
+	// file, so that such an upload is never continued at its destination.
+	for _, old := range []string{"42", "42:o:u7"} {
+		if got, err := decodeUploadInfo(old); err != nil || got.Direct {
+			t.Errorf("decodeUploadInfo(%q) = %+v, %v; want an upload that does not write to its destination", old, got, err)
+		}
 	}
 	for _, bad := range []string{"", "abc", ":o", "12abc"} {
 		if _, err := decodeUploadInfo(bad); err == nil {
