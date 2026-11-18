@@ -16,6 +16,11 @@
 //   upload again, which the server refuses while the unfinished upload is
 //   pending: the upload must fail, never succeed without its data having
 //   been sent again.
+// - 409: a file appeared at the destination during the upload (it did not
+//   ask to replace it); the server discards the data. The error says it
+//   was the final PATCH, so that the upload store asks to replace or skip,
+//   as for a conflict on creating the upload. A 409 on another PATCH (its
+//   offset does not match) stays an error.
 // - The answer is lost (e.g. a proxy's 502) after the server stored the
 //   file: tus resumes, HEAD answers 404 (the upload was completed), tus
 //   creates it again and gets 409 (the file is there now). The error says
@@ -216,5 +221,29 @@ describe("a failed final PATCH, then HEAD answers with an error", () => {
       "PATCH",
       "PATCH",
     ]);
+  });
+});
+
+describe("a conflict (409) on a PATCH", () => {
+  it("on the final PATCH, is marked as such", async () => {
+    onPatch(3, 409);
+    const err = await send();
+    console.log(
+      "final PATCH 409:",
+      err.status,
+      err.method,
+      "final:",
+      err.final,
+      "| requests:",
+      methods().join(" ")
+    );
+    expect([err.status, err.method, err.final]).toEqual([409, "PATCH", true]);
+    expect(methods()).toEqual(["POST", "PATCH", "PATCH", "PATCH"]);
+  });
+
+  it("control: on another PATCH, is not", async () => {
+    onPatch(2, 409);
+    const err = await send();
+    expect([err.status, err.method, err.final]).toEqual([409, "PATCH", false]);
   });
 });

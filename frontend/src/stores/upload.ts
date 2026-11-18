@@ -214,8 +214,10 @@ export const useUploadStore = defineStore("upload", () => {
 
   const hasConflicts = () => asking !== null || conflicts.length > 0;
 
+  // on create, or on the final PATCH (a file appeared meanwhile; the plain
+  // POST upload reports that on its POST); a 409 on another PATCH is not
   const isCreateConflict = (err: any) =>
-    err?.status === 409 && err?.method === "POST";
+    err?.status === 409 && (err?.method === "POST" || err?.final === true);
 
   // A 409 when tus created the upload again (see UploadError.recreated)
   // can be about the file this upload stored: the answer to its final

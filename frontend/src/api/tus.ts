@@ -18,12 +18,15 @@ const CURRENT_UPLOADS = new Set<tus.Upload>();
 // recreated: the failed POST created the upload again, after it had been
 // created once (tus-js-client does so when resuming finds it gone, e.g.
 // completed by a final PATCH whose answer was lost).
+// final: the failed request was the final PATCH, on which the server puts
+// the file in place (a 409 then: a file appeared at the destination).
 export class UploadError extends Error {
   constructor(
     message: string,
     public status: number,
     public method: string,
-    public recreated = false
+    public recreated = false,
+    public final = false
   ) {
     super(message);
     this.name = "UploadError";
@@ -128,17 +131,31 @@ export async function upload(
         let message = "Upload failed";
         let status = 0;
         let method = "";
+        let final = false;
         if (error instanceof tus.DetailedError) {
           const res = error.originalResponse;
           message = res === null ? "000 No connection" : res.getBody();
           status = res?.getStatus() ?? 0;
           method = error.originalRequest?.getMethod() ?? "";
+          if (method === "PATCH" && content instanceof Blob) {
+            const offset = Number(
+              error.originalRequest.getHeader("Upload-Offset")
+            );
+            final =
+              offset + (tusSettings.chunkSize || Infinity) >= content.size;
+          }
         }
 
         console.error(error);
 
         reject(
-          new UploadError(message, status, method, method === "POST" && created)
+          new UploadError(
+            message,
+            status,
+            method,
+            method === "POST" && created,
+            final
+          )
         );
       },
       onProgress: function (bytesUploaded) {

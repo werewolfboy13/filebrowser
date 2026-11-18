@@ -205,6 +205,34 @@ describe("a conflict reported when the upload is created", () => {
     expect(h.showError).toHaveBeenCalledTimes(1);
   });
 
+  // The final PATCH is refused with 409 when a file appeared at the
+  // destination during the upload: the same question as on create (and as
+  // the plain POST upload asks), not a raw "409 Conflict" toast.
+  it("a conflict on the final PATCH asks to replace or skip", async () => {
+    h.post.mockRejectedValueOnce(
+      Object.assign(conflictOn("PATCH"), { final: true })
+    );
+    h.post.mockResolvedValueOnce(undefined);
+    const file = queue("a.pdf");
+    await settle();
+    const layout = useLayoutStore();
+    console.log(
+      "final PATCH 409: toasts:",
+      h.showError.mock.calls.length,
+      "| prompt:",
+      layout.currentPromptName ?? null
+    );
+    expect(h.showError).not.toHaveBeenCalled();
+    expect(layout.currentPromptName).toBe("replace");
+    layout.currentPrompt!.confirm(); // Replace: sent again, with override
+    await settle();
+    expect(h.post.mock.calls[1].slice(0, 3)).toEqual([
+      "/files/a.pdf",
+      file,
+      true,
+    ]);
+  });
+
   it("a conflict while already replacing is an error, not a question again", async () => {
     h.post.mockRejectedValueOnce(conflictOn("POST"));
     queue("a.pdf", true);
