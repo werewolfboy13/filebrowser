@@ -211,6 +211,7 @@ import { useRoute, useRouter } from "vue-router";
 import type { Rendition } from "epubjs";
 import { getTheme } from "@/utils/theme";
 import { isTypingTarget } from "@/utils/keyboard";
+import { neutraliseRemoteResources } from "@/utils/epub";
 import { useI18n } from "vue-i18n";
 
 // CSV file size limit for preview (5MB)
@@ -243,6 +244,9 @@ const changeSize = (val: number) => {
 
 const getRendition = (_rendition: Rendition) => {
   rendition = _rendition;
+  // before the first chapter is displayed: nothing in the book may load
+  // from another site (see utils/epub)
+  rendition.book.spine.hooks.content.register(neutraliseRemoteResources);
   switch (getTheme()) {
     case "dark": {
       rendition.themes.override("color", "rgba(255, 255, 255, 0.6)");
