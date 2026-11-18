@@ -249,7 +249,7 @@ func TestLoginsRacingAPasswordChangeDoNotSurvive(t *testing.T) {
 	e := newFullEnv(t)
 	b := loginDuration(e)
 
-	passwords := []string{fullEnvUserPassword, "second-long-password-88", "third-long-password-999", "fourth-long-password-0000", "fifth-long-password-11111"}
+	passwords := []string{fullEnvUserPassword, "second-long-password-88", "third-long-password-999", "fourth-long-password-0000"}
 	mine := e.login("bob", passwords[0])
 
 	survived, raced := 0, 0

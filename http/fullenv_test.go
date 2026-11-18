@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"testing/fstest"
 
@@ -26,6 +27,18 @@ const (
 	fullEnvAdminPassword = "correct-horse-battery-1"
 	fullEnvUserPassword  = "another-long-password-2"
 )
+
+// fullEnvHashes hashes the passwords of the two accounts, once for all the
+// instances of a test run: a hash is what takes long in setting one up, most
+// of all under the race detector, and it is the same work every time.
+var fullEnvHashes = sync.OnceValues(func() (hashes [2]string, err error) {
+	for i, password := range []string{fullEnvAdminPassword, fullEnvUserPassword} {
+		if hashes[i], err = users.HashPwd(password); err != nil {
+			return hashes, err
+		}
+	}
+	return hashes, nil
+})
 
 // fullEnv is a production-like instance for regression tests: real bolt
 // storage, the real users store (so user.Fs is the ScopedFs built by
@@ -127,14 +140,11 @@ func newFullEnvOpts(t *testing.T, opts fullEnvOptions) *fullEnv {
 	all := users.Permissions{Create: true, Rename: true, Modify: true, Delete: true, Share: true, Download: true}
 	adminPerm := all
 	adminPerm.Admin = true
-	adminHash, err := users.HashPwd(fullEnvAdminPassword)
+	hashes, err := fullEnvHashes()
 	if err != nil {
 		t.Fatal(err)
 	}
-	userHash, err := users.HashPwd(fullEnvUserPassword)
-	if err != nil {
-		t.Fatal(err)
-	}
+	adminHash, userHash := hashes[0], hashes[1]
 	if err := st.Users.Save(&users.User{Username: "admin", Password: adminHash, Scope: "/", Perm: adminPerm}); err != nil {
 		t.Fatal(err)
 	}
