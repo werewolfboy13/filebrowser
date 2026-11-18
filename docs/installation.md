@@ -99,6 +99,8 @@ File Browser is now up and running. Read the ["First Boot"](#first-boot) section
 docker compose up --build
 ```
 
+`docker compose up --build` builds on the base images that are already on the machine, and does not look for newer ones. To rebuild with their latest security patches, run `docker compose build --pull` first, which is what `--pull` does for `docker build`.
+
 Its volumes are the three of the `docker run` command above, under the same names, so it continues an installation that was started with that command, and the other way around.
 
 One File Browser instance needs nothing else. For several instances that serve the same files, [`compose.redis.yaml`](../compose.redis.yaml) adds the Redis that they share for uploads. It says at its top how to use it.

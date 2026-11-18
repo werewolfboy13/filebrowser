@@ -38,7 +38,11 @@ docker login dhi.io
 docker compose up --build
 ```
 
-That builds the image, runs the tests of the client and the server in the build, and serves File Browser on `http://127.0.0.1:8000`. The password of the user `admin` is in the log of the first start (`docker compose logs`). Or without Compose:
+That builds the image, runs the tests of the client and the server in the build, and serves File Browser on `http://127.0.0.1:8000`. The password of the user `admin` is in the log of the first start (`docker compose logs`).
+
+`docker compose up --build` builds on the base images that are already on the machine, and does not look for newer ones. To rebuild with their latest security patches, run `docker compose build --pull` first.
+
+Or without Compose:
 
 ```sh
 docker build --pull -t filebrowser:local .
