@@ -171,6 +171,8 @@ export const useUploadStore = defineStore("upload", () => {
       if (upload.type === "dir") {
         await api.post(upload.path).catch((err) => {
           succeeded = false;
+          // aborted meanwhile (e.g. by a logout, which says so)
+          if (started !== generation) return;
           $showError(err);
         });
       } else {

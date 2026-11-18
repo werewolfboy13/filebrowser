@@ -127,6 +127,17 @@ describe("uploads cancelled by a logout", () => {
     expect(h.showError).not.toHaveBeenCalled();
   });
 
+  it("a folder being created when the logout comes shows no error either", async () => {
+    parseToken(fakeJwt());
+    useUploadStore().upload("/files/docs/sub/", "sub", null, false, "dir");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.post).toHaveBeenCalledTimes(1);
+    logout(undefined, useAuthStore().jwt);
+    settle[0](new StatusError("401 Unauthorized\n", 401));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.showError).not.toHaveBeenCalled();
+  });
+
   it("so does a deliberate logout", () => {
     parseToken(fakeJwt());
     queue(2);
