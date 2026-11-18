@@ -9,6 +9,13 @@
 // - 403: the upload asked to replace the file, but the user may no longer
 //   modify it. The server forgets the upload (HEAD then answers 404), and
 //   creating it again is refused the same way.
+// - 5xx: the server could not put the file in place. HEAD for an upload
+//   whose data is complete but not in place either puts it in place (and
+//   reports it complete) or answers with an error status; it never reports
+//   it complete otherwise. On an error status tus-js-client creates the
+//   upload again, which the server refuses while the unfinished upload is
+//   pending: the upload must fail, never succeed without its data having
+//   been sent again.
 // - The answer is lost (e.g. a proxy's 502) after the server stored the
 //   file: tus resumes, HEAD answers 404 (the upload was completed), tus
 //   creates it again and gets 409 (the file is there now). The error says
@@ -170,6 +177,44 @@ describe("creating the upload again after a lost final answer", () => {
       409,
       "POST",
       false,
+    ]);
+  });
+});
+
+describe("a failed final PATCH, then HEAD answers with an error", () => {
+  for (const headStatus of [500, 410]) {
+    it(`HEAD ${headStatus}: the upload fails`, async () => {
+      onPatch(3, 500);
+      answer("HEAD", headStatus);
+      refuseRecreate(409); // the unfinished upload is still pending
+      const err = await send();
+      console.log(
+        `final PATCH 500, HEAD ${headStatus}:`,
+        err === "resolved"
+          ? "resolved"
+          : `rejected ${err.status} ${err.method}`,
+        "| requests:",
+        methods().join(" ")
+      );
+      expect(err).not.toBe("resolved");
+      expect([err.status, err.method]).toEqual([409, "POST"]);
+    });
+  }
+
+  it("control: if creating it again is accepted, all the data is sent again", async () => {
+    onPatch(3, 500);
+    answer("HEAD", 500);
+    expect(await send()).toBe("resolved");
+    expect(methods()).toEqual([
+      "POST",
+      "PATCH",
+      "PATCH",
+      "PATCH",
+      "HEAD",
+      "POST",
+      "PATCH",
+      "PATCH",
+      "PATCH",
     ]);
   });
 });
