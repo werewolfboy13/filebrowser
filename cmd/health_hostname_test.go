@@ -3,8 +3,10 @@ package cmd
 import (
 	"context"
 	"net"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -76,14 +78,15 @@ func stubInterfaceAddrs(t *testing.T, cidrs ...string) {
 // machine, so the record was put aside, and the health command looked for
 // the server on localhost and the port of the configuration: the container
 // was reported as unhealthy for as long as it ran.
-func TestIsLocalAddressResolvesAHostName(t *testing.T) {
+func TestLocalAddressesResolvesAHostName(t *testing.T) {
 	stubInterfaceAddrs(t, "172.17.0.2/16", "fd00::2/64")
 	lookups := stubHostLookup(t, map[string][]string{
 		"fbhost":            {"172.17.0.2"},
 		"fbhost6":           {"fd00::2"},
 		"loopback":          {"127.0.1.1"},
 		"loopback6":         {"::1"},
-		"here-and-there":    {"192.0.2.1", "172.17.0.2"},
+		"both":              {"fd00::2", "172.17.0.2"},
+		"here-and-there":    {"192.0.2.1", "172.17.0.2", "2001:db8::1"},
 		"files.example.net": {"192.0.2.1", "2001:db8::1"},
 		"neighbour":         {"172.17.0.3"},
 		"no-addresses":      {},
@@ -93,14 +96,18 @@ func TestIsLocalAddressResolvesAHostName(t *testing.T) {
 		address string
 		want    bool
 		lookup  bool
+		// ofName is which addresses of a name are this machine's.
+		ofName []string
 	}{
 		// A name is looked up, and is this machine's when one of its
 		// addresses is.
-		{address: "fbhost", want: true, lookup: true},
-		{address: "fbhost6", want: true, lookup: true},
-		{address: "loopback", want: true, lookup: true},
-		{address: "loopback6", want: true, lookup: true},
-		{address: "here-and-there", want: true, lookup: true},
+		{address: "fbhost", want: true, lookup: true, ofName: []string{"172.17.0.2"}},
+		{address: "fbhost6", want: true, lookup: true, ofName: []string{"fd00::2"}},
+		{address: "loopback", want: true, lookup: true, ofName: []string{"127.0.1.1"}},
+		{address: "loopback6", want: true, lookup: true, ofName: []string{"::1"}},
+		{address: "both", want: true, lookup: true, ofName: []string{"fd00::2", "172.17.0.2"}},
+		// Not the address of the name that is another machine's.
+		{address: "here-and-there", want: true, lookup: true, ofName: []string{"172.17.0.2"}},
 
 		// A name of another machine, or of none, is not.
 		{address: "files.example.net", want: false, lookup: true},
@@ -127,8 +134,12 @@ func TestIsLocalAddressResolvesAHostName(t *testing.T) {
 		t.Run(tt.address, func(t *testing.T) {
 			lookups.hosts, lookups.timeouts = nil, nil
 
-			if got := isLocalAddress(tt.address); got != tt.want {
-				t.Errorf("isLocalAddress(%q) = %v, want %v", tt.address, got, tt.want)
+			ofName, got := localAddresses(tt.address)
+			if got != tt.want {
+				t.Errorf("localAddresses(%q) = %v, want %v", tt.address, got, tt.want)
+			}
+			if !slices.Equal(ofName, tt.ofName) {
+				t.Errorf("localAddresses(%q) = %q, want the addresses %q", tt.address, ofName, tt.ofName)
 			}
 
 			if !tt.lookup {
@@ -169,14 +180,16 @@ func TestHealthUsesARecordWithANameOfThisMachine(t *testing.T) {
 		"files.example.net": {"192.0.2.1"},
 	})
 
-	for address, want := range map[string]string{
-		"fbhost":         "http://fbhost:9000/health",
-		"loopback":       "http://loopback:9000/health",
-		"here-and-there": "http://here-and-there:9000/health",
+	for address, want := range map[string]healthTarget{
+		"fbhost":   {url: "http://fbhost:9000/health", addresses: "172.17.0.2"},
+		"loopback": {url: "http://loopback:9000/health", addresses: "127.0.1.1"},
+		// The name is looked up once. Connecting to it would look it up
+		// again, and could reach the address that is another machine's.
+		"here-and-there": {url: "http://here-and-there:9000/health", addresses: "172.17.0.2"},
 
 		// A record is not a way to have the check sent to another machine.
-		"files.example.net": fromEnvironment,
-		"unknown.invalid":   fromEnvironment,
+		"files.example.net": {url: fromEnvironment},
+		"unknown.invalid":   {url: fromEnvironment},
 	} {
 		t.Run(address, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "health.json")
@@ -188,9 +201,49 @@ func TestHealthUsesARecordWithANameOfThisMachine(t *testing.T) {
 				Port:      "9000",
 			})
 
-			if got := resolvedHealthTarget(t); got.url != want {
-				t.Errorf("target = %+v, want %s", got, want)
+			if got := resolvedHealthTarget(t); got != want {
+				t.Errorf("target = %+v, want %+v", got, want)
 			}
 		})
+	}
+}
+
+// The same again, with a server to connect to. The name stands for this
+// machine and for another one, and nothing but the stub knows it: a check
+// that connected to the name, and not to the address that was found to be
+// this machine's, would not find the server.
+func TestHealthConnectsToTheLocalAddressesOfARecordedName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(envConfig, "")
+
+	srv := httptest.NewServer(healthyHandler("/health"))
+	defer srv.Close()
+	host, port := hostAndPort(t, srv)
+
+	// The address that is another machine's comes first, and nothing
+	// listens on the second one that is this machine's.
+	stubInterfaceAddrs(t, "172.17.0.2/16")
+	stubHostLookup(t, map[string][]string{"here-and-there.invalid": {"192.0.2.1", "::1", host}})
+
+	path := filepath.Join(t.TempDir(), "health.json")
+	t.Setenv(envHealthFile, path)
+	writeRecordFile(t, path, listenRecord{
+		PID:       os.Getpid(),
+		StartTime: processStartTime(os.Getpid()),
+		Address:   "here-and-there.invalid",
+		Port:      port,
+	})
+
+	want := healthTarget{url: "http://here-and-there.invalid:" + port + "/health", addresses: "::1 " + host}
+	if got := resolvedHealthTarget(t); got != want {
+		t.Fatalf("target = %+v, want %+v", got, want)
+	}
+	if err := runHealthTestCmd(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	srv.Close()
+	if err := runHealthTestCmd(); err == nil {
+		t.Error("expected an error: the server no longer listens")
 	}
 }

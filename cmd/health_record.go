@@ -275,19 +275,23 @@ func readListenRecord(path string) (*listenRecord, bool) {
 	return record, true
 }
 
-// isLocalAddress reports whether address, as a server is configured with it,
+// localAddresses reports whether address, as a server is configured with it,
 // is one of this machine: none at all (every address), localhost, a loopback
 // address, an address of one of its interfaces, or a host name that stands
 // for one of those. A server can listen on no other, so a record that names
 // another did not come from one.
-func isLocalAddress(address string) bool {
+//
+// For a host name, it also returns the addresses of the name that are this
+// machine's. A name can stand for other machines as well, and the health
+// command is to connect to none of those: see healthTarget.
+func localAddresses(address string) (ofName []string, local bool) {
 	host := strings.TrimSuffix(strings.TrimPrefix(address, "["), "]")
 	if host == "" || strings.EqualFold(host, "localhost") {
-		return true
+		return nil, true
 	}
 
 	if ip := net.ParseIP(host); ip != nil {
-		return isLocalIP(ip)
+		return nil, isLocalIP(ip)
 	}
 
 	// A host name, such as the container's own with `--address <name>`. The
@@ -299,14 +303,14 @@ func isLocalAddress(address string) bool {
 
 	ips, err := lookupHostIPs(ctx, host)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	for _, ip := range ips {
 		if isLocalIP(ip) {
-			return true
+			ofName = append(ofName, ip.String())
 		}
 	}
-	return false
+	return ofName, len(ofName) != 0
 }
 
 // isLocalIP reports whether ip is an address of this machine: every address,
