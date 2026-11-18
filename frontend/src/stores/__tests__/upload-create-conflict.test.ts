@@ -511,6 +511,8 @@ describe("the Replace dialog", () => {
 // next Enter (which clicks a focused button) overwrote the other file.
 // The default is now Skip, and the question leaves the focus alone in a
 // text field the user is typing in (Escape still closes it, as a Skip).
+// The next question appears where the one just answered was: the second
+// click of a double-click on Replace must not replace that file too.
 describe("the question's default focus, and its Replace button", () => {
   function mountPrompts() {
     wrapper = mount(Prompts, {
@@ -562,5 +564,31 @@ describe("the question's default focus, and its Replace button", () => {
       name: "b.pdf",
     });
     expect(focused()).toBe("prompts.skip");
+  });
+
+  it("the second click of a double-click on Replace does not replace the next file", async () => {
+    mountPrompts();
+    await conflicts("a.pdf", "b.pdf");
+    h.post.mockResolvedValue(undefined); // the replacing uploads
+    await button("buttons.replace").trigger("click", { detail: 1 });
+    await flushPromises();
+    expect(useLayoutStore().currentPrompt?.props.messageParams).toEqual({
+      name: "b.pdf",
+    });
+    await button("buttons.replace").trigger("click", { detail: 2 });
+    await settle();
+    const replaced = h.post.mock.calls.filter((c) => c[2]).map((c) => c[0]);
+    console.log("replaced:", JSON.stringify(replaced));
+    expect(replaced).toEqual(["/files/a.pdf"]);
+    expect(useLayoutStore().currentPrompt?.props.messageParams).toEqual({
+      name: "b.pdf",
+    });
+    // a click of its own still replaces it
+    await button("buttons.replace").trigger("click", { detail: 1 });
+    await settle();
+    expect(h.post.mock.calls.filter((c) => c[2]).map((c) => c[0])).toEqual([
+      "/files/a.pdf",
+      "/files/b.pdf",
+    ]);
   });
 });

@@ -48,7 +48,8 @@
 // upload batch, while the user types elsewhere), and the next one where the
 // one just answered was. So the default focus is on Skip, not Replace (a
 // focused button is clicked by Enter), and not taken from a text field the
-// user is typing in.
+// user is typing in; and the second click of a double-click is not taken as
+// a click on the next question's Replace.
 import { onMounted, ref } from "vue";
 import { useLayoutStore } from "@/stores/layout";
 import { isTypingTarget } from "@/utils/keyboard";
@@ -65,6 +66,7 @@ const prompt = layoutStore.currentPrompt;
 
 const replace = (event: Event) => {
   if (prompt == null || layoutStore.currentPrompt !== prompt) return;
+  if ((event as MouseEvent).detail > 1) return;
   prompt.confirm?.(event);
 };
 
