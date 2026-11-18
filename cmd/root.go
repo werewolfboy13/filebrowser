@@ -91,6 +91,7 @@ func init() {
 	flags.String("cacheDir", "", "file cache directory (disabled if empty)")
 	flags.String("redisCacheUrl", "", "redis cache URL (for multi-instance deployments), e.g. redis://user:pass@host:port")
 	flags.Int("imageProcessors", 4, "image processors count")
+	flags.String("shutdownTimeout", shutdownTimeout.String(), "time the requests in progress get to finish when the server is told to stop")
 	addServerFlags(flags)
 }
 
@@ -179,6 +180,13 @@ user created with the credentials from options "username" and "password".`,
 			return errors.New("image resize workers count could not be < 1")
 		}
 		imageService := img.New(imgWorkersCount)
+
+		// Now, so that a value that cannot be read stops the start, and not
+		// the stop.
+		stopTimeout, err := shutdownTimeoutFrom(v)
+		if err != nil {
+			return err
+		}
 
 		var fileCache diskcache.Interface = diskcache.NewNoOp()
 		cacheDir := v.GetString("cacheDir")
@@ -287,7 +295,7 @@ user created with the credentials from options "username" and "password".`,
 		log.Println("Got signal:", sig)
 
 		// Returning, rather than exiting here, lets the database be closed.
-		shutdownServer(srv, shutdownTimeout)
+		shutdownServer(srv, stopTimeout)
 
 		return nil
 	}, storeOptions{allowsNoDatabase: true}),

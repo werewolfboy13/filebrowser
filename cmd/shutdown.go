@@ -2,19 +2,43 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/spf13/viper"
 )
 
 // shutdownTimeout is how long the requests in progress get to finish once
-// the server is told to stop.
+// the server is told to stop, unless --shutdownTimeout says otherwise.
 //
 // It has to be shorter than the time the server is given to stop, or the
-// server is killed while it waits and the database is never closed. Docker
-// gives a container 10 seconds unless it is told otherwise, and compose.yaml
-// sets a stop_grace_period above this value.
+// server is killed while it waits and the database is never closed. How long
+// Docker gives a container is not the same everywhere: 10 seconds according
+// to its documentation, and about 3 were measured with Docker Desktop. So
+// compose.yaml sets a stop_grace_period above this value, and the documented
+// `docker run` commands a --stop-timeout.
 const shutdownTimeout = 8 * time.Second
+
+// shutdownTimeoutFrom returns the time that --shutdownTimeout, or
+// FB_SHUTDOWN_TIMEOUT, gives the requests in progress.
+//
+// It is read as a duration with its unit. A bare number is refused rather
+// than taken for seconds, or for the nanoseconds it would otherwise mean.
+func shutdownTimeoutFrom(v *viper.Viper) (time.Duration, error) {
+	value := v.GetString("shutdownTimeout")
+	if value == "" {
+		return shutdownTimeout, nil
+	}
+
+	timeout, err := time.ParseDuration(value)
+	if err != nil || timeout < 0 {
+		return 0, fmt.Errorf("invalid shutdownTimeout %q: it takes a duration with a unit, such as 8s or 1m", value)
+	}
+
+	return timeout, nil
+}
 
 // shutdownServer stops srv. It takes no new connections, waits for the
 // requests in progress for up to timeout, and then closes the connections

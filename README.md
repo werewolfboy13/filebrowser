@@ -42,7 +42,7 @@ That builds the image, runs the tests of the client and the server in the build,
 
 ```sh
 docker build --pull -t filebrowser:local .
-docker run -v filebrowser_data:/srv -v filebrowser_database:/database -v filebrowser_config:/config -p 8080:80 filebrowser:local
+docker run --stop-timeout 15 -v filebrowser_data:/srv -v filebrowser_database:/database -v filebrowser_config:/config -p 8080:80 filebrowser:local
 ```
 
 What to know about the image:

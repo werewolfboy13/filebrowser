@@ -66,6 +66,7 @@ The image can be built for `linux/amd64` and `linux/arm64`. It cannot be built f
 
 ```sh
 docker run \
+    --stop-timeout 15 \
     -v filebrowser_data:/srv \
     -v filebrowser_database:/database \
     -v filebrowser_config:/config \
@@ -73,13 +74,14 @@ docker run \
     filebrowser:local
 ```
 
-Where `filebrowser_data`, `filebrowser_database` and `filebrowser_config` are Docker [volumes](https://docs.docker.com/engine/storage/volumes/), where the data, database and configuration will be stored, respectively. The default configuration and database will be automatically initialized.
+Where `filebrowser_data`, `filebrowser_database` and `filebrowser_config` are Docker [volumes](https://docs.docker.com/engine/storage/volumes/), where the data, database and configuration will be stored, respectively. The default configuration and database will be automatically initialized. `--stop-timeout 15` gives the server the time it takes to stop: see [Stopping](#stopping).
 
 The server needs no capability, no new privilege and no writable root filesystem, so it can also run like this:
 
 ```sh
 docker run \
     --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --stop-timeout 15 \
     -v filebrowser_data:/srv \
     -v filebrowser_database:/database \
     -v filebrowser_config:/config \
@@ -125,7 +127,11 @@ A container without `/dev/shm`, which is what `--ipc=none` gives, has no such fi
 
 ### Stopping
 
-When the container is stopped, the server takes no new connections, gives the requests in progress 8 seconds to finish, cuts off the ones that are left, closes the database and exits. Docker has to wait longer than that before it kills the container, or the server is killed in the middle of it. `compose.yaml` sets 15 seconds. For `docker run`, `--stop-timeout 15` does the same, and `docker stop -t 15` does it for one stop. Without them, Docker waits for its default, which is 10 seconds according to its documentation.
+When the container is stopped, the server takes no new connections, gives the requests in progress 8 seconds to finish, cuts off the ones that are left, closes the database and exits. Docker has to wait longer than that before it kills the container, or the server is killed in the middle of it: the container then ends with the exit code 137, and the server has not closed the database.
+
+`compose.yaml` sets 15 seconds. For `docker run`, `--stop-timeout 15` does the same, as in the commands above, and `docker stop -t 15` does it for one stop. Do not rely on Docker's default instead. It is 10 seconds according to Docker's documentation, but not every version waits that long: Docker Desktop 29 was measured to kill a container after about 3 seconds.
+
+The 8 seconds can be changed with the `--shutdownTimeout` flag or the `FB_SHUTDOWN_TIMEOUT` environment variable, which take a duration with its unit, such as `2s` or `1m`. Keep it below the time that Docker waits.
 
 ### Coming From the Original Image
 
