@@ -109,6 +109,10 @@ func tusAcquireKey(key string) (release func(), ok bool) {
 // web interface retries it.
 var errTusBusy = errors.New("another request for this upload is in progress")
 
+// errTusNotStored is the answer to a question about an upload that has all
+// its data but could not be put in place: see tusHeadHandler.
+var errTusNotStored = errors.New("the upload has all its data, but could not be stored")
+
 // tusTempPath returns the temporary file the data of an upload to dst is
 // written to until the upload is complete. The name is derived from the name
 // of dst, so that every request of an upload finds it without the upload cache
@@ -383,7 +387,8 @@ func tusHeadHandler(cache UploadCache) handleFunc {
 			return http.StatusForbidden, nil
 		}
 
-		upload, err := cache.Get(tusUploadKey(d, r.URL.Path))
+		uploadKey := tusUploadKey(d, r.URL.Path)
+		upload, err := cache.Get(uploadKey)
 		if err != nil {
 			return http.StatusNotFound, err
 		}
@@ -407,6 +412,29 @@ func tusHeadHandler(cache UploadCache) handleFunc {
 		info, err := d.user.Fs.Stat(writePath)
 		if err != nil {
 			return errToStatus(err), err
+		}
+
+		// An upload that is complete is no longer registered: the request
+		// that brings its last byte puts the file in place and forgets it.
+		// One that is registered with all its data written is one whose last
+		// step failed (the data could not be synced, or the file not put in
+		// place), and it is not stored. Reporting its offset would say that
+		// it is: to a TUS client, an offset equal to the length means done,
+		// and it sends nothing more.
+		if info.Size() >= upload.Length {
+			// Unless that last request is still at it. Then it is not known
+			// yet which way it goes, and the client is to ask again.
+			release, ok := tusAcquire(d, r)
+			if !ok {
+				return http.StatusLocked, errTusBusy
+			}
+			defer release()
+
+			if !cache.Has(uploadKey) {
+				// It finished in the meantime, one way or the other.
+				return http.StatusNotFound, nil
+			}
+			return http.StatusInternalServerError, errTusNotStored
 		}
 
 		w.Header().Set("Upload-Offset", strconv.FormatInt(info.Size(), 10))
@@ -578,7 +606,8 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 				// The data is all here, in the temporary file, which is
 				// kept: the client can ask for it to be put in place again
 				// (a PATCH without data at the final offset), for as long as
-				// the upload is.
+				// the upload is. Until then it is not stored, and HEAD says
+				// so instead of reporting it as complete.
 				return http.StatusInternalServerError, fmt.Errorf("could not store the upload: %w", err)
 			}
 		}
