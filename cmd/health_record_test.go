@@ -232,6 +232,12 @@ func TestHealthFallsBackWithoutAUsableRecord(t *testing.T) {
 		"something else there": `["127.0.0.1", 80]`,
 	}
 
+	// What was planted next to a server that could not replace it: the
+	// first process of a container, and a port that nothing listens on.
+	if processStartTime(os.Getpid()) != "" {
+		tests["a record that does not say when its process started"] = `{"pid": 1, "address": "127.0.0.1", "port": "9"}`
+	}
+
 	for name, content := range tests {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "health.json")

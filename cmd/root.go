@@ -335,6 +335,9 @@ func protectServerFiles(server *settings.Server, database, config, cacheDir stri
 	register("configuration file", config, server.Protect)
 	register("cache directory", cacheDir, server.Protect)
 	register("TLS key", server.TLSKey, server.Protect)
+	// The health command sends its request where this file says, and
+	// whoever can upload could write it.
+	register("health file", os.Getenv(envHealthFile), server.Protect)
 	switch server.Log {
 	case "", "stdout", "stderr":
 	default:
@@ -346,7 +349,7 @@ func protectServerFiles(server *settings.Server, database, config, cacheDir stri
 		log.Println("WARNING: exposed to everything else that can read the served directory, and a")
 		log.Println("WARNING: directory that holds one of them cannot be moved, copied or deleted as a")
 		log.Println("WARNING: whole. Keep them outside the served directory (--database, --config,")
-		log.Println("WARNING: --cacheDir, --key, --log).")
+		log.Println("WARNING: --cacheDir, --key, --log, FB_HEALTH_FILE).")
 	}
 
 	return inside

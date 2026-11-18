@@ -56,6 +56,9 @@ Where the server listens is looked up in this order:
   started, and removes the file when it stops. That is where it really
   listens, whether that came from its flags, the environment, the
   configuration file or the database. The Docker image sets the variable.
+  The file is only used when it belongs to the user who runs this command
+  or to the user the server runs as, and when it names this machine or the
+  address in the configuration.
 - The FB_ environment variables and the configuration file.
 
 The database is not read, because the running server holds it locked. So
@@ -95,9 +98,18 @@ func resolveHealthTarget(cmd *cobra.Command) (healthTarget, error) {
 		}
 	}
 
+	// The record is taken at its word for a server on this machine: a socket,
+	// or an address that is one of this machine's. For any other address
+	// only if the configuration names the same one. The check is made from
+	// inside the container, of the server next to it, and a record is not a
+	// way to have it sent somewhere else.
+	var elsewhere *listenRecord
 	if !explicit {
 		if record, ok := readListenRecord(os.Getenv(envHealthFile)); ok {
-			return healthTargetFor(record.listen()), nil
+			if record.Socket != "" || isLocalAddress(record.Address) {
+				return healthTargetFor(record.listen()), nil
+			}
+			elsewhere = record
 		}
 	}
 
@@ -109,6 +121,10 @@ func resolveHealthTarget(cmd *cobra.Command) (healthTarget, error) {
 	// With no configuration file, the flags and the environment decide.
 	if err := v.ReadInConfig(); err != nil && errors.As(err, &viper.ConfigParseError{}) {
 		return healthTarget{}, err
+	}
+
+	if elsewhere != nil && elsewhere.Address == v.GetString("address") {
+		return healthTargetFor(elsewhere.listen()), nil
 	}
 
 	return healthTargetFrom(v), nil

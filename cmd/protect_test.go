@@ -24,6 +24,9 @@ func TestProtectServerFiles(t *testing.T) {
 		}
 	}
 
+	// Not whatever the machine running the tests has set.
+	t.Setenv(envHealthFile, "")
+
 	t.Run("bare binary defaults: everything inside the root", func(t *testing.T) {
 		// Relative paths, as the defaults are, are resolved against the
 		// working directory.
@@ -45,7 +48,28 @@ func TestProtectServerFiles(t *testing.T) {
 		}
 	})
 
+	// The file the server tells the health command where it listens in. The
+	// image's advice for a container without /dev/shm is to point it at a
+	// directory the server can write to, and the served directory is one:
+	// there, a user could replace it through the API.
+	t.Run("the health file inside the root", func(t *testing.T) {
+		t.Setenv(envHealthFile, filepath.Join(root, "run", "health.json"))
+		server := &settings.Server{Root: root}
+
+		got := protectServerFiles(server, filepath.Join(outside, "filebrowser.db"), "", "")
+		if want := []string{"health file"}; !slices.Equal(got, want) {
+			t.Errorf("registered %v, want %v", got, want)
+		}
+		if !server.IsProtected(filepath.Join(root, "run", "health.json")) {
+			t.Error("the health file is not protected")
+		}
+		if server.IsProtected(filepath.Join(root, "run", "notes.txt")) {
+			t.Error("an ordinary file next to it is protected")
+		}
+	})
+
 	t.Run("container layout: nothing inside the root", func(t *testing.T) {
+		t.Setenv(envHealthFile, "/dev/shm/filebrowser-health.json")
 		for _, logTarget := range []string{"stdout", "stderr", "", filepath.Join(outside, "fb.log")} {
 			server := &settings.Server{Root: root, TLSKey: filepath.Join(outside, "key.pem"), Log: logTarget}
 
