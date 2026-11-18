@@ -33,11 +33,31 @@ const maxPatchDrainBytes = 32 << 20 // 32MB
 // while the client is still streaming a chunk reaches the browser as a transport
 // error instead of the status we replied with. The client then cannot tell a
 // conflict from a network fault, retries blindly, and the upload stalls.
-func drainRequestBody(r *http.Request) {
+//
+// The rest of the chunk may take as long as the chunk takes, but not for ever
+// when nothing arrives: each read is given leftoverBodyTimeout. A client that
+// stops sending is answered then, on a connection that is closed after the
+// answer, as the server would not get to the next request on it anyway.
+func drainRequestBody(w http.ResponseWriter, r *http.Request) {
 	if r.Body == nil {
 		return
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, maxPatchDrainBytes))
+
+	buf := make([]byte, 32<<10)
+	for left := int64(maxPatchDrainBytes); left > 0; {
+		limitBodyWait(w, leftoverBodyTimeout)
+		n, err := r.Body.Read(buf[:min(int64(len(buf)), left)])
+		left -= int64(n)
+		if errors.Is(err, io.EOF) {
+			return
+		}
+		if err != nil {
+			// Without this, the server would wait once more for the same
+			// body before it sends the answer.
+			w.Header().Set("Connection", "close")
+			return
+		}
+	}
 }
 
 // keepUploadActive periodically touches the cache entry to prevent eviction during transfer
@@ -466,7 +486,7 @@ func tusPatchHandler(cache UploadCache) handleFunc {
 		// left of it so the answer reaches the client on a connection that stays
 		// usable, instead of being lost to a reset.
 		if status >= 400 {
-			drainRequestBody(r)
+			drainRequestBody(w, r)
 		}
 		return status, err
 	})
