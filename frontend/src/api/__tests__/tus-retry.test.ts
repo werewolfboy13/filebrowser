@@ -7,20 +7,8 @@
 // off (retryCount 0), which also turned off the retry of 423: the upload
 // failed. Real tus-js-client browser stack against a loopback server (see
 // tus-loopback.ts; no network).
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
-import {
-  startTusServer,
-  useServerOrigin,
-  type TusServer,
-} from "./tus-loopback";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loopbackPerTest, type TusServer } from "./tus-loopback";
 
 vi.hoisted(() => {
   (window as any).FileBrowser = {
@@ -41,15 +29,9 @@ vi.mock("@/api/utils", () => ({
 
 let server: TusServer;
 let tus: typeof import("@/api/tus");
-
-beforeAll(async () => {
-  server = await startTusServer();
-  useServerOrigin(server);
-  tus = await import("@/api/tus");
-});
-afterAll(() => server.close());
+const loopback = loopbackPerTest(() => import("@/api/tus"));
 beforeEach(() => {
-  server.reset();
+  ({ server, mod: tus } = loopback);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 

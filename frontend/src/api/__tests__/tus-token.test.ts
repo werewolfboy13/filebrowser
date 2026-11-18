@@ -13,20 +13,8 @@
 //   the server rejects, so every upload from the web interface failed with
 //   401. A model of setHeader as an overwrite cannot catch that; jsdom's
 //   spec XMLHttpRequest combines repeated headers as browsers do.
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
-import {
-  startTusServer,
-  useServerOrigin,
-  type TusServer,
-} from "./tus-loopback";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loopbackPerTest, type TusServer } from "./tus-loopback";
 
 vi.hoisted(() => {
   (window as any).FileBrowser = {
@@ -51,16 +39,10 @@ vi.mock("@/api/utils", () => ({
 
 let server: TusServer;
 let tus: typeof import("@/api/tus");
-
-beforeAll(async () => {
-  server = await startTusServer();
-  useServerOrigin(server);
-  tus = await import("@/api/tus");
-});
-afterAll(() => server.close());
+const loopback = loopbackPerTest(() => import("@/api/tus"));
 
 beforeEach(() => {
-  server.reset();
+  ({ server, mod: tus } = loopback);
   renew.mockClear();
   auth.jwt = TOKEN;
 });

@@ -1,7 +1,11 @@
 // Test helper (jsdom): a tus server on the loopback interface, inside the
 // test process, for driving the real tus-js-client browser stack (its
 // XMLHttpRequest-based HTTP stack on jsdom's spec XMLHttpRequest) end to end.
-// Nothing leaves the machine.
+//
+// Nothing leaves the machine: the server listens on 127.0.0.1 only (never
+// on all interfaces), on an ephemeral port the system picks, and
+// loopbackPerTest() starts a new one before each test and closes it, with
+// every connection to it, after each test.
 //
 // jsdom's XMLHttpRequest follows the spec: calling setRequestHeader twice for
 // the same header combines the values ("a, b"), as browsers do. The server
@@ -14,6 +18,7 @@
 // test, so that utils/constants reads the server's origin.
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { afterEach, beforeEach, vi } from "vitest";
 
 export interface SeenRequest {
   method: string;
@@ -70,7 +75,12 @@ export async function startTusServer(): Promise<TusServer> {
       state.onRequest = null;
       state.extraHeaders = {};
     },
-    close: () => new Promise<void>((r) => server.close(() => r())),
+    close: () =>
+      new Promise<void>((r) => {
+        server.close(() => r());
+        // keep-alive connections would hold the listener open
+        server.closeAllConnections();
+      }),
   };
 
   const server = http.createServer((req, res) => {
@@ -173,4 +183,20 @@ export function useServerOrigin(server: TusServer) {
     throw new Error("jsdom internals changed: window._origin is gone");
   }
   dom.window._origin = server.origin;
+}
+
+// A server for each test: started (and the page pointed at it) before the
+// test, closed after it. The module under test is imported anew for each
+// test, after that, because utils/constants reads the page's origin (the
+// new server's port) when it is imported.
+export function loopbackPerTest<M>(load: () => Promise<M>) {
+  const ctx = {} as { server: TusServer; mod: M };
+  beforeEach(async () => {
+    ctx.server = await startTusServer();
+    useServerOrigin(ctx.server);
+    vi.resetModules();
+    ctx.mod = await load();
+  });
+  afterEach(() => ctx.server.close());
+  return ctx;
 }
