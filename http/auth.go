@@ -51,6 +51,21 @@ type authToken struct {
 	// for what it is used for.
 	PasswordLogin bool `json:"pwl,omitempty"`
 
+	// Record is the revocation mark (users.User.TokensNotBefore) of the
+	// account record the token was issued from: which state of the account
+	// the request that got the token had read. The token is good for as long
+	// as the account still carries that mark.
+	//
+	// The date of a token cannot say this. A request reads the account,
+	// works for a while (a login hashes the password) and signs; a change of
+	// password that is stored in between ends every session, and the token
+	// signed a moment later, from the record of before, is dated after it.
+	//
+	// It is a pointer so that a mark of zero (an account that was never
+	// revoked) is written down as well: a token without the claim is one
+	// from before the claim existed, and is placed by its date alone.
+	Record *int64 `json:"rec,omitempty"`
+
 	jwt.RegisteredClaims
 }
 
@@ -154,6 +169,12 @@ func withUser(fn handleFunc) handleFunc {
 			if tk.IssuedAt == nil || d.user.TokenRevoked(tk.IssuedAt.Time) {
 				return http.StatusUnauthorized, nil
 			}
+		}
+		// So is a token that was issued from the account as it was before
+		// the last revocation, whatever its date: see authToken.Record. This
+		// only ever refuses a token the check above let through.
+		if tk.Record != nil && *tk.Record != d.user.TokensNotBefore {
+			return http.StatusUnauthorized, nil
 		}
 		d.token = token.Raw
 		d.loginToken = tk.PasswordLogin
@@ -395,9 +416,15 @@ func writeToken(w http.ResponseWriter, signed string) (int, error) {
 
 // signSessionToken issues a session token for user. passwordLogin marks it as
 // the answer to a login with the account's password.
+//
+// user must be the record the request read, as it read it: the token is tied
+// to the revocation mark of that record (see authToken.Record), and is over
+// as soon as the stored account carries another one.
 func signSessionToken(d *data, user *users.User, tokenExpirationTime time.Duration, passwordLogin bool) (string, error) {
+	record := user.TokensNotBefore
 	claims := &authToken{
 		PasswordLogin: passwordLogin,
+		Record:        &record,
 		User: userInfo{
 			ID:                    user.ID,
 			Locale:                user.Locale,
