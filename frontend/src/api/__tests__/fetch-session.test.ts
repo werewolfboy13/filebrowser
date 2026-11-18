@@ -32,7 +32,7 @@ vi.mock("@/stores/upload", () => ({
 
 import { createPinia, setActivePinia } from "pinia";
 import { fetchURL } from "@/api/utils";
-import { parseToken } from "@/utils/auth";
+import { logout, parseToken, renew } from "@/utils/auth";
 import { useAuthStore } from "@/stores/auth";
 
 const b64url = (o: object) =>
@@ -62,6 +62,20 @@ function stubFetch(handler: Handler) {
 }
 const xAuth = (init: RequestInit) =>
   (init.headers as Record<string, string>)["X-Auth"];
+
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+async function until(cond: () => boolean) {
+  for (let i = 0; i < 50 && !cond(); i++) {
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  expect(cond()).toBe(true);
+}
+const asksRenewal = () =>
+  new Response("{}", { status: 200, headers: { "X-Renew-Token": "true" } });
 
 const outcome = (p: Promise<unknown>) =>
   p.then(
@@ -239,5 +253,150 @@ describe("fetchURL and Retry-After", () => {
     expect(err.status).toBe(429);
     expect(err.retryAfter).toBe(17);
     expect(h.push).not.toHaveBeenCalled();
+  });
+});
+
+// A renewal, or a token handed out with an answer, speaks for the session
+// as it was when the request went out. Each newly stored token and each
+// logout starts a new epoch:
+// - a renewal is applied only if the epoch is unchanged since it was asked
+//   for (it would otherwise log a logged-out tab back in, or put back a
+//   token that a password change has revoked);
+// - a handed-out token (X-Auth-Token) is adopted unless the tab logged out
+//   since the request was sent: it is newer than any renewal in between,
+//   which the change that handed it out has revoked.
+describe("fetchURL, renewals and handed-out tokens racing each other", () => {
+  it("a renewal answered after logout does not log the tab back in", async () => {
+    const renewAnswer = deferred<Response>();
+    stubFetch((url) =>
+      url === "/api/renew"
+        ? renewAnswer.promise
+        : Promise.resolve(new Response("{}"))
+    );
+    const pending = renew(OLD).catch(() => {});
+    await until(() => calls.includes("POST /api/renew"));
+    logout();
+    renewAnswer.resolve(new Response(RENEWED, { status: 200 }));
+    await pending;
+    console.log(
+      "after logout, late renewal:",
+      JSON.stringify({
+        jwt: useAuthStore().jwt === RENEWED ? "RENEWED" : useAuthStore().jwt,
+        user: useAuthStore().user !== null,
+        ls: localStorage.getItem("jwt") === RENEWED ? "RENEWED" : "",
+      })
+    );
+    expect(useAuthStore().jwt).toBe("");
+    expect(useAuthStore().user).toBeNull();
+    expect(localStorage.getItem("jwt")).toBe("");
+  });
+
+  it("nor replaces the session of whoever logged in next on this tab", async () => {
+    const renewAnswer = deferred<Response>();
+    stubFetch((url) =>
+      url === "/api/renew"
+        ? renewAnswer.promise
+        : Promise.resolve(new Response("{}"))
+    );
+    const pending = renew(OLD).catch(() => {});
+    await until(() => calls.includes("POST /api/renew"));
+    logout();
+    parseToken(NEW); // the next login
+    renewAnswer.resolve(new Response(RENEWED, { status: 200 }));
+    await pending;
+    expect(useAuthStore().jwt).toBe(NEW);
+  });
+
+  it("a renewal answered after a token was handed out does not replace it", async () => {
+    const renewAnswer = deferred<Response>();
+    stubFetch((url) => {
+      if (url === "/api/renew") return renewAnswer.promise;
+      if (url === "/api/users/2") {
+        return Promise.resolve(
+          new Response("", { status: 200, headers: { "X-Auth-Token": NEW } })
+        );
+      }
+      return Promise.resolve(asksRenewal());
+    });
+    const listing = outcome(fetchURL("/api/resources/", {}));
+    await until(() => calls.includes("POST /api/renew"));
+    await fetchURL("/api/users/2", { method: "PUT", body: "{}" });
+    renewAnswer.resolve(new Response(RENEWED, { status: 200 }));
+    expect(await listing).toBe("resolved");
+    console.log(
+      "token after the late renewal:",
+      useAuthStore().jwt === NEW ? "NEW" : "RENEWED (revoked)"
+    );
+    expect(useAuthStore().jwt).toBe(NEW);
+    expect(localStorage.getItem("jwt")).toBe(NEW);
+  });
+
+  it("a token handed out after a renewal replaced the old one is adopted", async () => {
+    const putAnswer = deferred<Response>();
+    stubFetch((url) => {
+      if (url === "/api/users/2") return putAnswer.promise;
+      if (url === "/api/renew") {
+        return Promise.resolve(new Response(RENEWED, { status: 200 }));
+      }
+      return Promise.resolve(asksRenewal());
+    });
+    const put = outcome(
+      fetchURL("/api/users/2", { method: "PUT", body: "{}" })
+    );
+    await fetchURL("/api/resources/", {}); // renews while the PUT is out
+    expect(useAuthStore().jwt).toBe(RENEWED);
+    putAnswer.resolve(
+      new Response("", { status: 200, headers: { "X-Auth-Token": NEW } })
+    );
+    expect(await put).toBe("resolved");
+    console.log(
+      "token after the PUT:",
+      useAuthStore().jwt === NEW ? "NEW" : "RENEWED (NEW dropped)"
+    );
+    expect(useAuthStore().jwt).toBe(NEW);
+  });
+
+  it("a token handed out to a request sent before logout is not adopted", async () => {
+    const putAnswer = deferred<Response>();
+    stubFetch(() => putAnswer.promise);
+    const put = outcome(
+      fetchURL("/api/users/2", { method: "PUT", body: "{}" })
+    );
+    await until(() => calls.includes("PUT /api/users/2"));
+    logout();
+    putAnswer.resolve(
+      new Response("", { status: 200, headers: { "X-Auth-Token": NEW } })
+    );
+    await put;
+    expect(useAuthStore().jwt).toBe("");
+    expect(localStorage.getItem("jwt")).toBe("");
+  });
+
+  it("a successful request whose renewal is refused after the token changed succeeds", async () => {
+    const renewAnswer = deferred<Response>();
+    stubFetch((url) => {
+      if (url === "/api/renew") return renewAnswer.promise;
+      if (url === "/api/users/2") {
+        return Promise.resolve(
+          new Response("", { status: 200, headers: { "X-Auth-Token": NEW } })
+        );
+      }
+      return Promise.resolve(asksRenewal());
+    });
+    const save = outcome(fetchURL("/api/resources/a.txt", { method: "PUT" }));
+    await until(() => calls.includes("POST /api/renew"));
+    await fetchURL("/api/users/2", { method: "PUT", body: "{}" });
+    // the password change revoked the token the renewal was asked for
+    renewAnswer.resolve(new Response("401 Unauthorized\n", { status: 401 }));
+    const result = await save;
+    console.log(
+      "save outcome:",
+      result,
+      "| logged out:",
+      h.push.mock.calls.length > 0
+    );
+    expect(result).toBe("resolved");
+    expect(h.push).not.toHaveBeenCalled();
+    expect(useAuthStore().jwt).toBe(NEW);
   });
 });

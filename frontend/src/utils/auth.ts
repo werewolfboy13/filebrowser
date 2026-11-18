@@ -7,7 +7,13 @@ import router from "@/router";
 import type { JwtPayload } from "jwt-decode";
 import { jwtDecode } from "jwt-decode";
 import { authMethod, baseURL, noAuth, logoutPage } from "./constants";
-import { retryAfterSeconds, setSafeTimeout, StatusError } from "@/api/utils";
+import {
+  retryAfterSeconds,
+  sessionMark,
+  setSafeTimeout,
+  startEpoch,
+  StatusError,
+} from "@/api/utils";
 
 // The auth cookie lets the server authenticate plain GETs (downloads,
 // previews). Over https, never let it travel over plain http.
@@ -19,6 +25,8 @@ function setAuthCookie(value: string, extra = "") {
 export function parseToken(token: string) {
   // falsy or malformed jwt will throw InvalidTokenError
   const data = jwtDecode<JwtPayload & { user: IUser }>(token);
+  // answers to renewals asked for before this token are for another one
+  startEpoch(false);
 
   setAuthCookie(token);
 
@@ -98,6 +106,7 @@ export function renew(jwt: string): Promise<void> {
 }
 
 async function requestRenew(jwt: string) {
+  const { epoch } = sessionMark();
   const res = await fetch(`${baseURL}/api/renew`, {
     method: "POST",
     headers: {
@@ -106,6 +115,13 @@ async function requestRenew(jwt: string) {
   });
 
   const body = await res.text();
+
+  // The tab logged out, or stored another token (a renewal, a token handed
+  // out by a password change), while this was on its way: the answer is
+  // about a token no longer in use. Applying it would log a logged-out tab
+  // back in, or put back a token the change has revoked; its refusal does
+  // not end the session that is in use.
+  if (sessionMark().epoch !== epoch) return;
 
   if (res.status === 200) {
     parseToken(body);
@@ -142,6 +158,8 @@ export async function signup(username: string, password: string) {
 }
 
 export function logout(reason?: string) {
+  // answers to requests sent before this are for the session that ends here
+  startEpoch(true);
   // Stop what still runs with this session (uploads; the pending ones would
   // otherwise start without a token) while the token is still set, then
   // drop per-session state so the next login on this tab starts clean.

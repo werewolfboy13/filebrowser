@@ -16,6 +16,42 @@ export class StatusError extends Error {
   }
 }
 
+// Where the session of this tab (its auth store) is at, so that an answer
+// can tell whether it still speaks for the session it was asked in. Never
+// reset, not even by logout.
+// - epoch: a new one starts with every token stored and with logout. A
+//   renewal is applied only in the epoch it was asked for in.
+// - session: a new one starts with logout. A token handed out with an
+//   answer (X-Auth-Token) is adopted only in the session the request was
+//   sent in. Not only in its epoch: a renewal in between (a token that the
+//   change handing out the new one has revoked) must not make it dropped.
+interface SessionMark {
+  epoch: number;
+  session: number;
+}
+const sessionMarks = new WeakMap<object, SessionMark>();
+
+function markOf(): SessionMark {
+  const authStore = useAuthStore();
+  let mark = sessionMarks.get(authStore);
+  if (!mark) {
+    mark = { epoch: 0, session: 0 };
+    sessionMarks.set(authStore, mark);
+  }
+  return mark;
+}
+
+export function sessionMark(): SessionMark {
+  return { ...markOf() };
+}
+
+// Called by parseToken (a token stored) and by logout (the session ended).
+export function startEpoch(sessionEnded: boolean) {
+  const mark = markOf();
+  mark.epoch++;
+  if (sessionEnded) mark.session++;
+}
+
 export async function fetchURL(
   url: string,
   opts: ApiOpts,
@@ -30,6 +66,7 @@ export async function fetchURL(
   // The token this request is sent with: its answer only speaks for the
   // session while that token is still the current one.
   const sentJwt = authStore.jwt;
+  const sentSession = sessionMark().session;
   const isCurrent = () => authStore.jwt === sentJwt;
   let res;
   try {
@@ -53,7 +90,7 @@ export async function fetchURL(
   // first, like a renewal, and do not renew on top of it. Only from a
   // successful answer: the server sends it with nothing else.
   const handedOut = auth && res.ok ? res.headers.get("X-Auth-Token") : null;
-  if (handedOut && isCurrent()) {
+  if (handedOut && sessionMark().session === sentSession) {
     try {
       parseToken(handedOut);
     } catch (e) {
