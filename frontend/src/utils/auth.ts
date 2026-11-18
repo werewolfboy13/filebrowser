@@ -14,6 +14,7 @@ import {
   startEpoch,
   StatusError,
 } from "@/api/utils";
+import { dropUnsaved, dropUnsavedOfOthers, keepUnsaved } from "./unsavedEdit";
 
 // The auth cookie lets the server authenticate plain GETs (downloads,
 // previews). Over https, never let it travel over plain http.
@@ -35,6 +36,8 @@ export function parseToken(token: string) {
   const authStore = useAuthStore();
   authStore.jwt = token;
   authStore.setUser(data.user);
+  // what the editor kept for another user is not this user's to see
+  dropUnsavedOfOthers(data.user);
 
   // proxy auth with custom logout subject to unknown external timeout
   if (logoutPage !== "/login" && authMethod === "proxy") {
@@ -162,12 +165,22 @@ export async function signup(username: string, password: string) {
 // are shared by every tab of the app: they are then cleared only if they
 // still hold that token. Another tab may have stored a newer one since,
 // e.g. after changing the password, which revoked this tab's token.
+// Such a forced logout also keeps the editor's unsaved text, and leads back
+// to the page the user was on once they log in again.
 export function logout(reason?: string, endedToken?: string) {
   // answers to requests sent before this are for the session that ends here
   startEpoch(true);
+  const forced = endedToken !== undefined;
   const stored = localStorage.getItem("jwt");
-  const sharedIsOurs =
-    endedToken === undefined || !stored || stored === endedToken;
+  const sharedIsOurs = !forced || !stored || stored === endedToken;
+  // while the user is still known (the kept text is tagged with them)
+  if (forced) keepUnsaved(useAuthStore().user);
+  else dropUnsaved();
+  const current = router.currentRoute.value;
+  const redirect =
+    forced && current.matched.some((record) => record.meta.requiresAuth)
+      ? current.fullPath
+      : undefined;
   // Stop what still runs with this session (uploads; the pending ones would
   // otherwise start without a token) while the token is still set, then
   // drop per-session state so the next login on this tab starts clean.
@@ -190,15 +203,11 @@ export function logout(reason?: string, endedToken?: string) {
   } else if (logoutPage !== "/login") {
     document.location.href = `${logoutPage}`;
   } else {
+    const query: Record<string, string> = {};
     if (typeof reason === "string" && reason.trim() !== "") {
-      router.push({
-        path: "/login",
-        query: { "logout-reason": reason },
-      });
-    } else {
-      router.push({
-        path: "/login",
-      });
+      query["logout-reason"] = reason;
     }
+    if (redirect !== undefined) query.redirect = redirect;
+    router.push({ path: "/login", query });
   }
 }

@@ -15,7 +15,18 @@ vi.hoisted(() => {
     NoAuth: false,
   };
 });
-vi.mock("@/router", () => ({ default: { push: vi.fn() } }));
+const { currentRoute } = vi.hoisted(() => ({
+  // the page the session ends on: a forced logout leads back to it
+  currentRoute: {
+    value: {
+      fullPath: "/files/docs/",
+      matched: [{ meta: { requiresAuth: true } }],
+    },
+  },
+}));
+vi.mock("@/router", () => ({
+  default: { push: vi.fn(), currentRoute: currentRoute },
+}));
 vi.mock("@/i18n", () => ({ detectLocale: () => "en", setLocale: vi.fn() }));
 vi.mock("@/stores/upload", () => ({
   useUploadStore: () => ({ abort: vi.fn() }),

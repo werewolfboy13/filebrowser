@@ -19,7 +19,18 @@ vi.hoisted(() => {
   };
 });
 const h = vi.hoisted(() => ({ push: vi.fn(), abort: vi.fn() }));
-vi.mock("@/router", () => ({ default: { push: h.push } }));
+const { currentRoute } = vi.hoisted(() => ({
+  // the page the session ends on: a forced logout leads back to it
+  currentRoute: {
+    value: {
+      fullPath: "/files/docs/",
+      matched: [{ meta: { requiresAuth: true } }],
+    },
+  },
+}));
+vi.mock("@/router", () => ({
+  default: { push: h.push, currentRoute: currentRoute },
+}));
 vi.mock("@/i18n", () => ({ detectLocale: () => "en", setLocale: vi.fn() }));
 vi.mock("@/stores/upload", () => ({
   useUploadStore: () => ({ abort: h.abort }),
@@ -92,7 +103,7 @@ describe("inactivity timer across logout and login", () => {
     vi.advanceTimersByTime(2 * DAY + MIN);
     expect(h.push).toHaveBeenCalledWith({
       path: "/login",
-      query: { "logout-reason": "inactivity" },
+      query: { "logout-reason": "inactivity", redirect: "/files/docs/" },
     });
     expect(localStorage.getItem("jwt")).toBe("");
   });

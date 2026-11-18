@@ -24,7 +24,18 @@ vi.hoisted(() => {
   };
 });
 const h = vi.hoisted(() => ({ push: vi.fn() }));
-vi.mock("@/router", () => ({ default: { push: h.push } }));
+const { currentRoute } = vi.hoisted(() => ({
+  // the page the session ends on: a forced logout leads back to it
+  currentRoute: {
+    value: {
+      fullPath: "/files/docs/",
+      matched: [{ meta: { requiresAuth: true } }],
+    },
+  },
+}));
+vi.mock("@/router", () => ({
+  default: { push: h.push, currentRoute: currentRoute },
+}));
 vi.mock("@/i18n", () => ({ detectLocale: () => "en", setLocale: vi.fn() }));
 vi.mock("@/stores/upload", () => ({
   useUploadStore: () => ({ abort: vi.fn() }),
@@ -112,7 +123,10 @@ describe("fetchURL and a revoked session", () => {
         JSON.stringify(h.push.mock.calls)
       );
       expect(result).toBe("rejected: 401");
-      expect(h.push).toHaveBeenCalledWith({ path: "/login" });
+      expect(h.push).toHaveBeenCalledWith({
+        path: "/login",
+        query: { redirect: "/files/docs/" },
+      });
       expect(useAuthStore().jwt).toBe("");
       expect(calls).toEqual(["GET /api/resources/"]); // no renewal attempt
     });
@@ -234,7 +248,10 @@ describe("fetchURL and a token handed out with a response (X-Auth-Token)", () =>
     expect(await outcome(fetchURL("/api/resources/", {}))).toBe(
       "rejected: 401"
     );
-    expect(h.push).toHaveBeenCalledWith({ path: "/login" });
+    expect(h.push).toHaveBeenCalledWith({
+      path: "/login",
+      query: { redirect: "/files/docs/" },
+    });
   });
 });
 
@@ -464,7 +481,10 @@ describe("two tabs sharing the cookie and the stored token", () => {
     );
     // tab B is logged out...
     expect(useAuthStore().jwt).toBe("");
-    expect(h.push).toHaveBeenCalledWith({ path: "/login" });
+    expect(h.push).toHaveBeenCalledWith({
+      path: "/login",
+      query: { redirect: "/files/docs/" },
+    });
     // ...and what tab A stored is still there
     expect(localStorage.getItem("jwt")).toBe(NEW);
     expect(cookieToken()).toBe(NEW);

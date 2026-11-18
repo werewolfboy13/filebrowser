@@ -29,7 +29,18 @@ const h = vi.hoisted(() => ({
   post: vi.fn(),
   jwtAtAbort: null as string | null,
 }));
-vi.mock("@/router", () => ({ default: { push: h.push } }));
+const { currentRoute } = vi.hoisted(() => ({
+  // the page the session ends on: a forced logout leads back to it
+  currentRoute: {
+    value: {
+      fullPath: "/files/docs/",
+      matched: [{ meta: { requiresAuth: true } }],
+    },
+  },
+}));
+vi.mock("@/router", () => ({
+  default: { push: h.push, currentRoute: currentRoute },
+}));
 vi.mock("@/i18n", () => ({ detectLocale: () => "en", setLocale: vi.fn() }));
 // The real upload store, over mocked transports: logout() runs its abort().
 vi.mock("@/api", () => ({

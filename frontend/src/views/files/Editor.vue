@@ -100,6 +100,12 @@ import { inject, onBeforeUnmount, onMounted, ref, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
 import { onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { read, copy } from "@/utils/clipboard";
+import {
+  clearUnsavedSource,
+  dropUnsaved,
+  setUnsavedSource,
+  unsavedFor,
+} from "@/utils/unsavedEdit";
 
 const $showError = inject<IToastError>("$showError")!;
 
@@ -155,9 +161,16 @@ const executeEditorCommand = (name: string) => {
   editor.value?.execCommand(name);
 };
 
+// What a forced logout keeps of this editor (see utils/unsavedEdit).
+const unsavedSource = () =>
+  editor.value && !editor.value.session.getUndoManager().isClean()
+    ? { path: route.path, content: editor.value.getValue() }
+    : null;
+
 onMounted(() => {
   window.addEventListener("keydown", keyEvent);
   window.addEventListener("beforeunload", handlePageChange);
+  setUnsavedSource(unsavedSource);
 
   const fileContent = fileStore.req?.content || "";
 
@@ -193,6 +206,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", keyEvent);
   window.removeEventListener("beforeunload", handlePageChange);
+  clearUnsavedSource(unsavedSource);
   editor.value?.destroy();
 });
 
@@ -236,6 +250,36 @@ const initEditor = (fileContent: string) => {
   selection.on("changeSelection", function () {
     isSelectionEmpty.value = selection.isEmpty();
   });
+
+  offerUnsaved(fileContent);
+};
+
+// Unsaved changes to this file kept by a forced logout: ask whether to put
+// them back in the editor. Never without asking: the file may have changed
+// since. Closing the question without an answer keeps them for next time.
+const offerUnsaved = (fileContent: string) => {
+  const path = route.path;
+  const kept = unsavedFor(authStore.user, path);
+  if (kept === null) return;
+  if (kept === fileContent) {
+    dropUnsaved(path);
+    return;
+  }
+  layoutStore.showHover({
+    prompt: "restoreEditorChanges",
+    // Restore: the kept text replaces the editor's, as unsaved changes
+    // (Undo brings back the file's content; nothing is saved yet)
+    confirm: () => {
+      editor.value?.setValue(kept, -1);
+      dropUnsaved(path);
+      layoutStore.closeHovers();
+    },
+    // Discard
+    action: () => {
+      dropUnsaved(path);
+      layoutStore.closeHovers();
+    },
+  });
 };
 
 const keyEvent = (event: KeyboardEvent) => {
@@ -271,6 +315,7 @@ const save = async (throwError?: boolean) => {
   try {
     await api.put(route.path, editor.value?.getValue());
     editor.value?.session.getUndoManager().markClean();
+    dropUnsaved(route.path);
     buttons.success(button);
   } catch (e: any) {
     buttons.done(button);
