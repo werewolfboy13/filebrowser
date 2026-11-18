@@ -21,7 +21,7 @@
         @click="skip"
         :aria-label="$t('prompts.skip')"
         :title="$t('prompts.skip')"
-        tabindex="2"
+        tabindex="1"
       >
         {{ $t("prompts.skip") }}
       </button>
@@ -30,7 +30,7 @@
         @click="replace"
         :aria-label="$t('buttons.replace')"
         :title="$t('buttons.replace')"
-        tabindex="1"
+        tabindex="2"
       >
         {{ $t("buttons.replace") }}
       </button>
