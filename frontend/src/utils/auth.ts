@@ -184,7 +184,7 @@ export function logout(reason?: string, endedToken?: string) {
   // Stop what still runs with this session (uploads; the pending ones would
   // otherwise start without a token) while the token is still set, then
   // drop per-session state so the next login on this tab starts clean.
-  useUploadStore().abort();
+  const cancelledUploads = useUploadStore().abort();
   useClipboardStore().resetClipboard();
   useFileStore().clearFile();
   useLayoutStore().clearLayout();
@@ -206,6 +206,11 @@ export function logout(reason?: string, endedToken?: string) {
     const query: Record<string, string> = {};
     if (typeof reason === "string" && reason.trim() !== "") {
       query["logout-reason"] = reason;
+    }
+    // the uploads it cancelled matter more: they were not stored
+    if (cancelledUploads > 0) {
+      query["logout-reason"] = "uploadsCancelled";
+      query["cancelled-uploads"] = String(cancelledUploads);
     }
     if (redirect !== undefined) query.redirect = redirect;
     router.push({ path: "/login", query });

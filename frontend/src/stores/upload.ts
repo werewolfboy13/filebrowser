@@ -67,7 +67,11 @@ export const useUploadStore = defineStore("upload", () => {
     processUploads();
   };
 
-  const abort = () => {
+  // Returns how many uploads it cancelled: running, queued, or waiting for
+  // the user's answer to a conflict.
+  const abort = (): number => {
+    const cancelled =
+      pendingUploadCount.value + conflicts.length + (asking !== null ? 1 : 0);
     // bumps the generation: what settles from now on for an upload started
     // before is ignored (see processUploads)
     dropConflicts();
@@ -78,6 +82,7 @@ export const useUploadStore = defineStore("upload", () => {
     // the next batch: waiting for them dropped those files.
     window.removeEventListener("beforeunload", beforeUnload);
     reset();
+    return cancelled;
   };
 
   //
@@ -141,6 +146,9 @@ export const useUploadStore = defineStore("upload", () => {
           .catch(async (err) => {
             succeeded = false;
             if (err.message === "Upload aborted") return;
+            // aborted meanwhile (e.g. by a logout, which says so): no error
+            // of its own, e.g. the 401 that ended the session
+            if (started !== generation) return;
             if (isCreateConflict(err) && !upload.overwrite && upload.file) {
               if (err.recreated && (await isStored(upload.path, upload.file))) {
                 succeeded = true;

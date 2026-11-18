@@ -2,7 +2,7 @@ import * as tus from "tus-js-client";
 import { baseURL, tusEndpoint, tusSettings, origin } from "@/utils/constants";
 import { useAuthStore } from "@/stores/auth";
 import { removePrefix } from "@/api/utils";
-import { renew } from "@/utils/auth";
+import { logout, renew } from "@/utils/auth";
 
 const RETRY_BASE_DELAY = 1000;
 const RETRY_MAX_DELAY = 20000;
@@ -72,6 +72,15 @@ export async function upload(
   // the last PATCH sent was the final one, and got no definitive answer
   // (see UploadError.recreated)
   let finalPatchUnanswered = false;
+  // A 401 for the token that is still this tab's: the session is over (e.g.
+  // revoked by a password, permission or scope change elsewhere). Not for a
+  // token replaced since the request went out (e.g. this tab changed its own
+  // password meanwhile): a retry goes out with the new one.
+  const refusedCurrentToken = (err: Error | tus.DetailedError) =>
+    err instanceof tus.DetailedError &&
+    err.originalResponse?.getStatus() === 401 &&
+    !!authStore.jwt &&
+    err.originalRequest?.getHeader("X-Auth") === authStore.jwt;
   return new Promise<void | string>((resolve, reject) => {
     const upload = new tus.Upload(content, {
       endpoint: `${origin}${baseURL}${resourcePath}`,
@@ -127,6 +136,9 @@ export async function upload(
           return false;
         }
 
+        // asking again with the same token is refused again
+        if (refusedCurrentToken(err)) return false;
+
         // Cancelling (terminate) is only worth repeating when the server
         // could not answer it or the upload was busy; a refusal (e.g. 403
         // without the Delete permission) stays a refusal.
@@ -149,6 +161,12 @@ export async function upload(
 
         if (error.message === "Upload aborted") {
           return reject(error);
+        }
+
+        // back to the login page, as for other API calls; that aborts the
+        // other uploads and says how many were cancelled
+        if (refusedCurrentToken(error)) {
+          logout(undefined, authStore.jwt);
         }
 
         let message = "Upload failed";

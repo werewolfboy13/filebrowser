@@ -133,7 +133,8 @@
     "wrongCredentials": "Wrong credentials",
     "passwordTooShort": "Password must be at least {min} characters",
     "logout_reasons": {
-      "inactivity": "You have been logged out due to inactivity."
+      "inactivity": "You have been logged out due to inactivity.",
+      "uploadsCancelled": "You have been logged out: {count} upload was cancelled before it finished. | You have been logged out: {count} uploads were cancelled before they finished."
     }
   },
   "permanent": "Permanent",

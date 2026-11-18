@@ -4,7 +4,11 @@
       <img :src="logoURL" alt="File Browser" />
       <h1>{{ name }}</h1>
       <p v-if="reason != null" class="logout-message">
-        {{ t(`login.logout_reasons.${reason}`) }}
+        {{
+          count === null
+            ? t(`login.logout_reasons.${reason}`)
+            : t(`login.logout_reasons.${reason}`, { count }, count)
+        }}
       </p>
       <div v-if="error !== ''" class="wrong">{{ error }}</div>
 
@@ -74,7 +78,13 @@ const toggleMode = () => (createMode.value = !createMode.value);
 
 const $showError = inject<IToastError>("$showError")!;
 
-const reason = route.query["logout-reason"] ?? null;
+// uploadsCancelled comes with the number of uploads (cancelled-uploads), a
+// positive whole number, or it is not shown
+const cancelled = Number(route.query["cancelled-uploads"] || NaN);
+const count = Number.isInteger(cancelled) && cancelled > 0 ? cancelled : null;
+const rawReason = route.query["logout-reason"] ?? null;
+const reason =
+  rawReason === "uploadsCancelled" && count === null ? null : rawReason;
 
 const submit = async (event: Event) => {
   event.preventDefault();
