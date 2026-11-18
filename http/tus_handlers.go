@@ -33,11 +33,31 @@ const maxPatchDrainBytes = 32 << 20 // 32MB
 // while the client is still streaming a chunk reaches the browser as a transport
 // error instead of the status we replied with. The client then cannot tell a
 // conflict from a network fault, retries blindly, and the upload stalls.
-func drainRequestBody(r *http.Request) {
+//
+// The rest of the chunk may take as long as the chunk takes, but not for ever
+// when nothing arrives: each read is given leftoverBodyTimeout. A client that
+// stops sending is answered then, on a connection that is closed after the
+// answer, as the server would not get to the next request on it anyway.
+func drainRequestBody(w http.ResponseWriter, r *http.Request) {
 	if r.Body == nil {
 		return
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, maxPatchDrainBytes))
+
+	buf := make([]byte, 32<<10)
+	for left := int64(maxPatchDrainBytes); left > 0; {
+		limitBodyWait(w, leftoverBodyTimeout)
+		n, err := r.Body.Read(buf[:min(int64(len(buf)), left)])
+		left -= int64(n)
+		if errors.Is(err, io.EOF) {
+			return
+		}
+		if err != nil {
+			// Without this, the server would wait once more for the same
+			// body before it sends the answer.
+			w.Header().Set("Connection", "close")
+			return
+		}
+	}
 }
 
 // keepUploadActive periodically touches the cache entry to prevent eviction during transfer
@@ -306,9 +326,23 @@ func tusPostHandler(cache UploadCache) handleFunc {
 		// than its content (it is a symbolic link or not a regular file), or
 		// where the directory takes no new file, the upload writes to the
 		// destination directly, as before.
+		//
+		// That is not for a temporary path that is taken. The name of the
+		// temporary file cannot be given to anything through the API (see
+		// data.Check), so a regular file under it is what an earlier upload
+		// to this path left behind, and this upload starts over in it.
+		// Anything else under it (a directory, a symbolic link) was not put
+		// there by an upload. Opening it would fail, or write through the
+		// link, and the upload would go on to empty its destination right
+		// here, for as long as that thing is there, for everyone who uploads
+		// to this path. It is refused instead, and nothing is touched.
 		tmp := tusTempPath(r.URL.Path)
 		direct := exists && (file.IsSymlink || !file.Mode.IsRegular())
 		if !direct {
+			if info, statErr := lstatPath(d.user.Fs, tmp); statErr == nil && !info.Mode().IsRegular() {
+				return http.StatusInternalServerError, fmt.Errorf("cannot upload to %s: %s, where the upload is collected, is not a file", r.URL.Path, tmp)
+			}
+
 			tmpFile, tmpErr := d.user.Fs.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, d.settings.FileMode)
 			if tmpErr != nil {
 				direct = true
@@ -452,7 +486,7 @@ func tusPatchHandler(cache UploadCache) handleFunc {
 		// left of it so the answer reaches the client on a connection that stays
 		// usable, instead of being lost to a reset.
 		if status >= 400 {
-			drainRequestBody(r)
+			drainRequestBody(w, r)
 		}
 		return status, err
 	})
@@ -677,7 +711,7 @@ func tusDeleteHandler(cache UploadCache) handleFunc {
 		// regular file under the name tusTempPath gives it. That name cannot
 		// be given to anything through the API (see data.Check), so this
 		// never removes a file somebody stored.
-		if temp && fileutils.IsTempName(gopath.Base(writePath)) {
+		if temp && fileutils.IsOwnTempName(gopath.Base(writePath)) {
 			err = d.user.Fs.Remove(writePath)
 			if err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return errToStatus(err), err

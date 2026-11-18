@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/filebrowser/filebrowser/v2/rules"
 )
 
 // protectedPath is a file or directory of the server itself that lies inside
@@ -31,7 +33,14 @@ var rotatedLogStamp = regexp.MustCompile(`^-\d{4}-\d{2}-\d{2}[Tt]\d{2}-\d{2}-\d{
 // is expected to warn about it, since the path is still exposed to everything
 // else that can read the served directory.
 //
-// Root must be set, and absolute, before Protect is called.
+// With FollowExternalSymlinks that is not so: a symbolic link inside Root is
+// followed wherever it leads, to the database as well. The path is then
+// registered wherever it is, unless it is Root or contains it, which would
+// refuse everything that is served. Protect still reports whether the path
+// is inside Root: outside it, there is nothing to warn about.
+//
+// Root and FollowExternalSymlinks must be set, and Root absolute, before
+// Protect is called.
 func (s *Server) Protect(path string) bool {
 	return s.protect(path, false)
 }
@@ -56,11 +65,21 @@ func (s *Server) protect(path string, log bool) bool {
 	// followed: either may be reached through a link.
 	inside := false
 	for _, candidate := range withResolved(abs) {
+		within, around := false, false
 		for _, root := range withResolved(filepath.Clean(s.Root)) {
-			if !strictlyInside(candidate, root, s.CaseInsensitiveFs) {
-				continue
+			if strictlyInside(candidate, root, s.CaseInsensitiveFs) {
+				within = true
 			}
+			if samePath(candidate, root, s.CaseInsensitiveFs) || strictlyInside(root, candidate, s.CaseInsensitiveFs) {
+				around = true
+			}
+		}
+
+		switch {
+		case within:
 			inside = true
+			s.addProtected(candidate, log)
+		case s.FollowExternalSymlinks && !around:
 			s.addProtected(candidate, log)
 		}
 	}
@@ -118,11 +137,21 @@ func isRotatedLog(name, logFile string, fold bool) bool {
 
 	ext := filepath.Ext(logFile)
 	prefix := strings.TrimSuffix(filepath.Base(logFile), ext)
+	base := filepath.Base(name)
 
-	base := strings.TrimSuffix(filepath.Base(name), ".gz")
-	if fold {
-		base, prefix, ext = strings.ToLower(base), strings.ToLower(prefix), strings.ToLower(ext)
+	if rotatedCopy(base, prefix, ext) {
+		return true
 	}
+	if fold && rotatedCopy(strings.ToLower(base), strings.ToLower(prefix), strings.ToLower(ext)) {
+		return true
+	}
+	return rotatedCopy(rules.CanonicalName(base, fold), rules.CanonicalName(prefix, fold), rules.CanonicalName(ext, fold))
+}
+
+// rotatedCopy reports whether base is prefix and ext with the stamp of a
+// rotation between them, possibly compressed.
+func rotatedCopy(base, prefix, ext string) bool {
+	base = strings.TrimSuffix(base, ".gz")
 	if !strings.HasPrefix(base, prefix) || !strings.HasSuffix(base, ext) || len(base) < len(prefix)+len(ext) {
 		return false
 	}
@@ -151,18 +180,28 @@ func withResolved(path string) []string {
 	return paths
 }
 
+// samePath reports whether a and b are the same path, or could be to the
+// filesystem: with fold, it ignores case, and it always ignores how a name is
+// composed. See rules.CanonicalName, which errs on the side of taking two
+// names for one; that is the side to err on for a path that is refused. What
+// lower-casing alone takes for the same stays the same.
 func samePath(a, b string, fold bool) bool {
-	if fold {
-		return strings.EqualFold(a, b)
+	if a == b || (fold && strings.EqualFold(a, b)) {
+		return true
 	}
-	return a == b
+	return rules.CanonicalName(a, fold) == rules.CanonicalName(b, fold)
 }
 
 // strictlyInside reports whether path lies below dir, and is not dir itself.
+// Names are compared as samePath compares them.
 func strictlyInside(path, dir string, fold bool) bool {
-	if fold {
-		path, dir = strings.ToLower(path), strings.ToLower(dir)
+	if below(path, dir) || (fold && below(strings.ToLower(path), strings.ToLower(dir))) {
+		return true
 	}
+	return below(rules.CanonicalName(path, fold), rules.CanonicalName(dir, fold))
+}
+
+func below(path, dir string) bool {
 	if !strings.HasSuffix(dir, string(os.PathSeparator)) {
 		dir += string(os.PathSeparator)
 	}

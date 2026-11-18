@@ -208,7 +208,15 @@ func authenticateShareRequest(w http.ResponseWriter, r *http.Request, d *data, l
 	return 0, nil
 }
 
-func healthHandler(w http.ResponseWriter, _ *http.Request) {
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	// The route answers every method and is not served through handle, so
+	// what handle does for a body nobody reads is done here: a POST that
+	// announces a body and never sends it is not waited for indefinitely.
+	// It needs no session, so anyone could hold a connection that way.
+	if r.ContentLength != 0 {
+		limitBodyWait(w, leftoverBodyTimeout)
+	}
+
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"OK"}`))
 }

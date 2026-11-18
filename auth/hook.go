@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"time"
 
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 	"github.com/filebrowser/filebrowser/v2/files"
@@ -24,6 +25,18 @@ type hookCred struct {
 	Password string `json:"password"`
 	Username string `json:"username"`
 }
+
+// ErrHookRefused is returned by hook authentication when the hook was run
+// with the credentials and did not answer with an action it knows: it ended
+// with an error status, or printed no action, or another one. Whatever the
+// hook meant by it, the password was put to the test and was not accepted,
+// so it counts as a failed attempt at guessing it. It is not reported as a
+// wrong password (os.ErrPermission), because the hook did not say that
+// either: a hook that fails for a reason of its own answers the same way.
+//
+// A hook that could not be run at all is not reported with it: nothing was
+// tested.
+var ErrHookRefused = errors.New("the authentication hook did not accept the login")
 
 // HookAuth is a hook implementation of an Auther.
 type HookAuth struct {
@@ -55,6 +68,12 @@ func (a *HookAuth) Auth(r *http.Request, usr users.Store, stg *settings.Settings
 
 	action, err := a.RunCommand()
 	if err != nil {
+		// An exit error is the hook's own doing: it ran, with the
+		// credentials, and ended with an error status.
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return nil, fmt.Errorf("%w: %w", ErrHookRefused, err)
+		}
 		return nil, err
 	}
 
@@ -74,7 +93,7 @@ func (a *HookAuth) Auth(r *http.Request, usr users.Store, stg *settings.Settings
 		}
 		return u, nil
 	default:
-		return nil, fmt.Errorf("invalid hook action: %s", action)
+		return nil, fmt.Errorf("%w: invalid hook action: %s", ErrHookRefused, action)
 	}
 }
 
@@ -179,6 +198,11 @@ func (a *HookAuth) SaveUser() (*users.User, error) {
 				return nil, err
 			}
 			u.Password = pass
+
+			// The password changed where the hook asks: the sessions that
+			// were opened with the old one end here, as they do when a
+			// password is changed through the API.
+			u.RevokeTokens(time.Now())
 		}
 
 		// update user with provided fields
@@ -205,28 +229,33 @@ func (a *HookAuth) GetUser(d *users.User) *users.User {
 		Share:    isAdmin || a.Fields.GetBoolean("user.perm.share", d.Perm.Share),
 		Download: isAdmin || a.Fields.GetBoolean("user.perm.download", d.Perm.Download),
 	}
-	user := users.User{
-		ID:                    d.ID,
-		Username:              d.Username,
-		Password:              d.Password,
-		Scope:                 a.Fields.GetString("user.scope", d.Scope),
-		Locale:                a.Fields.GetString("user.locale", d.Locale),
-		ViewMode:              users.ViewMode(a.Fields.GetString("user.viewMode", string(d.ViewMode))),
-		SingleClick:           a.Fields.GetBoolean("user.singleClick", d.SingleClick),
-		RedirectAfterCopyMove: a.Fields.GetBoolean("user.redirectAfterCopyMove", d.RedirectAfterCopyMove),
-		Sorting: files.Sorting{
-			Asc: a.Fields.GetBoolean("user.sorting.asc", d.Sorting.Asc),
-			By:  a.Fields.GetString("user.sorting.by", d.Sorting.By),
-		},
-		Commands:     a.Fields.GetArray("user.commands", d.Commands),
-		DateFormat:   a.Fields.GetBoolean("user.dateFormat", d.DateFormat),
-		HideDotfiles: a.Fields.GetBoolean("user.hideDotfiles", d.HideDotfiles),
-		Perm:         perms,
-		LockPassword: true,
 
-		// Not something a hook decides: the stored value is kept.
-		TokensNotBefore: d.TokensNotBefore,
+	// The user starts out as a copy of d, so that everything a hook has no
+	// field for stays as it is: the rules an administrator set for the user,
+	// the revocation mark, and whatever field is added to a user later. The
+	// user used to be built from the fields listed here, and a login then
+	// erased the others from the stored record.
+	user := *d
+
+	// Built for the scope d has, which the hook may be about to change. It
+	// is set up again, for the scope the user ends up with, where the user
+	// is stored or read.
+	user.Fs = nil
+
+	user.Scope = a.Fields.GetString("user.scope", d.Scope)
+	user.Locale = a.Fields.GetString("user.locale", d.Locale)
+	user.ViewMode = users.ViewMode(a.Fields.GetString("user.viewMode", string(d.ViewMode)))
+	user.SingleClick = a.Fields.GetBoolean("user.singleClick", d.SingleClick)
+	user.RedirectAfterCopyMove = a.Fields.GetBoolean("user.redirectAfterCopyMove", d.RedirectAfterCopyMove)
+	user.Sorting = files.Sorting{
+		Asc: a.Fields.GetBoolean("user.sorting.asc", d.Sorting.Asc),
+		By:  a.Fields.GetString("user.sorting.by", d.Sorting.By),
 	}
+	user.Commands = a.Fields.GetArray("user.commands", d.Commands)
+	user.DateFormat = a.Fields.GetBoolean("user.dateFormat", d.DateFormat)
+	user.HideDotfiles = a.Fields.GetBoolean("user.hideDotfiles", d.HideDotfiles)
+	user.Perm = perms
+	user.LockPassword = true
 
 	return &user
 }

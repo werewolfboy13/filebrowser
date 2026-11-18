@@ -75,8 +75,15 @@ func (d *data) Check(path string) bool {
 	// upload: it is not listed and cannot be read, replaced or removed by
 	// name. Like the dotfile check, this is not part of CheckRules, so it does
 	// not stop a user from operating on a directory that contains one.
-	if fileutils.IsTempName(gopath.Base(rulePath)) {
-		return false
+	//
+	// No element of the path may be such a name, not only the last one. A
+	// directory can be created by creating something inside it, and one with
+	// the name of a temporary file holds the place that file needs: the
+	// uploads that would use it could no longer be written safely.
+	for _, element := range strings.Split(rulePath, "/") {
+		if fileutils.IsTempName(element) {
+			return false
+		}
 	}
 
 	return d.CheckRules(path)
@@ -316,23 +323,31 @@ func handleWith(fn handleFunc, prefix string, store *storage.Storage, server *se
 			limits:   limits,
 		})
 
+		// The handler is done with the request body, whether it read it or
+		// not, and the server reads what is left of it before it sends the
+		// answer. Give that a limit: a client that announces a body and never
+		// sends it would otherwise hold the connection, and this goroutine,
+		// for as long as it likes. An error is usually answered without the
+		// body having been read (every unauthenticated request to a route
+		// that takes a body ends that way), but so is a request that has no
+		// use for a body and is carried out all the same: a delete, a copy,
+		// a new directory. The limit used to be set for errors only.
+		//
+		// It is set here, after the handler, and never while it runs: a
+		// deadline that passes while a handler is at work cancels the
+		// request. A body that was read in full is not waited for, and the
+		// server lifts the deadline before it reads the next request, so
+		// neither an upload nor the request that follows is cut short.
+		if r.ContentLength != 0 {
+			limitBodyWait(w, leftoverBodyTimeout)
+		}
+
 		if status >= 400 || err != nil {
 			clientIP := realip.FromRequest(r)
 			log.Printf("%s: %v %s %v", r.URL.Path, status, clientIP, err)
 		}
 
 		if status != 0 {
-			// An error is usually answered without the request body having
-			// been read, and the server reads what is left of it before it
-			// sends the answer. Give that a limit: a client that announces a
-			// body and never sends it would otherwise hold the connection,
-			// and this goroutine, for as long as it likes. This is the path
-			// every unauthenticated request to a route that takes a body ends
-			// on.
-			if status >= 400 {
-				limitBodyWait(w, leftoverBodyTimeout)
-			}
-
 			txt := http.StatusText(status)
 			if status == http.StatusBadRequest && err != nil {
 				txt += " (" + err.Error() + ")"

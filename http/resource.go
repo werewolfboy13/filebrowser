@@ -307,7 +307,7 @@ func checkDescendants(d *data, src, dst string) error {
 		return nil
 	}
 
-	return afero.Walk(d.user.Fs, src, func(fPath string, _ os.FileInfo, err error) error {
+	check := func(fPath string, _ os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -330,7 +330,36 @@ func checkDescendants(d *data, src, dst string) error {
 		}
 
 		return nil
-	})
+	}
+
+	if err := afero.Walk(d.user.Fs, src, check); err != nil || dst == "" {
+		return err
+	}
+
+	// The walk does not follow symbolic links, and neither does a copy, with
+	// one exception: the link the copy starts at. A copy of a link to a
+	// directory copies the directory behind it (and so does a move that has
+	// to copy), while the walk above has only looked at the link. What is
+	// in that directory is walked here, under the names the copy reads it
+	// by. A delete removes the link and nothing behind it, so it is not
+	// concerned.
+	info, err := lstatPath(d.user.Fs, src)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return nil
+	}
+	entries, err := afero.ReadDir(d.user.Fs, src)
+	if err != nil {
+		// Not a directory, or not one that can be read: nothing is copied
+		// from behind the link that was not checked as the link itself.
+		return nil
+	}
+	for _, entry := range entries {
+		if err := afero.Walk(d.user.Fs, path.Join(src, entry.Name()), check); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func checkParent(src, dst string) error {

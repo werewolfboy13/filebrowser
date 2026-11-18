@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/afero"
 
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
+	"github.com/filebrowser/filebrowser/v2/rules"
 )
 
 // TempPrefix starts the name of every temporary file written next to the file
@@ -24,18 +25,30 @@ var (
 	// ownTempName matches the names this package gives its temporary files.
 	ownTempName = regexp.MustCompile(`^\.fbtmp-(tus-)?[0-9a-f]{32}$`)
 
-	// tempName matches them in any spelling.
+	// tempName matches them in any ASCII spelling.
 	tempName = regexp.MustCompile(`(?i)^\.fbtmp-(tus-)?[0-9a-f]{32}$`)
 )
 
-// IsTempName reports whether name, the last element of a path, names one of
-// the temporary files this package creates, or would on a filesystem that
-// does not tell upper from lower case (the default on macOS and Windows):
-// there, ".FBTMP-..." opens the file that was created as ".fbtmp-...". The
-// spelling is ignored everywhere rather than only where the filesystem is
-// known to fold case, so that nothing depends on that being found out right.
+// IsTempName reports whether name, one element of a path, names one of the
+// temporary files this package creates, or would on a filesystem that takes
+// more than one spelling for the same name. One that does not tell upper from
+// lower case (the default on macOS and Windows) opens the file that was
+// created as ".fbtmp-..." under ".FBTMP-..." too, and one that folds case in
+// full (APFS) under a name in which "ff" is written as the ligature, or that
+// is composed differently: see rules.CanonicalName.
+//
+// The spelling is ignored everywhere rather than only where the filesystem
+// is known to fold names, so that nothing depends on that being found out
+// right.
 func IsTempName(name string) bool {
-	return tempName.MatchString(name)
+	return tempName.MatchString(name) || ownTempName.MatchString(rules.CanonicalName(name, true))
+}
+
+// IsOwnTempName reports whether name is exactly a name this package gives
+// its temporary files. It is what to ask before removing one: a file under
+// another spelling of such a name was not created here.
+func IsOwnTempName(name string) bool {
+	return ownTempName.MatchString(name)
 }
 
 // NewTempPath returns a fresh temporary path in the directory of dst. The name

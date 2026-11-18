@@ -107,7 +107,7 @@ type tusTempFile struct {
 func (s *tusSweeper) track(afs afero.Fs, path string, key string, cache UploadCache, uploadKey string) {
 	// The name is ours by construction. Anything else is not something to
 	// ever remove.
-	if !fileutils.IsTempName(gopath.Base(path)) {
+	if !fileutils.IsOwnTempName(gopath.Base(path)) {
 		return
 	}
 	info, err := lstatPath(afs, path)
