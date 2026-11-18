@@ -7,6 +7,7 @@
     </div>
     <div class="card-action">
       <button
+        id="focus-prompt"
         class="button button--flat button--grey"
         @click="closeHovers"
         :aria-label="$t('buttons.cancel')"
@@ -25,7 +26,6 @@
         {{ $t("buttons.saveChanges") }}
       </button>
       <button
-        id="focus-prompt"
         @click="currentPrompt.confirm"
         class="button button--flat button--red"
         :aria-label="$t('buttons.discardChanges')"

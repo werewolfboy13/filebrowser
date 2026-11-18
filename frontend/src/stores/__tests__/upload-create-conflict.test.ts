@@ -68,6 +68,10 @@ function queue(name: string, overwrite = false) {
   return file;
 }
 
+const button = (text: string) =>
+  wrapper!.findAll("button").find((b) => b.text() === text)!;
+const focused = () => document.activeElement?.textContent?.trim() ?? null;
+
 // what the question's Skip button does (see Replace.vue)
 function skipQuestion() {
   const layout = useLayoutStore();
@@ -487,7 +491,7 @@ describe("the Replace dialog", () => {
   it("shows the message for the file, and Replace confirms", async () => {
     const { confirm } = await show();
     expect(wrapper!.text()).toContain('prompts.uploadConflict{"name":"a.pdf"}');
-    await wrapper!.find("#focus-prompt").trigger("click");
+    await button("buttons.replace").trigger("click");
     expect(confirm).toHaveBeenCalledTimes(1);
   });
 
@@ -499,5 +503,64 @@ describe("the Replace dialog", () => {
     await skip.trigger("click");
     expect(confirm).not.toHaveBeenCalled();
     expect(layout.prompts).toEqual([]);
+  });
+});
+
+// The question can appear at any moment of a batch, e.g. while the user
+// types in the search box. It put the keyboard focus on Replace, so the
+// next Enter (which clicks a focused button) overwrote the other file.
+// The default is now Skip, and the question leaves the focus alone in a
+// text field the user is typing in (Escape still closes it, as a Skip).
+describe("the question's default focus, and its Replace button", () => {
+  function mountPrompts() {
+    wrapper = mount(Prompts, {
+      attachTo: document.body,
+      global: { mocks: { $t: tfn } },
+    });
+  }
+  async function conflicts(...names: string[]) {
+    for (const name of names) {
+      h.post.mockRejectedValueOnce(conflictOn("POST"));
+      queue(name);
+    }
+    await settle();
+    await flushPromises();
+  }
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("focuses Skip, not Replace", async () => {
+    mountPrompts();
+    await conflicts("report.pdf");
+    console.log("focused:", focused());
+    expect(useLayoutStore().currentPromptName).toBe("replace");
+    expect(focused()).toBe("prompts.skip");
+  });
+
+  it("leaves the focus in a text field the user is typing in", async () => {
+    const search = document.createElement("input");
+    document.body.appendChild(search);
+    search.focus();
+    mountPrompts();
+    await conflicts("report.pdf");
+    console.log(
+      "focused while typing:",
+      document.activeElement?.tagName,
+      focused()
+    );
+    expect(useLayoutStore().currentPromptName).toBe("replace");
+    expect(document.activeElement).toBe(search);
+  });
+
+  it("the next question focuses its Skip too", async () => {
+    mountPrompts();
+    await conflicts("a.pdf", "b.pdf");
+    await button("prompts.skip").trigger("click");
+    await flushPromises();
+    expect(useLayoutStore().currentPrompt?.props.messageParams).toEqual({
+      name: "b.pdf",
+    });
+    expect(focused()).toBe("prompts.skip");
   });
 });

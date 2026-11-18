@@ -58,3 +58,27 @@ describe("dialog default focus", () => {
     expect(focused.closest("#modal-background")).not.toBeNull();
   });
 });
+
+// A dialog that asks before something destructive gives the default focus
+// to Cancel, not to the red button: Enter clicks the focused button, and
+// may have been meant for what the user was doing before it opened.
+describe("default focus of dialogs that ask before something destructive", () => {
+  it.each([
+    ["delete", { confirm: vi.fn() }],
+    ["share-delete", { confirm: vi.fn() }],
+    ["discardEditorChanges", { confirm: vi.fn(), saveAction: vi.fn() }],
+  ])("%s focuses Cancel", async (prompt, callbacks) => {
+    document.body.innerHTML = "";
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    mount(Prompts, {
+      attachTo: document.body,
+      global: { plugins: [pinia], mocks: { $t: (k: string) => k } },
+    });
+    useLayoutStore().showHover({ prompt, ...callbacks });
+    await nextTick();
+    const focused = document.activeElement as HTMLElement;
+    console.log(prompt, "focused:", focused.textContent?.trim());
+    expect(focused.textContent?.trim()).toBe("buttons.cancel");
+  });
+});
