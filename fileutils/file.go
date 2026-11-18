@@ -84,6 +84,15 @@ func CopyFile(afs afero.Fs, source, dest string, fileMode, dirMode fs.FileMode) 
 		return err
 	}
 
+	// Creating the destination empties it. When it is the source under
+	// another name (a hard link, or a path through a link to a directory),
+	// that would leave nothing to copy, and nothing of the file. This is
+	// checked here, for every file, because a directory that is copied can
+	// meet such a file anywhere below it.
+	if srcInfo, err := afs.Stat(source); err == nil && sameFile(afs, srcInfo, dest) {
+		return &os.PathError{Op: "copy", Path: dest, Err: ErrSameFile}
+	}
+
 	// Open the source file.
 	src, err := afs.Open(source)
 	if err != nil {
