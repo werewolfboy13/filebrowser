@@ -495,6 +495,20 @@ describe("the Replace dialog", () => {
     expect(confirm).toHaveBeenCalledTimes(1);
   });
 
+  // Prompts.vue keeps an instance per prompt shown: an instance whose
+  // question is no longer the current prompt (another one is on top of
+  // it) must neither confirm nor close that other one.
+  it("an instance whose question is not the current prompt does nothing", async () => {
+    const { layout, confirm } = await show();
+    const other = vi.fn();
+    layout.showHover({ prompt: "replace", confirm: other });
+    await button("buttons.replace").trigger("click");
+    await button("prompts.skip").trigger("click");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(other).not.toHaveBeenCalled();
+    expect(layout.prompts).toHaveLength(2);
+  });
+
   it("Skip closes it without confirming", async () => {
     const { layout, confirm } = await show();
     const skip = wrapper!

@@ -172,6 +172,23 @@ describe("markdown preview sanitiser removes", () => {
     expect(out).toContain("<p>abc");
   });
 
+  // A kept checkbox keeps type, checked and disabled only: the attributes
+  // DOMPurify allows on any input (value, title, aria-*, required, ...)
+  // have no business on an inert task-list box.
+  it("every attribute of a kept checkbox but type, checked and disabled", () => {
+    const out = clean(
+      '<p><input type="checkbox" checked value="v" title="t" ' +
+        'aria-label="a" role="switch" required readonly size="40" ' +
+        'placeholder="p" alt="x" lang="fr" dir="rtl"></p>'
+    );
+    console.log(out);
+    const input = out.match(/<input[^>]*>/)![0];
+    const names = [...input.matchAll(/\s([a-z-]+)(?==|\s|>)/g)].map(
+      (m) => m[1]
+    );
+    expect(names.sort()).toEqual(["checked", "disabled", "type"]);
+  });
+
   // Links stay links, but cannot ask for the opener (rel=opener) or leak
   // the preview's URL (referrer), nor turn into a download of an app URL
   // under a name of the file author's choosing.

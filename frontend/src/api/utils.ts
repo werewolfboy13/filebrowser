@@ -87,8 +87,9 @@ export async function fetchURL(
 
   // A change to the user's own account that revokes their sessions (e.g. a
   // password change) hands this tab its new token with the answer. Adopt it
-  // first, like a renewal, and do not renew on top of it. Only from a
-  // successful answer: the server sends it with nothing else.
+  // first, like a renewal; renewIfAsked then finds the token it was sent
+  // with replaced and does not renew on top of it. Only from a successful
+  // answer: the server sends it with nothing else.
   const handedOut = auth && res.ok ? res.headers.get("X-Auth-Token") : null;
   if (handedOut && sessionMark().session === sentSession) {
     try {
@@ -118,11 +119,11 @@ export async function fetchURL(
       throw error;
     }
 
-    if (!handedOut) await renewIfAsked(res);
+    await renewIfAsked(res);
     throw error;
   }
 
-  if (!handedOut) await renewIfAsked(res);
+  await renewIfAsked(res);
 
   return res;
 

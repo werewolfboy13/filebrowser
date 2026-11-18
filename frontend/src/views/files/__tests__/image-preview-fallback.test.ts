@@ -32,14 +32,20 @@ vi.mock("@/api", () => ({
     getSubtitlesURL: () => [],
   },
 }));
-vi.mock("vue-router", () => ({
-  useRoute: () => ({
+// a reactive route, as vue-router's: Preview watches it to reset its state
+// when the user moves on to another file
+vi.mock("vue-router", async () => {
+  const { reactive } = await import("vue");
+  const route = reactive({
     path: "/files/pics/huge.png",
     fullPath: "/files/pics/huge.png",
     query: {},
-  }),
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
-}));
+  });
+  return {
+    useRoute: () => route,
+    useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  };
+});
 vi.mock("vue-reader", () => ({ VueReader: { render: () => null } }));
 vi.mock("vue-i18n", async (orig) => ({
   ...(await orig<typeof import("vue-i18n")>()),
@@ -57,6 +63,7 @@ import ExtendedImage from "@/components/files/ExtendedImage.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useFileStore } from "@/stores/file";
 import { lazyloadOptions } from "@/utils/lazyload";
+import { useRoute } from "vue-router";
 dayjs.extend(relativeTime);
 
 // stands in for ExtendedImage: shows the URL it was given, and can fail
@@ -75,7 +82,14 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+function goTo(path: string) {
+  const route = useRoute();
+  route.path = path;
+  route.fullPath = path;
+}
+
 async function mountPreview(download: boolean) {
+  goTo("/files/pics/huge.png");
   setActivePinia(createPinia());
   useAuthStore().user = { id: 1, perm: { download } } as any;
   useFileStore().req = {
@@ -130,6 +144,20 @@ describe("image preview the server cannot scale", () => {
     await flushPromises();
     expect(shown(w)).toBeNull();
     expect(w.text()).toContain("files.noPreview");
+  });
+
+  it("starts again from the big preview on the next file", async () => {
+    const w = await mountPreview(true);
+    w.findComponent(FakeImage).vm.$emit("error");
+    await flushPromises();
+    w.findComponent(FakeImage).vm.$emit("error");
+    await flushPromises();
+    expect(w.text()).toContain("files.noPreview");
+    goTo("/files/pics/other.png");
+    await flushPromises();
+    console.log("on the next file:", shown(w));
+    expect(shown(w)).toBe("/api/preview/big/pics/huge.png");
+    expect(w.text()).not.toContain("files.noPreview");
   });
 
   it("says there is no preview for a user who may not download", async () => {

@@ -99,6 +99,39 @@ describe("video preview keyboard focus", () => {
     expect(document.activeElement).toBe(shell);
   });
 
+  // Each guard on its own: a focused element outside the preview that is
+  // not a text field (a sidebar button), and a text field inside it.
+  function previewer() {
+    const el = document.createElement("div");
+    el.id = "previewer";
+    document.body.appendChild(el);
+    return el;
+  }
+
+  it("does not take focus from a control outside the preview", async () => {
+    const sidebarButton = document.createElement("button");
+    document.body.appendChild(sidebarButton);
+    sidebarButton.focus();
+    await open();
+    expect(document.activeElement).toBe(sidebarButton);
+  });
+
+  it("does not take focus from a text field inside the preview", async () => {
+    const field = document.createElement("input");
+    previewer().appendChild(field);
+    field.focus();
+    await open();
+    expect(document.activeElement).toBe(field);
+  });
+
+  it("control: takes it from a control of the preview (e.g. next file)", async () => {
+    const next = document.createElement("button");
+    previewer().appendChild(next);
+    next.focus();
+    const { skin } = await open();
+    expect(document.activeElement).toBe(skin);
+  });
+
   it("does not take focus while a dialog is open", async () => {
     const button = document.createElement("button");
     document.body.appendChild(button);

@@ -32,7 +32,7 @@ vi.mock("@/stores/upload", () => ({
 
 import { createPinia, setActivePinia } from "pinia";
 import { fetchURL } from "@/api/utils";
-import { logout, parseToken, renew } from "@/utils/auth";
+import { login, logout, parseToken, renew } from "@/utils/auth";
 import { useAuthStore } from "@/stores/auth";
 
 const b64url = (o: object) =>
@@ -235,6 +235,21 @@ describe("fetchURL and a token handed out with a response (X-Auth-Token)", () =>
       "rejected: 401"
     );
     expect(h.push).toHaveBeenCalledWith({ path: "/login" });
+  });
+});
+
+describe("login and Retry-After", () => {
+  it("a refused login (429) carries the wait the server asks for", async () => {
+    stubFetch(
+      async () =>
+        new Response("429 Too Many Requests\n", {
+          status: 429,
+          headers: { "Retry-After": "17" },
+        })
+    );
+    const err = await login("u", "wrong", "").catch((e) => e);
+    expect(calls).toEqual(["POST /api/login"]);
+    expect([err.status, err.retryAfter]).toEqual([429, 17]);
   });
 });
 
