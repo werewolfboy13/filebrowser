@@ -237,7 +237,11 @@ function moveCopy(
     }&destination=${to}&override=${finalOverwrite}&rename=${finalRename}`;
     promises.push(resourceAction(url, "PATCH"));
   }
-  layoutStore.closeHovers();
+  // Close the dialog that asked for this, but never an upload's
+  // Replace/Skip question shown on top of it meanwhile (callers wait for
+  // the destination's listing first): closing it unanswered skips every
+  // file still to be asked about.
+  if (layoutStore.currentPromptName !== "replace") layoutStore.closeHovers();
   return Promise.all(promises);
 }
 
