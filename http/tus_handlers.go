@@ -306,9 +306,23 @@ func tusPostHandler(cache UploadCache) handleFunc {
 		// than its content (it is a symbolic link or not a regular file), or
 		// where the directory takes no new file, the upload writes to the
 		// destination directly, as before.
+		//
+		// That is not for a temporary path that is taken. The name of the
+		// temporary file cannot be given to anything through the API (see
+		// data.Check), so a regular file under it is what an earlier upload
+		// to this path left behind, and this upload starts over in it.
+		// Anything else under it (a directory, a symbolic link) was not put
+		// there by an upload. Opening it would fail, or write through the
+		// link, and the upload would go on to empty its destination right
+		// here, for as long as that thing is there, for everyone who uploads
+		// to this path. It is refused instead, and nothing is touched.
 		tmp := tusTempPath(r.URL.Path)
 		direct := exists && (file.IsSymlink || !file.Mode.IsRegular())
 		if !direct {
+			if info, statErr := lstatPath(d.user.Fs, tmp); statErr == nil && !info.Mode().IsRegular() {
+				return http.StatusInternalServerError, fmt.Errorf("cannot upload to %s: %s, where the upload is collected, is not a file", r.URL.Path, tmp)
+			}
+
 			tmpFile, tmpErr := d.user.Fs.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, d.settings.FileMode)
 			if tmpErr != nil {
 				direct = true

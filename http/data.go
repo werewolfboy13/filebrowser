@@ -75,8 +75,15 @@ func (d *data) Check(path string) bool {
 	// upload: it is not listed and cannot be read, replaced or removed by
 	// name. Like the dotfile check, this is not part of CheckRules, so it does
 	// not stop a user from operating on a directory that contains one.
-	if fileutils.IsTempName(gopath.Base(rulePath)) {
-		return false
+	//
+	// No element of the path may be such a name, not only the last one. A
+	// directory can be created by creating something inside it, and one with
+	// the name of a temporary file holds the place that file needs: the
+	// uploads that would use it could no longer be written safely.
+	for _, element := range strings.Split(rulePath, "/") {
+		if fileutils.IsTempName(element) {
+			return false
+		}
 	}
 
 	return d.CheckRules(path)
