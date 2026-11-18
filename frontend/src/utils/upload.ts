@@ -269,7 +269,9 @@ export function handleFiles(
 
     uploadStore.upload(
       path,
-      file.name,
+      // in a folder upload, its path in the folder: a/x.txt and b/x.txt are
+      // told apart (in the upload panel, and when asked about a conflict)
+      conflictKey(file),
       file.file ?? null,
       file.overwrite || overwrite,
       type

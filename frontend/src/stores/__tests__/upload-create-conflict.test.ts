@@ -212,6 +212,25 @@ describe("a conflict reported when the upload is created", () => {
     expect(h.post).toHaveBeenCalledTimes(1);
   });
 
+  // In a folder upload, a/x.txt and b/x.txt must be told apart.
+  it("names the file by its path within the folder uploaded", async () => {
+    h.post.mockRejectedValueOnce(conflictOn("POST"));
+    const { handleFiles } =
+      await vi.importActual<typeof import("@/utils/upload")>("@/utils/upload");
+    const file = new File(["x"], "x.txt");
+    handleFiles(
+      [{ file, name: "x.txt", size: 1, isDir: false, fullPath: "b/x.txt" }],
+      "/files/up/"
+    );
+    await settle();
+    const layout = useLayoutStore();
+    console.log("question:", JSON.stringify(layout.currentPrompt?.props));
+    expect(h.post.mock.calls[0][0]).toBe("/files/up/b/x.txt");
+    expect(layout.currentPrompt?.props.messageParams).toEqual({
+      name: "b/x.txt",
+    });
+  });
+
   it("a conflict on a chunk (PATCH) is an error, not a question", async () => {
     h.post.mockRejectedValueOnce(conflictOn("PATCH"));
     queue("a.pdf");
