@@ -53,6 +53,11 @@ export default {
   data: function () {
     return {
       name: "",
+      // The prompt this instance was created for (Prompts.vue gives every
+      // prompt shown its own instance). Another prompt can be on top of it
+      // once the request is answered (e.g. an upload's Replace/Skip
+      // question): never close that one.
+      prompt: useLayoutStore().currentPrompt,
     };
   },
   created() {
@@ -85,6 +90,14 @@ export default {
     cancel: function () {
       this.closeHovers();
     },
+    close: function () {
+      const layoutStore = useLayoutStore();
+      if (layoutStore.currentPrompt === this.prompt) this.closeHovers();
+      else
+        layoutStore.prompts = layoutStore.prompts.filter(
+          (p) => p !== this.prompt
+        );
+    },
     submit: async function () {
       if (this.name === "" || this.name === this.oldName) {
         return;
@@ -115,7 +128,7 @@ export default {
         this.$showError(e);
       }
 
-      this.closeHovers();
+      this.close();
     },
   },
 };

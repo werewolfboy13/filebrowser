@@ -250,7 +250,11 @@ export function handleFiles(
   const uploadStore = useUploadStore();
   const layoutStore = useLayoutStore();
 
-  layoutStore.closeHovers();
+  // Close the dialog that asked for this, but never an upload's
+  // Replace/Skip question shown on top of it meanwhile (callers wait for
+  // the destination's listing first): closing it unanswered skips every
+  // file still to be asked about.
+  if (layoutStore.currentPromptName !== "replace") layoutStore.closeHovers();
 
   for (const file of files) {
     let path = base;

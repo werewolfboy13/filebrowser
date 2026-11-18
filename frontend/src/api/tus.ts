@@ -15,9 +15,13 @@ const CURRENT_UPLOADS = new Set<tus.Upload>();
 // A failed upload: the answer's body, with its status (0 when the server
 // could not be reached) and the method of the request that failed, so that
 // callers can tell e.g. a conflict on create (POST) from one on a chunk.
-// recreated: the failed POST created the upload again, after it had been
-// created once (tus-js-client does so when resuming finds it gone, e.g.
-// completed by a final PATCH whose answer was lost).
+// recreated: the failed POST created the upload again (tus-js-client does
+// so when resuming finds it gone) after this upload's final PATCH went out
+// and got no definitive answer: no answer, a 5xx (e.g. a proxy's 502 or
+// 504) or 423. Only then can the upload be gone because that PATCH
+// completed it. Not after a definitive refusal of it (any other 4xx), nor
+// when the upload was lost before all of its data was sent (e.g. a server
+// restart): a file at the destination is then not this upload's.
 // final: the failed request was the final PATCH, on which the server puts
 // the file in place (a 409 then: a file appeared at the destination).
 export class UploadError extends Error {
@@ -58,8 +62,16 @@ export async function upload(
     return false;
   }
   const retryDelays = computeRetryDelays(tusSettings);
-  // set once the upload exists on the server (see UploadError.recreated)
-  let created = false;
+  // whether a PATCH is the final one, which completes the upload
+  const isFinalPatch = (req: tus.HttpRequest) =>
+    req.getMethod() === "PATCH" &&
+    content instanceof Blob &&
+    Number(req.getHeader("Upload-Offset")) +
+      (tusSettings.chunkSize || Infinity) >=
+      content.size;
+  // the last PATCH sent was the final one, and got no definitive answer
+  // (see UploadError.recreated)
+  let finalPatchUnanswered = false;
   return new Promise<void | string>((resolve, reject) => {
     const upload = new tus.Upload(content, {
       endpoint: `${origin}${baseURL}${resourcePath}`,
@@ -78,18 +90,29 @@ export async function upload(
       // server rejects with 401.
       onBeforeRequest: function (req) {
         req.setHeader("X-Auth", authStore.jwt || startJwt);
+        if (req.getMethod() === "PATCH") {
+          finalPatchUnanswered = isFinalPatch(req);
+        }
       },
       // ...and renew it when the server says it is about to expire, as
       // fetchURL does for other API calls.
-      onAfterResponse: async function (_req, res) {
+      onAfterResponse: async function (req, res) {
+        // a 4xx other than 423 (busy): the final PATCH was refused, and
+        // stored nothing (no answer at all never comes here)
+        const status = res.getStatus();
+        if (
+          req.getMethod() === "PATCH" &&
+          status >= 400 &&
+          status < 500 &&
+          status !== 423
+        ) {
+          finalPatchUnanswered = false;
+        }
         if (res.getHeader("X-Renew-Token") === "true" && authStore.jwt) {
           await renew(authStore.jwt).catch((e) =>
             console.warn("could not renew the session during an upload", e)
           );
         }
-      },
-      onUploadUrlAvailable: function () {
-        created = true;
       },
       onShouldRetry: function (err) {
         const status = err.originalResponse
@@ -137,13 +160,8 @@ export async function upload(
           message = res === null ? "000 No connection" : res.getBody();
           status = res?.getStatus() ?? 0;
           method = error.originalRequest?.getMethod() ?? "";
-          if (method === "PATCH" && content instanceof Blob) {
-            const offset = Number(
-              error.originalRequest.getHeader("Upload-Offset")
-            );
-            final =
-              offset + (tusSettings.chunkSize || Infinity) >= content.size;
-          }
+          final =
+            !!error.originalRequest && isFinalPatch(error.originalRequest);
         }
 
         console.error(error);
@@ -153,7 +171,7 @@ export async function upload(
             message,
             status,
             method,
-            method === "POST" && created,
+            method === "POST" && finalPatchUnanswered,
             final
           )
         );

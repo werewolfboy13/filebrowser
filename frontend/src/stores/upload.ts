@@ -224,8 +224,10 @@ export const useUploadStore = defineStore("upload", () => {
   // can be about the file this upload stored: the answer to its final
   // PATCH was lost, tus resumed, found the upload gone because it was
   // completed, and created it anew. A file of its name and size at the
-  // destination is taken to be that file. Only for a re-create: on first
-  // creating the upload, a file of the same size there is another file.
+  // destination is taken to be that file. Only for such a re-create: on
+  // first creating the upload, or creating it again before its final
+  // PATCH went out (or after that was refused), a file of the same size
+  // there is another file.
   // The listing of the folder, not the file itself, whose information
   // includes the content of a text file.
   const isStored = async (path: string, file: File) => {
