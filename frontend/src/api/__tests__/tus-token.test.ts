@@ -59,11 +59,10 @@ const send = (name = "big.bin", data = "0123456789") =>
 const requests = () =>
   server.seen.map((r) => `${r.method} ${r.xAuth} (${r.xAuthLines})`);
 
-async function until(cond: () => boolean) {
-  for (let i = 0; i < 200 && !cond(); i++) {
-    await new Promise((r) => setTimeout(r, 10));
-  }
-}
+// waits for the condition (no fixed delay: the suite also runs on builders
+// short of CPU)
+const until = (cond: () => boolean) =>
+  vi.waitFor(() => expect(cond()).toBe(true), { timeout: 10_000 });
 
 describe("tus uploads and the session token (real tus-js-client, jsdom XHR)", () => {
   it("every request of an upload carries the token exactly once", async () => {

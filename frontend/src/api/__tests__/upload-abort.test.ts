@@ -80,8 +80,10 @@ const settle = (p: Promise<unknown>) =>
     (e: Error) => e.message
   );
 
-// "still pending" instead of hanging the test when the upload went ahead
-const within = (p: Promise<string>, ms = 200) =>
+// "still pending" instead of hanging the test when the upload went ahead.
+// Only ever expected to settle: the wait is long enough for a builder short
+// of CPU, and costs nothing when it settles at once.
+const within = (p: Promise<string>, ms = 4000) =>
   Promise.race([
     p,
     new Promise<string>((r) => setTimeout(() => r("still pending"), ms)),

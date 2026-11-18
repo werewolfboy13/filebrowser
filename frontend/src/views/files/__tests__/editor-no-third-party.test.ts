@@ -120,11 +120,10 @@ async function openFile(name: string, content: string, theme: string) {
   return ace.edit(document.getElementById("editor")!);
 }
 
-async function waitFor(cond: () => boolean) {
-  for (let i = 0; i < 40 && !cond(); i++) {
-    await new Promise((r) => setTimeout(r, 10));
-  }
-}
+// waits for the condition (no fixed delay: the suite also runs on builders
+// short of CPU)
+const waitFor = (cond: () => boolean) =>
+  vi.waitFor(() => expect(cond()).toBe(true), { timeout: 10_000 });
 
 describe("text editor network requests", () => {
   beforeEach(() => {

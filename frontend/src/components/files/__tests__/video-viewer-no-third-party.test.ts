@@ -7,7 +7,15 @@
 // (views/files/__tests__/editor-no-third-party.test.ts). Nothing here
 // touches the network: jsdom does not fetch, and fetch/XHR/workers are
 // stubbed by the guard.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import {
@@ -41,35 +49,59 @@ describe("video player network requests", () => {
   });
   afterEach(() => guard.stop());
 
-  for (const lang of ["en", "de", "ja"]) {
-    it(`only requests same-origin resources (html lang=${lang})`, async () => {
-      document.documentElement.lang = lang;
-      const { default: VideoViewer } = await import("../VideoViewer.vue");
-      const w = mount(VideoViewer, {
-        attachTo: document.body,
-        props: {
-          source: "/api/raw/movies/clip.mp4?inline=true",
-          subtitles: ["/api/subtitle/movies/clip.en.vtt"],
-        },
-      });
-      await flushPromises();
-      for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 10));
-      await customElements.whenDefined("video-skin");
+  // loaded once, outside the tests' time limits (the suite also runs on
+  // builders short of CPU)
+  let VideoViewer: (typeof import("../VideoViewer.vue"))["default"];
+  beforeAll(async () => {
+    ({ default: VideoViewer } = await import("../VideoViewer.vue"));
+  }, 120_000);
 
-      const thirdParty = guard.thirdParty();
-      const skin = document.querySelector("video-skin");
-      console.log(
-        "requests:",
-        JSON.stringify(guard.requests.filter((u) => !u.startsWith("data:"))),
-        "| skin shadow children:",
-        skin?.shadowRoot?.childElementCount ?? null,
-        "| skin children:",
-        skin?.childElementCount
-      );
-      expect(customElements.get("video-player")).toBeDefined();
-      expect(guard.requests).toContain("/api/raw/movies/clip.mp4?inline=true");
-      expect(thirdParty).toEqual([]);
-      w.unmount();
-    });
+  for (const lang of ["en", "de", "ja"]) {
+    it(
+      `only requests same-origin resources (html lang=${lang})`,
+      { timeout: 30_000 },
+      async () => {
+        document.documentElement.lang = lang;
+        const w = mount(VideoViewer, {
+          attachTo: document.body,
+          props: {
+            source: "/api/raw/movies/clip.mp4?inline=true",
+            subtitles: ["/api/subtitle/movies/clip.en.vtt"],
+          },
+        });
+        await customElements.whenDefined("video-skin");
+        // the player has rendered and asked for the video
+        await vi.waitFor(
+          () => {
+            expect(
+              document.querySelector("video-skin")?.shadowRoot
+                ?.childElementCount
+            ).toBeGreaterThan(0);
+            expect(guard.requests).toContain(
+              "/api/raw/movies/clip.mp4?inline=true"
+            );
+          },
+          { timeout: 20_000 }
+        );
+        await flushPromises();
+
+        const thirdParty = guard.thirdParty();
+        const skin = document.querySelector("video-skin");
+        console.log(
+          "requests:",
+          JSON.stringify(guard.requests.filter((u) => !u.startsWith("data:"))),
+          "| skin shadow children:",
+          skin?.shadowRoot?.childElementCount ?? null,
+          "| skin children:",
+          skin?.childElementCount
+        );
+        expect(customElements.get("video-player")).toBeDefined();
+        expect(guard.requests).toContain(
+          "/api/raw/movies/clip.mp4?inline=true"
+        );
+        expect(thirdParty).toEqual([]);
+        w.unmount();
+      }
+    );
   }
 });

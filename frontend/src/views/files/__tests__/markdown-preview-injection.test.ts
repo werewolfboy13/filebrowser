@@ -87,10 +87,11 @@ describe("markdown preview sanitisation", () => {
     });
     await flushPromises();
     await w.find('button[aria-label="buttons.preview"]').trigger("click");
-    await flushPromises();
-    await new Promise((r) => setTimeout(r, 20));
-
+    // rendered (asynchronously): an empty preview would pass every check
     const preview = document.querySelector("#preview-container")!;
+    await vi.waitFor(() => expect(preview.innerHTML).not.toBe(""), {
+      timeout: 10_000,
+    });
     const html = preview.innerHTML;
     const report = {
       style: /<style/i.test(html),

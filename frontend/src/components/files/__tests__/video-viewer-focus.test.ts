@@ -10,7 +10,20 @@
 //
 // Real Video.js custom elements; nothing touches the network (jsdom does not
 // fetch media, see video-viewer-no-third-party.test.ts).
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+//
+// The suite also runs inside the Docker image build, on builders that may be
+// short of CPU: the viewer (and Video.js) is loaded once, before the tests
+// and outside their time limits, and the tests wait for conditions, not for
+// fixed delays.
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { useLayoutStore } from "@/stores/layout";
@@ -31,6 +44,12 @@ HTMLMediaElement.prototype.load = () => {};
 HTMLMediaElement.prototype.pause = () => {};
 
 let w: VueWrapper | null = null;
+let VideoViewer: (typeof import("../VideoViewer.vue"))["default"];
+
+beforeAll(async () => {
+  ({ default: VideoViewer } = await import("../VideoViewer.vue"));
+  await customElements.whenDefined("video-skin");
+}, 120_000);
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -41,20 +60,24 @@ afterEach(() => {
   w = null;
 });
 
+// Mounts the viewer and waits until it has rendered and made its focus
+// decision (on mount, after a microtask or two: past the next macrotask).
 async function open() {
-  const { default: VideoViewer } = await import("../VideoViewer.vue");
   w = mount(VideoViewer, {
     attachTo: document.body,
     props: { source: "/api/raw/movies/clip.mp4?inline=true" },
   });
-  await flushPromises();
-  await customElements.whenDefined("video-skin");
-  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 10));
   const skin = document.querySelector("video-skin")!;
-  const container = skin.shadowRoot!.querySelector(
-    "media-container"
-  ) as HTMLElement;
-  return { skin, container };
+  let container: HTMLElement | null = null;
+  await vi.waitFor(
+    () => {
+      container = skin.shadowRoot?.querySelector("media-container") ?? null;
+      expect(container).not.toBeNull();
+    },
+    { timeout: 20_000 }
+  );
+  await flushPromises();
+  return { skin, container: container! as HTMLElement };
 }
 
 function press(el: Element, key: string) {
@@ -68,9 +91,10 @@ function press(el: Element, key: string) {
   return ev;
 }
 
-describe("video preview keyboard focus", () => {
+describe("video preview keyboard focus", { timeout: 30_000 }, () => {
   it("focuses the player when it opens, so its shortcuts work at once", async () => {
     const { skin, container } = await open();
+    await vi.waitFor(() => expect(document.activeElement).toBe(skin));
     console.log(
       "active:",
       document.activeElement?.tagName,
@@ -145,9 +169,8 @@ describe("video preview keyboard focus", () => {
 
 // A subtitle file the server cannot serve (e.g. 413: too large to convert)
 // made the <track> fail silently.
-describe("video preview subtitles", () => {
+describe("video preview subtitles", { timeout: 30_000 }, () => {
   it("reports a subtitle file that cannot be loaded", async () => {
-    const { default: VideoViewer } = await import("../VideoViewer.vue");
     w = mount(VideoViewer, {
       attachTo: document.body,
       props: {
