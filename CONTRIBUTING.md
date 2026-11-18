@@ -1,6 +1,6 @@
 # Building File Browser
 
-This project is archived on 2026-09-01. Pull requests are not accepted and no further changes are merged. This document is kept as build documentation for anyone wishing to build the project from source.
+This is a community-maintained fork of File Browser, at [github.com/werewolfboy13/filebrowser](https://github.com/werewolfboy13/filebrowser). The original project, [github.com/filebrowser/filebrowser](https://github.com/filebrowser/filebrowser), was archived on 2026-09-01 and takes no changes. Issues and pull requests for this fork belong in the fork's repository, and a vulnerability is reported as [SECURITY.md](SECURITY.md) describes.
 
 ## Project Structure
 
@@ -9,11 +9,13 @@ The backend side of the application is written in [Go](https://golang.org/), whi
 * Learn Go: [https://github.com/golang/go/wiki/Learn](https://github.com/golang/go/wiki/Learn)
 * Learn Vue.js: [https://vuejs.org/guide/introduction.html](https://vuejs.org/guide/introduction.html)
 
-We encourage you to use git to manage your fork. To clone the main repository, just run:
+To build the fork, clone the fork's repository, not the original one, which does not have the changes made here:
 
 ```bash
-git clone https://github.com/filebrowser/filebrowser
+git clone https://github.com/werewolfboy13/filebrowser
 ```
+
+The Go module is `github.com/werewolfboy13/filebrowser/v2`.
 
 We use [Taskfile](https://taskfile.dev/) to manage the different processes (building, releasing, etc) automatically.
 
@@ -89,13 +91,15 @@ To make a release, just run:
 task release
 ```
 
+That updates the generated documentation and the changelog, and creates the version tag. Pushing the tag is what builds and publishes the release: the binaries on the fork's [releases page](https://github.com/werewolfboy13/filebrowser/releases) and the Docker image, through the release job in [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml). The job publishes nothing unless the repository variable `IMAGE_NAME` is set.
+
 ## Translations
 
 The Transifex integration stopped on 2026-09-01 and translations submitted there no longer reach this repository. Locale files live in [`frontend/src/i18n`](frontend/src/i18n) and can be edited directly.
 
 ## Authentication Provider
 
-To build a new authentication provider, you need to implement the [Auther interface](https://github.com/filebrowser/filebrowser/blob/master/auth/auth.go), whose method will be called on the login page after the user has submitted their login data.
+To build a new authentication provider, you need to implement the [Auther interface](auth/auth.go), whose method will be called on the login page after the user has submitted their login data.
 
 ```go
 // Auther is the authentication interface.
@@ -107,9 +111,9 @@ type Auther interface {
 
 After implementing the interface you should:
 
-1. Add it to [`auth` directory](https://github.com/filebrowser/filebrowser/blob/master/auth).
-2. Add it to the [configuration parser](https://github.com/filebrowser/filebrowser/blob/master/cmd/config.go) for the CLI.
-3. Add it to the [`authBackend.Get`](https://github.com/filebrowser/filebrowser/blob/master/storage/bolt/auth.go).
+1. Add it to [`auth` directory](auth).
+2. Add it to the [configuration parser](cmd/config.go) for the CLI.
+3. Add it to the [`authBackend.Get`](storage/bolt/auth.go).
 
 If you need to add more flags, please update the function `addConfigFlags`.
 
