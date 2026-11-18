@@ -49,15 +49,17 @@ type UploadCache interface {
 	// Complete removes an upload from the cache
 	Complete(filePath string)
 
-	// Get returns what was registered for an active upload.
+	// Get returns what was registered for an active upload. Looking does
+	// not keep the upload alive: that is Touch, for the requests that carry
+	// it on. Anybody may ask about an upload, and only its owner's requests
+	// are a sign of life.
 	Get(filePath string) (uploadInfo, error)
 
 	// GetLength returns the expected file size for an active upload
 	GetLength(filePath string) (int64, error)
 
-	// Has reports whether an upload is registered, without that counting as
-	// a request for it: unlike Get, it does not keep the upload alive. When
-	// the cache cannot tell, it says that there is one.
+	// Has reports whether an upload is registered. When the cache cannot
+	// tell, it says that there is one.
 	Has(filePath string) bool
 
 	// Touch refreshes the TTL for an active upload
@@ -108,7 +110,7 @@ func (c *memoryUploadCache) Complete(filePath string) {
 }
 
 func (c *memoryUploadCache) Get(filePath string) (uploadInfo, error) {
-	item := c.cache.Get(filePath)
+	item := c.cache.Get(filePath, ttlcache.WithDisableTouchOnHit[string, memoryUploadEntry]())
 	if item == nil {
 		return uploadInfo{}, errNoActiveUpload
 	}

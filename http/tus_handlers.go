@@ -394,10 +394,11 @@ func tusHeadHandler(cache UploadCache) handleFunc {
 		}
 
 		// An upload is continued by whoever created it, and by nobody else:
-		// see tusPatchUpload.
+		// see tusPatchUpload. Their asking about it is a sign of life.
 		if !tusOwns(d, upload) {
 			return http.StatusForbidden, nil
 		}
+		cache.Touch(uploadKey)
 
 		// The offset is how much the upload has written, to the file it
 		// writes to. Without that file there is no upload to report on.
@@ -494,6 +495,7 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 	if !tusOwns(d, upload) {
 		return http.StatusForbidden, nil
 	}
+	cache.Touch(uploadKey)
 
 	writePath, temp, err := tusWritePath(d, r.URL.Path, upload)
 	switch {

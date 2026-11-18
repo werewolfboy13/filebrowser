@@ -66,14 +66,7 @@ func (c *redisUploadCache) Get(filePath string) (uploadInfo, error) {
 		return uploadInfo{}, fmt.Errorf("redis error: %w", err)
 	}
 
-	upload, err := decodeUploadInfo(result)
-	if err != nil {
-		return uploadInfo{}, err
-	}
-
-	c.Touch(filePath)
-
-	return upload, nil
+	return decodeUploadInfo(result)
 }
 
 func (c *redisUploadCache) GetLength(filePath string) (int64, error) {

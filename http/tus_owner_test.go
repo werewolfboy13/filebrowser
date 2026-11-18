@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jellydator/ttlcache/v3"
 
 	"github.com/filebrowser/filebrowser/v2/users"
 )
@@ -168,6 +171,64 @@ func TestTusUploadIsOnlyContinuedByItsOwner(t *testing.T) {
 			t.Errorf("report.pdf holds %q", data)
 		}
 	})
+}
+
+// An upload stays registered for as long as requests for it keep coming, and
+// while it is, its path is taken for everyone who may not cancel it. The
+// requests of those others must not count: a user who is refused, and tries
+// again, would keep the upload of somebody who has long gone registered for
+// as long as they keep trying, and the path taken with it.
+func TestTusUploadIsNotKeptAliveByThoseItRefuses(t *testing.T) {
+	e, bob, carol, _ := tusOwnerEnv(t)
+	length := map[string]string{"Upload-Length": "100"}
+	if code, _, body := e.do(http.MethodPost, "/api/tus/shared.bin", bob, http.NoBody, length); code != http.StatusCreated {
+		t.Fatalf("create = %d %q", code, body)
+	}
+	expires := func() time.Time {
+		t.Helper()
+		item := e.cache.cache.Get(filepath.Join(e.bobDir, "shared.bin"), ttlcache.WithDisableTouchOnHit[string, memoryUploadEntry]())
+		if item == nil {
+			t.Fatal("the upload is not registered")
+		}
+		return item.ExpiresAt()
+	}
+
+	before := expires()
+	time.Sleep(20 * time.Millisecond)
+	for _, rq := range []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodPost, "/api/tus/shared.bin", http.StatusConflict},
+		{http.MethodPost, "/api/tus/shared.bin?override=true", http.StatusConflict},
+		{http.MethodHead, "/api/tus/shared.bin", http.StatusForbidden},
+		{http.MethodPatch, "/api/tus/shared.bin", http.StatusForbidden},
+		{http.MethodDelete, "/api/tus/shared.bin", http.StatusForbidden},
+	} {
+		hdr := map[string]string{"Upload-Length": "100", "Upload-Offset": "0", "Content-Type": "application/offset+octet-stream"}
+		if code, _, _ := e.do(rq.method, rq.path, carol, strings.NewReader("carol"), hdr); code != rq.want {
+			t.Errorf("%s %s by another user = %d, want %d", rq.method, rq.path, code, rq.want)
+		}
+		if after := expires(); !after.Equal(before) {
+			t.Errorf("%s %s by another user put off the end of the upload by %s", rq.method, rq.path, after.Sub(before))
+		}
+	}
+
+	// Its owner's requests do count.
+	if code, _, _ := e.do(http.MethodHead, "/api/tus/shared.bin", bob, nil, nil); code != http.StatusOK {
+		t.Fatalf("the owner's HEAD = %d", code)
+	}
+	afterHead := expires()
+	if !afterHead.After(before) {
+		t.Error("the owner's HEAD did not keep the upload alive")
+	}
+	time.Sleep(20 * time.Millisecond)
+	if code, _, _ := e.do(http.MethodPatch, "/api/tus/shared.bin", bob, strings.NewReader("bob"), tusChunk(0)); code != http.StatusNoContent {
+		t.Fatalf("the owner's chunk = %d", code)
+	}
+	if !expires().After(afterHead) {
+		t.Error("the owner's chunk did not keep the upload alive")
+	}
 }
 
 // An upload that does not say who created it (a value in Redis from before
