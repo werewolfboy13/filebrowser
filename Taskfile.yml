@@ -16,8 +16,11 @@ tasks:
       # Seven characters, as in the released binaries and in the Docker image.
       GIT_COMMIT:
         sh: git rev-parse --short=7 HEAD
+      # The last version tag without its v, and for a build that is past it, by how many commits,
+      # at which one, and whether with changes that are not committed: 2.63.23-162-g1dbcd934-dirty.
+      # In a clone without tags, the commit alone.
       VERSION:
-        sh: git describe --tags --abbrev=0 --match=v* | cut -c 2-
+        sh: git describe --tags --always --dirty --match='v*' | sed 's/^v//'
 
   build:docker:
     desc: Build the Docker image, which builds and tests frontend and backend itself
@@ -29,8 +32,9 @@ tasks:
     vars:
       GIT_SHA:
         sh: git rev-parse HEAD
+      # As for build:backend.
       VERSION:
-        sh: git describe --tags --abbrev=0 --match=v* | cut -c 2-
+        sh: git describe --tags --always --dirty --match='v*' | sed 's/^v//'
 
   build:
     desc: Build both frontend and backend

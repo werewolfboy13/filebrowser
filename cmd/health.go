@@ -17,12 +17,14 @@ import (
 	"github.com/spf13/viper"
 )
 
-// healthTimeout bounds the whole check, so that it ends even when the server
-// accepts the connection and then says nothing.
+// healthTimeout bounds the request of the check, so that it ends even when
+// the server accepts the connection and then says nothing. Before that, the
+// command can spend up to hostLookupTimeout on the name of a host.
 //
-// It is shorter than the timeout of the Docker image's HEALTHCHECK, so that
-// the command ends by itself and says what went wrong. Docker kills a check
-// that runs into its timeout, and then has nothing to show for it.
+// The two together are shorter than the timeout of the Docker image's
+// HEALTHCHECK, so that the command ends by itself and says what went wrong.
+// Docker kills a check that runs into its timeout, and then has nothing to
+// show for it.
 const healthTimeout = 2 * time.Second
 
 const (
@@ -44,7 +46,8 @@ var healthCmd = &cobra.Command{
 	Long: `Requests /health from a running File Browser and fails when the
 answer is not 200 OK with the status "OK" in it. It is meant for health
 checks, such as the one of the Docker image, where there is no shell and no
-HTTP client to do it with. It gives up after 2 seconds.
+HTTP client to do it with. It gives up after 2 seconds, or after 2.5 when
+the server listens on a host name, which is looked up first.
 
 Where the server listens is looked up in this order:
 
@@ -58,7 +61,8 @@ Where the server listens is looked up in this order:
   configuration file or the database. The Docker image sets the variable.
   The file is only used when it belongs to the user who runs this command
   or to the user the server runs as, and when it names this machine or the
-  address in the configuration.
+  address in the configuration. When it names this machine by a host name,
+  only the addresses of that name that are this machine's are connected to.
 - The FB_ environment variables and the configuration file.
 
 The database is not read, because the running server holds it locked. So
@@ -106,8 +110,13 @@ func resolveHealthTarget(cmd *cobra.Command) (healthTarget, error) {
 	var elsewhere *listenRecord
 	if !explicit {
 		if record, ok := readListenRecord(os.Getenv(envHealthFile)); ok {
-			if record.Socket != "" || isLocalAddress(record.Address) {
+			if record.Socket != "" {
 				return healthTargetFor(record.listen()), nil
+			}
+			if ofName, local := localAddresses(record.Address); local {
+				target := healthTargetFor(record.listen())
+				target.addresses = strings.Join(ofName, " ")
+				return target, nil
 			}
 			elsewhere = record
 		}
@@ -136,6 +145,17 @@ type healthTarget struct {
 	// url is connected to over TCP.
 	socket string
 	url    string
+	// addresses are the IP addresses to connect to in place of the host in
+	// url, separated by spaces, or empty to connect to that host.
+	//
+	// It is set for a host name that comes from the server's record. Such a
+	// name was looked up to see that it is this machine's, and it can stand
+	// for another machine as well: connecting to the name would look it up
+	// again and could reach that one. So the check connects to the addresses
+	// that were found to be this machine's, and to no other.
+	//
+	// It is one string, and not a list, so that two targets can be compared.
+	addresses string
 }
 
 // listenSettings is where a server listens, as it is configured.
@@ -204,9 +224,26 @@ func checkHealth(ctx context.Context, target healthTarget, timeout time.Duration
 			InsecureSkipVerify: true, //nolint:gosec
 		},
 	}
-	if target.socket != "" {
+	switch {
+	case target.socket != "":
 		transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", target.socket)
+		}
+	case target.addresses != "":
+		// One after the other: the server listens on one of them, and the
+		// others refuse the connection at once.
+		transport.DialContext = func(ctx context.Context, network, address string) (conn net.Conn, err error) {
+			_, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			for _, ip := range strings.Fields(target.addresses) {
+				conn, err = (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(ip, port))
+				if err == nil {
+					return conn, nil
+				}
+			}
+			return nil, err
 		}
 	}
 

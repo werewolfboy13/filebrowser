@@ -64,12 +64,22 @@ func TestServerProcess(t *testing.T) {
 }
 
 // A request that is still in progress when the server is told to stop is
-// given shutdownTimeout, and is then cut off. After that the server command
-// has to return, so that the database is closed and the record of where the
-// server listened is removed: `docker stop` kills what is still running two
-// seconds later, and a database that was not closed is what is found the
-// next time.
+// given shutdownTimeout, or the time that FB_SHUTDOWN_TIMEOUT names, and is
+// then cut off. After that the server command has to return, so that the
+// database is closed and the record of where the server listened is removed:
+// `docker stop` kills what is still running when its own time is up, and a
+// database that was not closed is what is found the next time.
 func TestServerStopsWithARequestInFlight(t *testing.T) {
+	t.Run("after the default time", func(t *testing.T) {
+		testServerStopsWithARequestInFlight(t, "", shutdownTimeout)
+	})
+	// Far enough below the default to tell the two apart.
+	t.Run("after the time FB_SHUTDOWN_TIMEOUT names", func(t *testing.T) {
+		testServerStopsWithARequestInFlight(t, "2s", 2*time.Second)
+	})
+}
+
+func testServerStopsWithARequestInFlight(t *testing.T, setting string, timeout time.Duration) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "srv"), 0700); err != nil {
 		t.Fatal(err)
@@ -84,6 +94,7 @@ func TestServerStopsWithARequestInFlight(t *testing.T) {
 		"HOME="+dir,
 		envConfig+"=",
 		envHealthFile+"="+record,
+		"FB_SHUTDOWN_TIMEOUT="+setting,
 	)
 	server.Stdout, server.Stderr = &output, &output
 	if err := server.Start(); err != nil {
@@ -136,7 +147,7 @@ func TestServerStopsWithARequestInFlight(t *testing.T) {
 	// Again and again until the process ends, in case the server was not
 	// listening for the signal yet the first time.
 	begin := time.Now()
-	deadline := time.After(shutdownTimeout + 15*time.Second)
+	deadline := time.After(timeout + 15*time.Second)
 	var exitErr error
 	for running := true; running; {
 		if err := server.Process.Signal(syscall.SIGTERM); err != nil && running {
@@ -162,11 +173,11 @@ func TestServerStopsWithARequestInFlight(t *testing.T) {
 	default:
 		t.Error("the process ended before the server command returned: nothing closed the database")
 	}
-	if elapsed < shutdownTimeout-time.Second {
-		t.Errorf("the server stopped after %s: the request in progress was not given its %s", elapsed.Round(time.Millisecond), shutdownTimeout)
+	if elapsed < timeout-time.Second {
+		t.Errorf("the server stopped after %s: the request in progress was not given its %s", elapsed.Round(time.Millisecond), timeout)
 	}
-	if elapsed > shutdownTimeout+5*time.Second {
-		t.Errorf("the server stopped after %s: the request in progress was waited for beyond its %s", elapsed.Round(time.Millisecond), shutdownTimeout)
+	if elapsed > timeout+5*time.Second {
+		t.Errorf("the server stopped after %s: the request in progress was waited for beyond its %s", elapsed.Round(time.Millisecond), timeout)
 	}
 
 	select {

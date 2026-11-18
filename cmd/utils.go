@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
@@ -126,7 +127,9 @@ func initViper(cmd *cobra.Command) (*viper.Viper, error) {
 
 	// A configuration file named by the --config flag is the user's own, so
 	// only the one named by FB_CONFIG is created when it is missing.
+	named := "--config"
 	if !cmd.Flags().Changed("config") {
+		named = envConfig
 		err = seedConfigFile(os.Getenv(envConfig), os.Getenv(envConfigTemplate))
 		if err != nil {
 			return nil, err
@@ -134,15 +137,21 @@ func initViper(cmd *cobra.Command) (*viper.Viper, error) {
 	}
 
 	// Read in configuration
-	if err := v.ReadInConfig(); err != nil {
-
-		if errors.As(err, &viper.ConfigParseError{}) {
-			return nil, err
-		}
-
+	err = v.ReadInConfig()
+	switch file := v.ConfigFileUsed(); {
+	case err == nil:
+		log.Printf("Using config file: %s", file)
+	case v.GetString("config") != "":
+		// A file that was asked for by name has to be there, and readable.
+		// Without it the server went on with its defaults, and failed over
+		// something else: a database in a directory it cannot write to. Or
+		// it did not fail, and served the working directory.
+		return nil, fmt.Errorf("can't read the config file %s, which %s names: %w", file, named, err)
+	case errors.As(err, &viper.ConfigParseError{}):
+		return nil, fmt.Errorf("can't read the config file %s: %w", file, err)
+	default:
+		// None in the places that are searched, which is fine.
 		log.Println("No config file used")
-	} else {
-		log.Printf("Using config file: %s", v.ConfigFileUsed())
 	}
 
 	// Return Viper

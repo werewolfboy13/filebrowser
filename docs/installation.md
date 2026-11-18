@@ -4,13 +4,23 @@ File Browser is a single binary and can be used as standalone executable. It can
 
 > [!NOTE]
 >
-> This repository is a fork of File Browser, a project that was archived on 2026-09-01. Nothing here is published by the File Browser project, and the project's own downloads do not have the changes made here. That goes for the `filebrowser/filebrowser` images on Docker Hub, the Homebrew tap, the download scripts and the releases of `github.com/filebrowser/filebrowser`.
+> This is a community-maintained fork of File Browser, at [github.com/werewolfboy13/filebrowser](https://github.com/werewolfboy13/filebrowser). The original project was archived on 2026-09-01. Nothing here is published by it, and its own downloads do not have the changes made here. That goes for the `filebrowser/filebrowser` images on Docker Hub, the Homebrew tap `filebrowser/tap`, the download scripts and the releases of `github.com/filebrowser/filebrowser`: they install the original project's last release, which gets no fixes any more.
 
 ## Binary
 
-### This Build, From Source
+### Releases
 
-There are no downloads of this build. With [Go](https://go.dev), [pnpm](https://pnpm.io) and [Task](https://taskfile.dev) installed, build the binary in a clone of this repository, as [CONTRIBUTING.md](../CONTRIBUTING.md) describes:
+A released version of this fork has its binaries on the fork's [releases page](https://github.com/werewolfboy13/filebrowser/releases), for Linux, macOS, Windows, FreeBSD and OpenBSD. Unpack the archive for your system and run the binary:
+
+```sh
+./filebrowser -r /path/to/your/files
+```
+
+There is no release yet. Until there is one, and for anything newer than the last one, build it from source.
+
+### From Source
+
+With [Go](https://go.dev), [pnpm](https://pnpm.io) and [Task](https://taskfile.dev) installed, build the binary in a clone of this repository, as [CONTRIBUTING.md](../CONTRIBUTING.md) describes:
 
 ```sh
 task build
@@ -19,37 +29,13 @@ task build
 
 To run it in a container instead, without installing any of these, see [Docker](#docker).
 
-### The Original Project's Last Release
-
-The package manager and the download scripts below install the last release of the original File Browser project, not this build. That release gets no fixes any more.
-
-#### Brew
-
-```sh
-brew tap filebrowser/tap
-brew install filebrowser
-filebrowser -r /path/to/your/files
-```
-
-#### Unix
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash
-filebrowser -r /path/to/your/files
-```
-
-#### Windows
-
-```sh
-iwr -useb https://raw.githubusercontent.com/filebrowser/get/master/get.ps1 | iex
-filebrowser -r /path/to/your/files
-```
-
 File Browser is now up and running. Read the ["First Boot"](#first-boot) section for more information.
 
 ## Docker
 
 The image is built from this repository, with the [Dockerfile](../Dockerfile) at its root. It is not the `filebrowser/filebrowser` image of the original project, and it does not behave the same in every respect: read [Coming From the Original Image](#coming-from-the-original-image) before you replace one with the other.
+
+A released version of this fork has its image at `ghcr.io/werewolfboy13/filebrowser`, which can take the place of `filebrowser:local` in the commands below. There is no release yet. Until there is one, and for anything newer than the last one, build the image.
 
 ### Building the Image
 
@@ -66,6 +52,7 @@ The image can be built for `linux/amd64` and `linux/arm64`. It cannot be built f
 
 ```sh
 docker run \
+    --stop-timeout 15 \
     -v filebrowser_data:/srv \
     -v filebrowser_database:/database \
     -v filebrowser_config:/config \
@@ -73,13 +60,14 @@ docker run \
     filebrowser:local
 ```
 
-Where `filebrowser_data`, `filebrowser_database` and `filebrowser_config` are Docker [volumes](https://docs.docker.com/engine/storage/volumes/), where the data, database and configuration will be stored, respectively. The default configuration and database will be automatically initialized.
+Where `filebrowser_data`, `filebrowser_database` and `filebrowser_config` are Docker [volumes](https://docs.docker.com/engine/storage/volumes/), where the data, database and configuration will be stored, respectively. The default configuration and database will be automatically initialized. `--stop-timeout 15` gives the server the time it takes to stop: see [Stopping](#stopping).
 
 The server needs no capability, no new privilege and no writable root filesystem, so it can also run like this:
 
 ```sh
 docker run \
     --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --stop-timeout 15 \
     -v filebrowser_data:/srv \
     -v filebrowser_database:/database \
     -v filebrowser_config:/config \
@@ -97,6 +85,8 @@ File Browser is now up and running. Read the ["First Boot"](#first-boot) section
 docker compose up --build
 ```
 
+`docker compose up --build` builds on the base images that are already on the machine, and does not look for newer ones. To rebuild with their latest security patches, run `docker compose build --pull` first, which is what `--pull` does for `docker build`.
+
 Its volumes are the three of the `docker run` command above, under the same names, so it continues an installation that was started with that command, and the other way around.
 
 One File Browser instance needs nothing else. For several instances that serve the same files, [`compose.redis.yaml`](../compose.redis.yaml) adds the Redis that they share for uploads. It says at its top how to use it.
@@ -104,6 +94,30 @@ One File Browser instance needs nothing else. For several instances that serve t
 ### User and Permissions
 
 The server runs as the user with UID 1000 and GID 1000. To run it as another user, use Docker's [`--user`](https://docs.docker.com/engine/containers/run/#user) option, for example `--user "$(id -u):$(id -g)"`. The image has no init system that could switch users after the start, so it does not know the `PUID` and `PGID` variables of other images: they are ignored.
+
+Every mount then has to belong to that user before the server starts, the named volumes too. The image cannot see to that: it has no shell and no `chown`. And Docker gives an empty volume the owner of the image's directory, the user 1000, every time a container starts with it. So a new volume does not work for another user, and neither does one whose owner was changed while it was still empty. That leaves:
+
+- **Bind mounts** of directories that belong to the user: see the note below.
+- **Volumes whose owner is changed with another image**, and which are then mounted with `nocopy`, so that Docker leaves the owner as it is:
+
+  ```sh
+  docker run --rm --user 0 --entrypoint chown \
+      -v filebrowser_data:/srv \
+      -v filebrowser_database:/database \
+      -v filebrowser_config:/config \
+      alpine -R "$(id -u):$(id -g)" /srv /database /config
+
+  docker run \
+      --user "$(id -u):$(id -g)" \
+      --stop-timeout 15 \
+      -v filebrowser_data:/srv:nocopy \
+      -v filebrowser_database:/database:nocopy \
+      -v filebrowser_config:/config:nocopy \
+      -p 8080:80 \
+      filebrowser:local
+  ```
+
+  The first command also hands an installation that ran as the user 1000 over to the new user.
 
 > [!NOTE]
 >
@@ -113,9 +127,21 @@ The server runs as the user with UID 1000 and GID 1000. To run it as another use
 
 The image has nothing in it but the server: no shell, no init system and no entrypoint script. Whatever follows the image name in `docker run`, or is in `command:` in a Compose file, is passed to the `filebrowser` binary, as flags of the server or as [another command](cli/filebrowser.md).
 
-- **The settings file** is `/config/settings.json`, which the `FB_CONFIG` environment variable names. When that file does not exist, the server creates it on its start from `/defaults/settings.json`, which `FB_CONFIG_TEMPLATE` names: port 80 on every address, the files in `/srv` and the database in `/database/filebrowser.db`. A file that exists is never replaced. With the `--config` flag, the server reads the file you name instead, and creates nothing.
+- **The settings file** is `/config/settings.json`, which the `FB_CONFIG` environment variable names. When that file does not exist, the server creates it on its start from `/defaults/settings.json`, which `FB_CONFIG_TEMPLATE` names: port 80 on every address, the files in `/srv` and the database in `/database/filebrowser.db`. A file with anything in it is never replaced. An empty one is filled, such as the one that `touch settings.json` makes before it is mounted at `/config/settings.json` by itself. The template is JSON, so it is only copied to a file whose name ends in `.json`: with `FB_CONFIG` pointing at a `.yaml` or `.toml` file, write that file yourself. With the `--config` flag, the server reads the file you name instead, and creates nothing. Either way, the file that is named has to be there and readable by then: the server does not start without it, and says which file it is.
 - **Single settings**, such as the port, are best set as environment variables: `-e FB_PORT=8080`, `-e FB_ADDRESS=0.0.0.0`, `-e FB_BASE_URL=/files`. Every flag of the [server](cli/filebrowser.md) has one. Flags after the image name work as well: `filebrowser:local --port 8080`.
+- **A unix socket** takes a settings file of its own, named with `--config` or `FB_CONFIG`. The file that the image creates sets `port` and `address`, and the server refuses a socket next to those: `--socket` or `FB_SOCKET` alone ends in `Error: --socket flag cannot be used with --address, --port, --key nor --cert`. The file has `socket` in their place, and the rest of what the image's file has:
+
+  ```json
+  {
+    "socket": "/sock/filebrowser.sock",
+    "database": "/database/filebrowser.db",
+    "root": "/srv"
+  }
+  ```
+
+  The directory of the socket has to be a mount that the server's user can write to.
 - **Other commands** use the same volumes, and need the server to be stopped, because the running server holds the database: `docker run --rm -v filebrowser_database:/database -v filebrowser_config:/config filebrowser:local users ls`. With `docker exec` in the running container, such a command fails after a second with `Error: timeout`.
+- **Commands that write a file** write it to the working directory when its path is not a full one. In the image that is `/`, where the server's user cannot write, so `users export users.json` ends in `Error: open users.json: permission denied`. Give the full path of a file in a volume, or make a volume the working directory with `-w /config`: `docker run --rm -w /config -v filebrowser_database:/database -v filebrowser_config:/config filebrowser:local users export users.json` writes `/config/users.json`. `users import --replace` needs `-w /config` in any case: it writes the users it is about to delete to `users.backup.json` in the working directory first. It then stops at the last administrator, whom it cannot delete, so to change the users that are there, use `users import --overwrite /config/users.json`.
 
 ### Health Check
 
@@ -125,7 +151,11 @@ A container without `/dev/shm`, which is what `--ipc=none` gives, has no such fi
 
 ### Stopping
 
-When the container is stopped, the server takes no new connections, gives the requests in progress 8 seconds to finish, cuts off the ones that are left, closes the database and exits. Docker has to wait longer than that before it kills the container, or the server is killed in the middle of it. `compose.yaml` sets 15 seconds. For `docker run`, `--stop-timeout 15` does the same, and `docker stop -t 15` does it for one stop. Without them, Docker waits for its default, which is 10 seconds according to its documentation.
+When the container is stopped, the server takes no new connections, gives the requests in progress 8 seconds to finish, cuts off the ones that are left, closes the database and exits. Docker has to wait longer than that before it kills the container, or the server is killed in the middle of it: the container then ends with the exit code 137, and the server has not closed the database.
+
+`compose.yaml` sets 15 seconds. For `docker run`, `--stop-timeout 15` does the same, as in the commands above, and `docker stop -t 15` does it for one stop. Do not rely on Docker's default instead. It is 10 seconds according to Docker's documentation, but not every version waits that long: Docker Desktop 29 was measured to kill a container after about 3 seconds.
+
+The 8 seconds can be changed with the `--shutdownTimeout` flag or the `FB_SHUTDOWN_TIMEOUT` environment variable, which take a duration with its unit, such as `2s` or `1m`. Keep it below the time that Docker waits.
 
 ### Coming From the Original Image
 

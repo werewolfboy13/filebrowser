@@ -26,9 +26,13 @@ following directories:
 - $HOME/
 - /etc/filebrowser/
 
-If FB_CONFIG names a file that does not exist and FB_CONFIG_TEMPLATE names
-one that does, the template is copied to the FB_CONFIG path first. The Docker
-image uses this to create its default configuration on the first start.
+If FB_CONFIG names a file that does not exist, or that is empty, and
+FB_CONFIG_TEMPLATE names a file with the same extension, the template is
+copied to the FB_CONFIG path first. The Docker image uses this to create its
+default configuration on the first start.
+
+A file that "--config" or FB_CONFIG names has to be there and readable by
+then: File Browser does not start without it.
 
 **Note:** Only the options listed below can be set via the config file or
 environment variables. Other configuration options live exclusively in the
@@ -75,6 +79,7 @@ filebrowser [flags]
   -p, --port string                                 port to listen on (default "8080")
       --redisCacheUrl string                        redis cache URL (for multi-instance deployments), e.g. redis://user:pass@host:port
   -r, --root string                                 root to prepend to relative paths (default ".")
+      --shutdownTimeout string                      time the requests in progress get to finish when the server is told to stop (default "8s")
       --socket string                               socket to listen to (cannot be used with address, port, cert nor key flags)
       --socketPerm uint32                           unix socket file permissions (default 438)
       --tokenExpirationTime string                  user session timeout (default "2h")

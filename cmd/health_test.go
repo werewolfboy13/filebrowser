@@ -268,6 +268,23 @@ func TestHealthCommand(t *testing.T) {
 		}
 	})
 
+	// The health check runs in the container of a server that may have been
+	// started with --config: the file that FB_CONFIG names, which the check
+	// gets too, was then never created. The check goes on without it, where
+	// the server itself would refuse to start.
+	t.Run("goes on without the config file that FB_CONFIG names", func(t *testing.T) {
+		srv := httptest.NewServer(healthyHandler("/health"))
+		defer srv.Close()
+		host, port := hostAndPort(t, srv)
+		t.Setenv(envConfig, filepath.Join(t.TempDir(), "missing.json"))
+		t.Setenv("FB_ADDRESS", host)
+		t.Setenv("FB_PORT", port)
+
+		if err := runHealthTestCmd(); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
 	// The server answers 200 with the web client's page for every path it
 	// does not know, so a check that only looked at the status passed
 	// against anything that was not the health endpoint.
@@ -312,13 +329,18 @@ func TestHealthCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("fails on a redirect, even to a page that answers 200", func(t *testing.T) {
+	// A redirect means that the request did not reach the health endpoint,
+	// wherever it leads. Here it leads to the answer of a healthy server,
+	// which a check that followed it would take.
+	t.Run("fails on a redirect, and does not follow it", func(t *testing.T) {
+		followed := make(chan struct{}, 1)
 		mux := http.NewServeMux()
 		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/elsewhere", http.StatusMovedPermanently)
 		})
 		mux.HandleFunc("/elsewhere", func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
+			followed <- struct{}{}
+			_, _ = w.Write([]byte(`{"status":"OK"}`))
 		})
 		srv := httptest.NewServer(mux)
 		defer srv.Close()
@@ -326,6 +348,11 @@ func TestHealthCommand(t *testing.T) {
 
 		if err := runHealthTestCmd("--address", host, "--port", port); err == nil {
 			t.Error("expected an error")
+		}
+		select {
+		case <-followed:
+			t.Error("the redirect was followed")
+		default:
 		}
 	})
 

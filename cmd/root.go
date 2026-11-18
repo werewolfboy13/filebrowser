@@ -91,6 +91,7 @@ func init() {
 	flags.String("cacheDir", "", "file cache directory (disabled if empty)")
 	flags.String("redisCacheUrl", "", "redis cache URL (for multi-instance deployments), e.g. redis://user:pass@host:port")
 	flags.Int("imageProcessors", 4, "image processors count")
+	flags.String("shutdownTimeout", shutdownTimeout.String(), "time the requests in progress get to finish when the server is told to stop")
 	addServerFlags(flags)
 }
 
@@ -145,9 +146,13 @@ following directories:
 - $HOME/
 - /etc/filebrowser/
 
-If FB_CONFIG names a file that does not exist and FB_CONFIG_TEMPLATE names
-one that does, the template is copied to the FB_CONFIG path first. The Docker
-image uses this to create its default configuration on the first start.
+If FB_CONFIG names a file that does not exist, or that is empty, and
+FB_CONFIG_TEMPLATE names a file with the same extension, the template is
+copied to the FB_CONFIG path first. The Docker image uses this to create its
+default configuration on the first start.
+
+A file that "--config" or FB_CONFIG names has to be there and readable by
+then: File Browser does not start without it.
 
 **Note:** Only the options listed below can be set via the config file or
 environment variables. Other configuration options live exclusively in the
@@ -180,6 +185,13 @@ user created with the credentials from options "username" and "password".`,
 		}
 		imageService := img.New(imgWorkersCount)
 
+		// Now, so that a value that cannot be read stops the start, and not
+		// the stop.
+		stopTimeout, err := shutdownTimeoutFrom(v)
+		if err != nil {
+			return err
+		}
+
 		var fileCache diskcache.Interface = diskcache.NewNoOp()
 		cacheDir := v.GetString("cacheDir")
 		if cacheDir != "" {
@@ -201,10 +213,9 @@ user created with the credentials from options "username" and "password".`,
 		}
 		setupLog(server.Log)
 
-		log.Println("NOTICE: File Browser is being wound down.")
-		log.Println("NOTICE: The project is archived on 2026-09-01, after which there will be no")
-		log.Println("NOTICE: further releases and no security fixes. Known unfixed issues are at")
-		log.Println("NOTICE: https://github.com/filebrowser/filebrowser/security/advisories")
+		log.Println("NOTICE: This is a community-maintained fork of File Browser, whose original")
+		log.Println("NOTICE: project is archived. Issues and security reports for this build go to")
+		log.Println("NOTICE: https://github.com/werewolfboy13/filebrowser")
 
 		root, err := filepath.Abs(server.Root)
 		if err != nil {
@@ -287,7 +298,7 @@ user created with the credentials from options "username" and "password".`,
 		log.Println("Got signal:", sig)
 
 		// Returning, rather than exiting here, lets the database be closed.
-		shutdownServer(srv, shutdownTimeout)
+		shutdownServer(srv, stopTimeout)
 
 		return nil
 	}, storeOptions{allowsNoDatabase: true}),

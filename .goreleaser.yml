@@ -39,6 +39,9 @@ builds:
         goarch: arm
       - goos: freebsd
         goarch: arm
+      # Does not compile: gopsutil, which reads the disk usage, has no code for it
+      - goos: freebsd
+        goarch: riscv64
 
 archives:
   - name_template: "{{.Os}}-{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}-{{ .ProjectName }}"
@@ -56,4 +59,8 @@ release:
 # context that is the whole repository, where GoReleaser would give it a context with only the
 # binary it built. The release job of .github/workflows/ci.yaml builds and pushes the image.
 
-# No Homebrew cask is published: the tap it went to belongs to the File Browser project.
+# The release is created in the repository that the tag was pushed to, which GoReleaser reads from
+# the checkout. Nothing here names a repository or a homepage, so nothing here points at the
+# original project.
+
+# No Homebrew cask is published: the tap it went to belongs to the original File Browser project.

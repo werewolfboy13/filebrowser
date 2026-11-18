@@ -1,10 +1,6 @@
-> [!WARNING]
-> 
-> **File Browser is archived on 2026-09-01**. The last planned release has already shipped. There will be no further releases, bug fixes, or security fixes.   
-
 > [!NOTE]
 >
-> **This repository is a fork**, which continues from the last release of the archived project. Nothing here is published by the File Browser project. The `filebrowser/filebrowser` images on Docker Hub and the project's other downloads do not have the changes made here: this build has its own Docker image, which is built from this repository. See [Docker](#docker).
+> **This is a community-maintained fork of [File Browser](https://github.com/filebrowser/filebrowser).** It continues from v2.63.23, the last release of the original project, which was archived on 2026-09-01 and gets no further releases or fixes. Nothing here is published by that project, and its downloads, such as the `filebrowser/filebrowser` images on Docker Hub, do not have the changes made here. The fork lives at [github.com/werewolfboy13/filebrowser](https://github.com/werewolfboy13/filebrowser): its issues, its releases and its security reports belong there.
 
 <p align="center">
   <img src="./branding/banner.png" width="550"/>
@@ -12,42 +8,46 @@
 
 File Browser provides a file managing interface within a specified directory and it can be used to upload, delete, preview and edit your files. It is a **create-your-own-cloud**-kind of software where you can just install it on your server, direct it to a path and access your files through a nice web interface.
 
-**Background:** [Goodbye File Browser, for Real This Time](https://hacdias.com/2026/07/28/filebrowser/), July 2026.
+**Background:** [Goodbye File Browser, for Real This Time](https://hacdias.com/2026/07/28/filebrowser/), July 2026, by the author of the original project.
 
 ## Security
 
-Published advisories are listed under [security advisories](https://github.com/filebrowser/filebrowser/security/advisories),
-and reporting instructions are in [SECURITY.md](SECURITY.md). Two known issue classes
-remain unaddressed and will not be fixed:
+Report a vulnerability privately, as [SECURITY.md](SECURITY.md) describes, and not in a public issue. The [advisories of the original project](https://github.com/filebrowser/filebrowser/security/advisories) stay where they are: they describe that project's releases, and not everything in them still holds for this fork.
 
-- **Command execution, runner, and hooks.** This feature is plagued with vulnerabilities across many published advisories, and would need a full rewrite to be made safe. It is disabled by default; if you re-enable it with `--disable-exec=false`, treat the ability to run commands as equivalent to shell access on the host. Background: [#5199](https://github.com/filebrowser/filebrowser/issues/5199).
-- **Session and JWT handling.** Sessions are self-contained JWTs rather than server-side identifiers, so they cannot be revoked, which means that logout, password changes, and renewal leave previously issued tokens valid until they expire, and the same refresh token can be redeemed repeatedly. Assume a leaked token is valid until expiry. Background: [#5216](https://github.com/filebrowser/filebrowser/issues/5216).
+Two classes of issue are known and not fixed. [SECURITY.md](SECURITY.md#known-limitations) has these and the other known limitations:
 
-If you keep running File Browser, treat it as unmaintained software:
+- **Command execution, runner, and hooks.** The original project published many advisories about this feature, and it would need a full rewrite to be made safe. It is disabled by default; if you re-enable it with `--disableExec=false`, treat the ability to run commands as equivalent to shell access on the host. Background: [#5199](https://github.com/filebrowser/filebrowser/issues/5199) of the original project.
+- **Session and JWT handling.** Sessions are self-contained JWTs rather than server-side identifiers. This fork ends all of a user's sessions when the user's password, permissions or scope change, but logging out does not end one on the server. Assume a leaked token is valid until it expires. Background: [#5216](https://github.com/filebrowser/filebrowser/issues/5216) of the original project.
+
+However you run File Browser:
 
 - **Do not expose it directly to the internet.** Put it behind a reverse proxy that terminates TLS and performs its own authentication.
-- **Keep the command runner disabled.** It is off by default, so leave it off. See [#5199](https://github.com/filebrowser/filebrowser/issues/5199) and [`docs/command-execution.md`](docs/command-execution.md).
+- **Keep the command runner disabled.** It is off by default, so leave it off. See [`docs/command-execution.md`](docs/command-execution.md).
 - **Run it unprivileged, inside a container**, with only the directory you intend to serve mounted into it.
 
 ## Docker
 
-The image is built from the [Dockerfile](Dockerfile) in this repository, on [Docker Hardened Images](https://docs.docker.com/dhi/), which take a `docker login dhi.io` to pull:
+A released version of this fork has its image at `ghcr.io/werewolfboy13/filebrowser`. There is no release yet, and anything newer than a release is built from the [Dockerfile](Dockerfile) in this repository, on [Docker Hardened Images](https://docs.docker.com/dhi/), which take a `docker login dhi.io` to pull:
 
 ```sh
 docker login dhi.io
 docker compose up --build
 ```
 
-That builds the image, runs the tests of the client and the server in the build, and serves File Browser on `http://127.0.0.1:8000`. The password of the user `admin` is in the log of the first start (`docker compose logs`). Or without Compose:
+That builds the image, runs the tests of the client and the server in the build, and serves File Browser on `http://127.0.0.1:8000`. The password of the user `admin` is in the log of the first start (`docker compose logs`).
+
+`docker compose up --build` builds on the base images that are already on the machine, and does not look for newer ones. To rebuild with their latest security patches, run `docker compose build --pull` first.
+
+Or without Compose:
 
 ```sh
 docker build --pull -t filebrowser:local .
-docker run -v filebrowser_data:/srv -v filebrowser_database:/database -v filebrowser_config:/config -p 8080:80 filebrowser:local
+docker run --stop-timeout 15 -v filebrowser_data:/srv -v filebrowser_database:/database -v filebrowser_config:/config -p 8080:80 filebrowser:local
 ```
 
 What to know about the image:
 
-- It holds the server and nothing else: no shell, no init system, no `PUID` and `PGID`. The server runs as the user 1000, or as the one that `--user` names.
+- It holds the server and nothing else: no shell, no init system, no `PUID` and `PGID`. The server runs as the user 1000, or as the one that `--user` names, to whom every mount, volumes included, then has to belong already: see [User and Permissions](docs/installation.md#user-and-permissions).
 - It needs no capability and no writable root filesystem, and [`compose.yaml`](compose.yaml) runs it that way.
 - It is configured with `FB_` environment variables, such as `FB_PORT`, or with `/config/settings.json`, which the server creates on its first start.
 - It checks its own health with `filebrowser health`. A health check from a Compose file that was written for the original image, with `/healthcheck.sh` or a shell command, has to go.
@@ -60,7 +60,21 @@ What to know about the image:
 
 Documentation on how to install, configure, and build this project lives in [`docs`](docs) in this repository.
 
-[CONTRIBUTING.md](CONTRIBUTING.md) documents how to build and develop the project, which remains useful to anyone forking it.
+[CONTRIBUTING.md](CONTRIBUTING.md) documents how to build and develop it.
+
+## Publishing Checklist
+
+The repository `github.com/werewolfboy13/filebrowser` does not exist yet, and the files here are already written for it. This is what is left to do by hand, in this order:
+
+1. **Create the repository** on GitHub, public, under the name `filebrowser`. Under another name, the addresses in the README, [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md), the templates in [`.github`](.github) and the notice that the server logs at its start have to follow.
+2. **Push the tags of the original project without starting its workflow.** Every tag up to `v2.63.23` carries the original project's workflow, which releases on any pushed `v*` tag, with nothing that checks where it runs. GitHub runs the workflow of the commit that a tag points to, and Actions is enabled in a new repository from the start. So either disable Actions in the repository's settings until the tags are there, or push all the tags in one push: according to GitHub's documentation, nothing is started when more than three tags are pushed at once. Pushed one by one with Actions enabled, each tag would start that workflow. It should stop early there, for lack of the `GH_PAT` secret it uses. None of this was tried.
+3. **Set the repository variable `IMAGE_NAME`** (Settings, Secrets and variables, Actions, Variables) to `ghcr.io/werewolfboy13/filebrowser`. An image on GitHub's registry is pushed with the release job's own token, so no credential for pushing to Docker Hub is needed. Without the variable, a tag releases nothing.
+4. **Set the secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`**, of any Docker account. The base images come from `dhi.io`, which takes a login to pull from. Without them, the image is not built on pushes and pull requests, and the release job fails at its login.
+5. **Enable private vulnerability reporting** in the repository's security settings. [SECURITY.md](SECURITY.md) and the issue templates send reports there.
+6. **Choose the fork's first version.** Until there is a tag of its own, a build calls itself by the original project's last tag and what came after it, such as `2.63.23-162-g1dbcd934`. Make the first tag a prerelease, such as `v3.0.0-rc.1`: the release job has never run, and a prerelease moves neither `latest` nor the major tag of the image. After the first push, check that the image's package is public.
+7. **Check the branch that CI runs on.** Pushes are built on `master` and `modernize`. Another default branch has to be added to [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml), in `on.push.branches` and in the condition of the `docker` job.
+8. **Replace the contact in [CODE-OF-CONDUCT.md](CODE-OF-CONDUCT.md)**, which is still the e-mail address of the original project's author.
+9. **After the first release, remove what it makes untrue:** the sentences that say there is no release yet, here under [Docker](#docker) and twice in [`docs/installation.md`](docs/installation.md), and this checklist.
 
 ## License
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"testing"
 	"time"
@@ -59,7 +60,7 @@ func serveForShutdownTest(t *testing.T, handler http.Handler) (srv *http.Server,
 
 // A transfer that was still running when the time to stop ran out made the
 // server exit on the spot, with an error and without closing the database.
-// Docker's own limit is the same 10 seconds, so more often the server was
+// Docker's own limit is 10 seconds at most, so more often the server was
 // killed instead. It has to cut the transfer off and return.
 func TestShutdownServerCutsOffARequestThatDoesNotFinish(t *testing.T) {
 	// It made the server exit, and would do the same to the tests.
@@ -160,11 +161,78 @@ func TestShutdownServerWaitsForARequestThatFinishes(t *testing.T) {
 	}
 }
 
-// The server must give up before Docker does: `docker stop` kills a
-// container after 10 seconds unless it is told otherwise.
-func TestShutdownTimeoutIsBelowDockersDefault(t *testing.T) {
-	const dockerStopTimeout = 10 * time.Second
-	if shutdownTimeout >= dockerStopTimeout {
-		t.Errorf("shutdownTimeout = %s, want less than Docker's %s", shutdownTimeout, dockerStopTimeout)
+// The server must give up before Docker does. How long Docker waits is not
+// the same everywhere (10 seconds according to its documentation, about 3
+// were measured with Docker Desktop), so compose.yaml says how long: more
+// than the server takes when it is not told otherwise.
+func TestShutdownTimeoutIsBelowTheStopGracePeriodOfCompose(t *testing.T) {
+	compose, err := os.ReadFile(filepath.Join("..", "compose.yaml"))
+	if err != nil {
+		// compose.yaml is not among the files that the image is built from,
+		// where these tests run too.
+		t.Skipf("no compose.yaml to compare with: %v", err)
+	}
+
+	match := regexp.MustCompile(`(?m)^\s*stop_grace_period:\s*(\S+)`).FindSubmatch(compose)
+	if match == nil {
+		t.Fatal("compose.yaml has no stop_grace_period")
+	}
+	gracePeriod, err := time.ParseDuration(string(match[1]))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if shutdownTimeout >= gracePeriod {
+		t.Errorf("shutdownTimeout = %s, want less than the stop_grace_period of %s", shutdownTimeout, gracePeriod)
+	}
+}
+
+// The time can be set, for where the server is given less to stop than it
+// takes by default, or more.
+func TestShutdownTimeoutFrom(t *testing.T) {
+	// Not the configuration of the machine that runs the tests.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(envConfig, "")
+
+	if rootCmd.Flags().Lookup("shutdownTimeout") == nil {
+		t.Fatal("the server has no --shutdownTimeout flag")
+	}
+
+	for value, want := range map[string]time.Duration{
+		"":      shutdownTimeout,
+		"2s":    2 * time.Second,
+		"1m30s": 90 * time.Second,
+		"0s":    0,
+	} {
+		t.Run("FB_SHUTDOWN_TIMEOUT="+value, func(t *testing.T) {
+			t.Setenv("FB_SHUTDOWN_TIMEOUT", value)
+
+			v, err := newViper(rootCmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := shutdownTimeoutFrom(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Errorf("timeout = %s, want %s", got, want)
+			}
+		})
+	}
+
+	// A number without a unit would be nanoseconds, which nobody means.
+	for _, value := range []string{"15", "-1s", "soon"} {
+		t.Run("FB_SHUTDOWN_TIMEOUT="+value+" is refused", func(t *testing.T) {
+			t.Setenv("FB_SHUTDOWN_TIMEOUT", value)
+
+			v, err := newViper(rootCmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := shutdownTimeoutFrom(v); err == nil {
+				t.Errorf("timeout = %s, want an error", got)
+			}
+		})
 	}
 }
