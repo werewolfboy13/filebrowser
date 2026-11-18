@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -171,7 +172,12 @@ func TestBodyLimitLeavesOrdinaryRequestsAlone(t *testing.T) {
 // so that the answer reaches the client on a connection that stays usable;
 // the limit is on how long nothing arrives, not on how long the rest takes.
 func TestRejectedChunkSentSlowlyIsStillAnswered(t *testing.T) {
-	shortBodyTimeouts(t)
+	// A limit that the pauses between the pieces stay well below, also on a
+	// machine that is busy, and that the chunk as a whole exceeds.
+	limit := leftoverBodyTimeout
+	leftoverBodyTimeout = time.Second
+	t.Cleanup(func() { leftoverBodyTimeout = limit })
+
 	e := newFullEnv(t)
 	tok := e.login("bob", fullEnvUserPassword)
 
@@ -180,15 +186,15 @@ func TestRejectedChunkSentSlowlyIsStillAnswered(t *testing.T) {
 		t.Fatalf("create = %d", code)
 	}
 
-	// The offset is wrong, and the chunk takes a second to arrive: three
-	// times the limit.
+	// The offset is wrong, and the chunk takes a second and a half to
+	// arrive.
 	pr, pw := io.Pipe()
 	go func() {
 		// The body ends with its last piece: a client that is answered
 		// before it has finished sending does not use the connection again,
 		// whatever the server does.
 		for i := 0; i < 10; i++ {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(150 * time.Millisecond)
 			_, _ = pw.Write([]byte("0123456789"))
 		}
 		pw.Close()
@@ -213,5 +219,52 @@ func TestRejectedChunkSentSlowlyIsStillAnswered(t *testing.T) {
 	})
 	if code != http.StatusNoContent || !reused {
 		t.Errorf("chunk after the rejected one = %d %q, on the same connection: %v", code, body, reused)
+	}
+}
+
+// The health check is served without the wrapper the other routes have, and
+// the methods that can carry a body are left alone before a request is
+// handled, for the sake of uploads. So a POST to it, which needs no session,
+// was answered only once its body had arrived: never, if the client chose
+// so. The static files and the application page, which have no use for a
+// body either, are covered here with it.
+func TestStalledBodiesOnRoutesWithoutABodyAreCutOff(t *testing.T) {
+	shortBodyTimeouts(t)
+	e := newFullEnvOpts(t, fullEnvOptions{assets: fstest.MapFS{
+		// Larger than the server buffers before it sends a response: the
+		// wait for the body then happens while the page is being written.
+		"public/index.html": &fstest.MapFile{Data: []byte("<html>" + strings.Repeat("<!-- padding -->", 1024) + "</html>")},
+		"static/app.js":     &fstest.MapFile{Data: []byte(strings.Repeat("// padding\n", 2048))},
+	}})
+
+	for _, method := range []string{"POST", "PUT", "PATCH", "DELETE"} {
+		for name, path := range map[string]string{
+			"health check":     "/health",
+			"application page": "/",
+			"page of a file":   "/files/some/where",
+			"static file":      "/static/app.js",
+			"no such static":   "/static/nothing.js",
+		} {
+			t.Run(method+" "+name, func(t *testing.T) {
+				head := method + " " + path + " HTTP/1.1\r\nHost: x\r\nContent-Length: 64\r\n\r\n"
+				start := time.Now()
+				status, closed := stalledRequest(t, e, head, "abcd", 3*time.Second)
+				if status == "" {
+					t.Fatalf("no answer within %s", time.Since(start).Round(time.Millisecond))
+				}
+				if !closed {
+					t.Errorf("answered %q but kept the stalled connection open", status)
+				}
+			})
+		}
+	}
+
+	// With the body sent, they answer as they did: the health check to
+	// every method, the others to GET alone.
+	for path, want := range map[string]int{"/health": http.StatusOK, "/": http.StatusNotFound, "/static/app.js": http.StatusNotFound} {
+		code, _, body := e.do(http.MethodPost, path, "", strings.NewReader("a body nobody asked for"), nil)
+		if code != want {
+			t.Errorf("POST %s with its body = %d %.40q, want %d", path, code, body, want)
+		}
 	}
 }
