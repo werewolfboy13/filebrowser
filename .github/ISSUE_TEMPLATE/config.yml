@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: GitHub Discussions
-    url: https://github.com/filebrowser/filebrowser/discussions
-    about: Please ask questions and discuss features here.
+  - name: Report a vulnerability
+    url: https://github.com/werewolfboy13/filebrowser/security/advisories/new
+    about: Please report a vulnerability privately here, and not in an issue.
