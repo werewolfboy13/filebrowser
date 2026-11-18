@@ -51,6 +51,20 @@ func TestCopyOfALinkToADirectoryChecksWhatIsBehindIt(t *testing.T) {
 		t.Errorf("the denied file is served from the copy: %q", body)
 	}
 
+	// A move is checked like a copy: it copies, link followed, when it
+	// cannot rename (across a mount point inside the scope). So the link to
+	// that directory cannot be renamed either, although renaming it would
+	// usually only move the link.
+	if code, body := patch("/alias", "rename", "/alias-moved"); code != http.StatusForbidden {
+		t.Errorf("rename of a link to that directory = %d %q, want 403", code, body)
+	}
+	if code, body := patch("/plain-alias", "rename", "/plain-moved"); code != http.StatusOK {
+		t.Errorf("rename of a link to a directory without denied files = %d %q", code, body)
+	}
+	if code, body := patch("/plain-moved", "rename", "/plain-alias"); code != http.StatusOK {
+		t.Errorf("rename back = %d %q", code, body)
+	}
+
 	// Links that lead to nothing denied are copied as before: the directory
 	// behind one, and the file behind another.
 	if code, body := patch("/plain-alias", "copy", "/copy-of-plain"); code != http.StatusOK {
