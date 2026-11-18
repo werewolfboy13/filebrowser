@@ -35,6 +35,22 @@ func MatchHidden(path string) bool {
 // in case name the same file, so a rule written for one spelling has to cover
 // the others or it can be trivially evaded.
 //
+// A rule that denies is compared more broadly than one that allows. The
+// filesystem decides which spellings name the same file, and it is not known
+// here exactly which it takes for one: so a deny rule covers every spelling
+// that any filesystem could (see CanonicalName), and an allow rule
+// only the ones it always covered. Both err on the side of denying.
+//
+//   - A deny rule ignores how a name is composed ("é" as one code point or as
+//     "e" and a combining accent), whatever fold says: there are filesystems
+//     that ignore it and still tell upper from lower case. With fold it
+//     ignores case in full, as such a filesystem does: "STRASSE" for
+//     "straße", "files" for "ﬁles".
+//   - An allow rule matches its path as written, and with fold the lower-cased
+//     path, as every rule did before deny rules were widened. An allow rule
+//     that matched a path the filesystem keeps apart from its own would open
+//     a file nobody allowed.
+//
 // Regex rules are never folded. An admin-authored pattern means what it says,
 // and lowering its input would silently change it; use (?i) for those.
 //
@@ -50,12 +66,26 @@ func (r *Rule) Matches(path string, fold bool) bool {
 		return re.MatchString(path)
 	}
 
-	rulePath := r.Path
 	if fold {
-		path = strings.ToLower(path)
-		rulePath = strings.ToLower(rulePath)
+		if isAtOrBelow(strings.ToLower(path), strings.ToLower(r.Path)) {
+			return true
+		}
+	} else if isAtOrBelow(path, r.Path) {
+		return true
 	}
 
+	if r.Allow {
+		return false
+	}
+
+	// In addition to the comparison above, never instead of it: the two do
+	// not fold every letter alike, and a deny rule must not match less than
+	// it did.
+	return isAtOrBelow(CanonicalName(path, fold), CanonicalName(r.Path, fold))
+}
+
+// isAtOrBelow reports whether path is rulePath or lies below it.
+func isAtOrBelow(path, rulePath string) bool {
 	if path == rulePath {
 		return true
 	}

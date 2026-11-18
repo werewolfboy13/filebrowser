@@ -677,7 +677,7 @@ func tusDeleteHandler(cache UploadCache) handleFunc {
 		// regular file under the name tusTempPath gives it. That name cannot
 		// be given to anything through the API (see data.Check), so this
 		// never removes a file somebody stored.
-		if temp && fileutils.IsTempName(gopath.Base(writePath)) {
+		if temp && fileutils.IsOwnTempName(gopath.Base(writePath)) {
 			err = d.user.Fs.Remove(writePath)
 			if err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return errToStatus(err), err
