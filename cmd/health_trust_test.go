@@ -40,6 +40,10 @@ func TestHealthIgnoresARecordItCannotTrust(t *testing.T) {
 	t.Setenv("FB_PORT", "8080")
 	const fromEnvironment = "http://127.0.0.1:8080/health"
 
+	// The name in the records below is another machine's, and is not looked
+	// up on the network.
+	stubHostLookup(t, map[string][]string{"files.example.net": {"192.0.2.1"}})
+
 	// A record of this process, which is as good as a record gets.
 	trusted := listenRecord{
 		PID:       os.Getpid(),

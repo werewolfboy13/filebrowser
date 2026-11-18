@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/filebrowser/filebrowser/v2/settings"
 )
@@ -26,6 +28,22 @@ const (
 	// listenRecordMaxSize is far more than a record needs. It keeps the
 	// health command from reading a file that is something else.
 	listenRecordMaxSize = 64 * 1024
+
+	// hostLookupTimeout bounds the lookup of a recorded host name. It comes
+	// on top of healthTimeout, and the two together stay below the timeout
+	// of the Docker image's HEALTHCHECK. The name of a container is in its
+	// /etc/hosts, which takes no time to read.
+	hostLookupTimeout = 500 * time.Millisecond
+)
+
+// How the addresses of a host name and of this machine's interfaces are
+// looked up. They are variables so that the tests can do without the network
+// and without the interfaces of the machine they run on.
+var (
+	lookupHostIPs = func(ctx context.Context, host string) ([]net.IP, error) {
+		return net.DefaultResolver.LookupIP(ctx, "ip", host)
+	}
+	interfaceAddrs = net.InterfaceAddrs
 )
 
 // listenRecord is what the running server writes down for the health
@@ -219,23 +237,46 @@ func readListenRecord(path string) (*listenRecord, bool) {
 
 // isLocalAddress reports whether address, as a server is configured with it,
 // is one of this machine: none at all (every address), localhost, a loopback
-// address, or an address of one of its interfaces. A server can listen on no
-// other, so a record that names another did not come from one.
+// address, an address of one of its interfaces, or a host name that stands
+// for one of those. A server can listen on no other, so a record that names
+// another did not come from one.
 func isLocalAddress(address string) bool {
 	host := strings.TrimSuffix(strings.TrimPrefix(address, "["), "]")
 	if host == "" || strings.EqualFold(host, "localhost") {
 		return true
 	}
 
-	ip := net.ParseIP(host)
-	if ip == nil {
+	if ip := net.ParseIP(host); ip != nil {
+		return isLocalIP(ip)
+	}
+
+	// A host name, such as the container's own with `--address <name>`. The
+	// server listens on an address of that name, so one of them is this
+	// machine's. A name that stands for other machines only, or for none,
+	// is no more local than their addresses are.
+	ctx, cancel := context.WithTimeout(context.Background(), hostLookupTimeout)
+	defer cancel()
+
+	ips, err := lookupHostIPs(ctx, host)
+	if err != nil {
 		return false
 	}
+	for _, ip := range ips {
+		if isLocalIP(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// isLocalIP reports whether ip is an address of this machine: every address,
+// a loopback address, or an address of one of its interfaces.
+func isLocalIP(ip net.IP) bool {
 	if ip.IsLoopback() || ip.IsUnspecified() {
 		return true
 	}
 
-	addrs, err := net.InterfaceAddrs()
+	addrs, err := interfaceAddrs()
 	if err != nil {
 		return false
 	}

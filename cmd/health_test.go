@@ -503,4 +503,10 @@ func TestHealthTimeoutIsBelowTheImagesHealthcheckTimeout(t *testing.T) {
 	if healthTimeout >= dockerTimeout {
 		t.Errorf("healthTimeout = %s, want less than the HEALTHCHECK's %s", healthTimeout, dockerTimeout)
 	}
+
+	// Before its request, the command may look up the name of the host in
+	// the server's record, which takes time of its own.
+	if longest := hostLookupTimeout + healthTimeout; longest >= dockerTimeout {
+		t.Errorf("hostLookupTimeout + healthTimeout = %s, want less than the HEALTHCHECK's %s", longest, dockerTimeout)
+	}
 }
