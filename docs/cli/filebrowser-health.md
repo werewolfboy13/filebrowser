@@ -7,7 +7,8 @@ Check that a running File Browser answers
 Requests /health from a running File Browser and fails when the
 answer is not 200 OK with the status "OK" in it. It is meant for health
 checks, such as the one of the Docker image, where there is no shell and no
-HTTP client to do it with. It gives up after 2 seconds.
+HTTP client to do it with. It gives up after 2 seconds, or after 2.5 when
+the server listens on a host name, which is looked up first.
 
 Where the server listens is looked up in this order:
 
@@ -19,6 +20,10 @@ Where the server listens is looked up in this order:
   started, and removes the file when it stops. That is where it really
   listens, whether that came from its flags, the environment, the
   configuration file or the database. The Docker image sets the variable.
+  The file is only used when it belongs to the user who runs this command
+  or to the user the server runs as, and when it names this machine or the
+  address in the configuration. When it names this machine by a host name,
+  only the addresses of that name that are this machine's are connected to.
 - The FB_ environment variables and the configuration file.
 
 The database is not read, because the running server holds it locked. So
