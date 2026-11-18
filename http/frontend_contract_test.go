@@ -10,8 +10,8 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/filebrowser/filebrowser/v2/auth"
-	"github.com/filebrowser/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v2/auth"
+	"github.com/werewolfboy13/filebrowser/v2/settings"
 )
 
 // The user requests of the web interface, with the exact "which" lists it

@@ -14,13 +14,13 @@ import (
 
 	"github.com/asdine/storm/v3"
 
-	"github.com/filebrowser/filebrowser/v2/auth"
-	"github.com/filebrowser/filebrowser/v2/diskcache"
-	"github.com/filebrowser/filebrowser/v2/img"
-	"github.com/filebrowser/filebrowser/v2/settings"
-	"github.com/filebrowser/filebrowser/v2/storage"
-	"github.com/filebrowser/filebrowser/v2/storage/bolt"
-	"github.com/filebrowser/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v2/auth"
+	"github.com/werewolfboy13/filebrowser/v2/diskcache"
+	"github.com/werewolfboy13/filebrowser/v2/img"
+	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v2/storage"
+	"github.com/werewolfboy13/filebrowser/v2/storage/bolt"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 const (

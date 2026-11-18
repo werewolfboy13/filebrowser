@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/filebrowser/filebrowser/v2/diskcache"
-	"github.com/filebrowser/filebrowser/v2/fileutils"
-	"github.com/filebrowser/filebrowser/v2/settings"
-	"github.com/filebrowser/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v2/diskcache"
+	"github.com/werewolfboy13/filebrowser/v2/fileutils"
+	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 // failingBody yields some data and then fails, like the body of a request

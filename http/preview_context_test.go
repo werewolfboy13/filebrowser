@@ -19,10 +19,10 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/filebrowser/filebrowser/v2/diskcache"
-	"github.com/filebrowser/filebrowser/v2/img"
-	"github.com/filebrowser/filebrowser/v2/settings"
-	"github.com/filebrowser/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v2/diskcache"
+	"github.com/werewolfboy13/filebrowser/v2/img"
+	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 // recordingImgService records the context Resize was called with.

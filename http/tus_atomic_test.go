@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/filebrowser/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 // recordingUploadCache is an upload cache that keeps the removal callback of

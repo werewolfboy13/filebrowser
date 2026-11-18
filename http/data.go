@@ -11,13 +11,13 @@ import (
 
 	"github.com/tomasen/realip"
 
-	"github.com/filebrowser/filebrowser/v2/files"
-	"github.com/filebrowser/filebrowser/v2/fileutils"
-	"github.com/filebrowser/filebrowser/v2/rules"
-	"github.com/filebrowser/filebrowser/v2/runner"
-	"github.com/filebrowser/filebrowser/v2/settings"
-	"github.com/filebrowser/filebrowser/v2/storage"
-	"github.com/filebrowser/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v2/files"
+	"github.com/werewolfboy13/filebrowser/v2/fileutils"
+	"github.com/werewolfboy13/filebrowser/v2/rules"
+	"github.com/werewolfboy13/filebrowser/v2/runner"
+	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v2/storage"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 type handleFunc func(w http.ResponseWriter, r *http.Request, d *data) (int, error)

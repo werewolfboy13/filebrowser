@@ -16,9 +16,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	fbhttp "github.com/filebrowser/filebrowser/v2/http"
-	"github.com/filebrowser/filebrowser/v2/settings"
-	"github.com/filebrowser/filebrowser/v2/storage"
+	fbhttp "github.com/werewolfboy13/filebrowser/v2/http"
+	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v2/storage"
 )
 
 // newHealthTestCmd returns a command that runs the health check with its own

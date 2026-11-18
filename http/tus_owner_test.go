@@ -10,7 +10,7 @@ import (
 
 	"github.com/jellydator/ttlcache/v3"
 
-	"github.com/filebrowser/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 // tusOwnerEnv is an instance with three users who see the same directory:

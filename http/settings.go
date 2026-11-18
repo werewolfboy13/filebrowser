@@ -3,8 +3,8 @@ package fbhttp
 import (
 	"net/http"
 
-	"github.com/filebrowser/filebrowser/v2/rules"
-	"github.com/filebrowser/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v2/rules"
+	"github.com/werewolfboy13/filebrowser/v2/settings"
 )
 
 type settingsData struct {

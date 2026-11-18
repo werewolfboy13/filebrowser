@@ -9,9 +9,9 @@ import (
 
 	"github.com/asdine/storm/v3"
 
-	"github.com/filebrowser/filebrowser/v2/settings"
-	"github.com/filebrowser/filebrowser/v2/storage/bolt"
-	"github.com/filebrowser/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v2/storage/bolt"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 // "users import --replace" deletes every existing user after writing

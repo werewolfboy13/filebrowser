@@ -1,4 +1,4 @@
-module github.com/filebrowser/filebrowser/v2
+module github.com/werewolfboy13/filebrowser/v2
 
 go 1.27.0
 

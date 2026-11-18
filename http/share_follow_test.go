@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/filebrowser/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 func (e *fullEnv) rename(token, src, dst string) int {

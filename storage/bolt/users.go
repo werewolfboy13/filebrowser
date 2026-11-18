@@ -10,8 +10,8 @@ import (
 	"github.com/asdine/storm/v3/q"
 	bolt "go.etcd.io/bbolt"
 
-	fberrors "github.com/filebrowser/filebrowser/v2/errors"
-	"github.com/filebrowser/filebrowser/v2/users"
+	fberrors "github.com/werewolfboy13/filebrowser/v2/errors"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 type usersBackend struct {

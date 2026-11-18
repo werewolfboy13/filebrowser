@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"github.com/asdine/storm/v3"
-	"github.com/filebrowser/filebrowser/v2/files"
-	"github.com/filebrowser/filebrowser/v2/rules"
-	"github.com/filebrowser/filebrowser/v2/settings"
-	"github.com/filebrowser/filebrowser/v2/share"
-	"github.com/filebrowser/filebrowser/v2/storage/bolt"
-	"github.com/filebrowser/filebrowser/v2/users"
 	"github.com/spf13/afero"
+	"github.com/werewolfboy13/filebrowser/v2/files"
+	"github.com/werewolfboy13/filebrowser/v2/rules"
+	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v2/share"
+	"github.com/werewolfboy13/filebrowser/v2/storage/bolt"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 func TestPublicShareHandlerAuthentication(t *testing.T) {

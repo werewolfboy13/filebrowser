@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/filebrowser/filebrowser/v2/files"
 	"github.com/spf13/afero"
+	"github.com/werewolfboy13/filebrowser/v2/files"
 )
 
 // TestUserCleanFs verifies that Clean builds the user filesystem according to the

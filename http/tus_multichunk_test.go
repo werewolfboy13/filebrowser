@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/filebrowser/filebrowser/v2/settings"
-	"github.com/filebrowser/filebrowser/v2/storage"
-	"github.com/filebrowser/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v2/storage"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 // newTusTestServer mounts the TUS handlers behind a real HTTP server, under the

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/filebrowser/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 func (e *fullEnv) putUser(token string, id uint, body string) (int, string) {

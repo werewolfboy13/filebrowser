@@ -71,7 +71,7 @@ ARG TARGETARCH
 
 # Build the binary. The commit is cut to seven characters, as in the released binaries.
 RUN --network=none \
-    package=github.com/filebrowser/filebrowser/v2/version && \
+    package=github.com/werewolfboy13/filebrowser/v2/version && \
     ldflags="-s -w" && \
     if [ -n "$VERSION" ]; then ldflags="$ldflags -X $package.Version=$VERSION"; fi && \
     if [ -n "$GIT_SHA" ]; then ldflags="$ldflags -X $package.CommitSHA=$(printf '%.7s' "$GIT_SHA")"; fi && \

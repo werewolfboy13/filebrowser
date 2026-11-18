@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/afero"
 
-	"github.com/filebrowser/filebrowser/v2/fileutils"
+	"github.com/werewolfboy13/filebrowser/v2/fileutils"
 )
 
 // The periodic look at the temporary files wrote down what it saw of each

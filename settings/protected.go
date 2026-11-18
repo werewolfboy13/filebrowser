@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/filebrowser/filebrowser/v2/rules"
+	"github.com/werewolfboy13/filebrowser/v2/rules"
 )
 
 // protectedPath is a file or directory of the server itself that lies inside

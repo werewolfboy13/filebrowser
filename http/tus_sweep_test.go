@@ -9,9 +9,9 @@ import (
 
 	"github.com/spf13/afero"
 
-	"github.com/filebrowser/filebrowser/v2/files"
-	"github.com/filebrowser/filebrowser/v2/fileutils"
-	"github.com/filebrowser/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v2/files"
+	"github.com/werewolfboy13/filebrowser/v2/fileutils"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 // redisLikeUploadCache keeps uploads the way the Redis cache does: it stores

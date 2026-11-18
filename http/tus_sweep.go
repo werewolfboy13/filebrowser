@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/afero"
 
-	"github.com/filebrowser/filebrowser/v2/fileutils"
+	"github.com/werewolfboy13/filebrowser/v2/fileutils"
 )
 
 const (

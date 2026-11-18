@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/filebrowser/filebrowser/v2/settings"
-	"github.com/filebrowser/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
 // Auther is the authentication interface.
