@@ -10,6 +10,43 @@ import i18n from "@/i18n";
 // TODO: make this into a user setting
 const UPLOADS_LIMIT = 5;
 
+// Largest file whose content is compared with the server's copy (see
+// isStoredCopy). WebCrypto has no incremental digest: the whole file is read
+// into one buffer, and the browser may copy its input while hashing, so up
+// to about twice the file's size is held for a moment. 64 MiB keeps that
+// well within what a phone can spare; a larger file is asked about instead,
+// which is always safe (it only costs a question, in a rare case).
+export const MAX_VERIFIED_SIZE = 64 * 1024 * 1024;
+
+// Whether the file at path is a copy of this file: one of its name and
+// size in the listing of its folder (whose information, unlike the file's
+// own, does not include the content of a text file), with the same SHA-256
+// as the server reports for it (?checksum=sha256, which needs the Download
+// permission). False (ask the user) when that cannot be told: a larger
+// file, no WebCrypto (plain http other than localhost), any error.
+export async function isStoredCopy(path: string, file: File) {
+  try {
+    const slash = path.lastIndexOf("/");
+    const name = decodeURIComponent(path.slice(slash + 1));
+    const folder = await api.fetch(path.slice(0, slash + 1));
+    const sameNameAndSize = (folder.items ?? []).some(
+      (item) => !item.isDir && item.name === name && item.size === file.size
+    );
+    if (!sameNameAndSize || file.size > MAX_VERIFIED_SIZE) return false;
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) return false;
+    const stored = await api.checksum(path, "sha256");
+    if (typeof stored !== "string") return false;
+    const digest = await subtle.digest("SHA-256", await file.arrayBuffer());
+    const local = Array.from(new Uint8Array(digest), (b) =>
+      b.toString(16).padStart(2, "0")
+    ).join("");
+    return stored.toLowerCase() === local;
+  } catch {
+    return false; // ask
+  }
+}
+
 const beforeUnload = (event: Event) => {
   event.preventDefault();
   // To remove >> is deprecated
@@ -150,7 +187,10 @@ export const useUploadStore = defineStore("upload", () => {
             // of its own, e.g. the 401 that ended the session
             if (started !== generation) return;
             if (isCreateConflict(err) && !upload.overwrite && upload.file) {
-              if (err.recreated && (await isStored(upload.path, upload.file))) {
+              if (
+                err.recreated &&
+                (await isStoredCopy(upload.path, upload.file))
+              ) {
                 succeeded = true;
                 return;
               }
@@ -231,25 +271,11 @@ export const useUploadStore = defineStore("upload", () => {
   // A 409 when tus created the upload again (see UploadError.recreated)
   // can be about the file this upload stored: the answer to its final
   // PATCH was lost, tus resumed, found the upload gone because it was
-  // completed, and created it anew. A file of its name and size at the
-  // destination is taken to be that file. Only for such a re-create: on
-  // first creating the upload, or creating it again before its final
-  // PATCH went out (or after that was refused), a file of the same size
-  // there is another file.
-  // The listing of the folder, not the file itself, whose information
-  // includes the content of a text file.
-  const isStored = async (path: string, file: File) => {
-    try {
-      const slash = path.lastIndexOf("/");
-      const name = decodeURIComponent(path.slice(slash + 1));
-      const folder = await api.fetch(path.slice(0, slash + 1));
-      return (folder.items ?? []).some(
-        (item) => !item.isDir && item.name === name && item.size === file.size
-      );
-    } catch {
-      return false; // ask
-    }
-  };
+  // completed, and created it anew. A copy of this file at the destination
+  // (isStoredCopy: same name, size and content) is taken to be that file.
+  // Only for such a re-create: on first creating the upload, or creating
+  // it again before its final PATCH went out (or after that was refused),
+  // a file there is another file.
 
   const askReplace = (upload: Upload, file: File) => {
     conflicts.push({

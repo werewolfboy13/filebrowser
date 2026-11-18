@@ -28,10 +28,16 @@ vi.hoisted(() => {
 const h = vi.hoisted(() => ({
   post: vi.fn(),
   fetch: vi.fn(),
+  checksum: vi.fn(),
   showError: vi.fn(),
 }));
 vi.mock("@/api", () => ({
-  files: { post: h.post, fetch: h.fetch, abortResourceUploads: vi.fn() },
+  files: {
+    post: h.post,
+    fetch: h.fetch,
+    checksum: h.checksum,
+    abortResourceUploads: vi.fn(),
+  },
   share: {},
   users: {},
   pub: {},
@@ -377,14 +383,17 @@ describe("a conflict when tus creates the upload again", () => {
     );
   };
 
-  it("is not asked about when the file at the destination has its size", async () => {
+  it("is not asked about when the file at the destination is a copy of it", async () => {
     h.post.mockRejectedValueOnce(recreateConflict());
     h.fetch.mockResolvedValueOnce(listing(4));
+    // the server's SHA-256 of the file there: that of "data"
+    h.checksum.mockResolvedValueOnce(
+      "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
+    );
     queueAB();
-    await settle();
-    await settle();
-    const layout = useLayoutStore();
     const store = useUploadStore();
+    await vi.waitFor(() => expect(store.pendingUploadCount).toBe(0));
+    const layout = useLayoutStore();
     console.log(
       "re-create 409, same size there: prompt:",
       layout.currentPromptName ?? null,

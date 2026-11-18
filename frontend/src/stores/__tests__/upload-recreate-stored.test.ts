@@ -12,6 +12,14 @@
 // answer, a 5xx, or 423); otherwise the user is asked, as for any other
 // conflict.
 //
+// Name and size alone are not enough either: another file of the same
+// size put there meanwhile by someone else (the server then refuses the
+// commit with 409, and that is the answer that was lost) was reported as
+// this upload. The server's SHA-256 of the file there (?checksum=sha256)
+// must now match the local file's; when it cannot be had (no Download
+// permission, an error, no WebCrypto on plain http) or the file is too
+// large to hash, the user is asked.
+//
 // Real upload, layout and file stores, real tus.ts and the tus-js-client
 // browser stack against a loopback tus server (see
 // api/__tests__/tus-loopback.ts: 127.0.0.1 only, closed after each test;
@@ -31,8 +39,12 @@ vi.hoisted(() => {
 });
 const h = vi.hoisted(() => ({
   fetch: vi.fn(),
+  checksum: vi.fn(),
   showError: vi.fn(),
 }));
+// SHA-256 of the uploaded content, "0123456789"
+const SHA256 =
+  "84d89877f0d4041efb6bf91a16f0248f2fd573e6af05c19f96bedb9f882f7882";
 const auth = vi.hoisted(() => ({ jwt: "aaa.bbb.ccc" }));
 vi.mock("@/stores/auth", () => ({ useAuthStore: () => auth }));
 vi.mock("@/utils/auth", () => ({ renew: vi.fn(), logout: vi.fn() }));
@@ -50,6 +62,7 @@ vi.mock("@/api", async () => {
       post: async (url: string, content: Blob, overwrite: boolean, up: any) =>
         (await import("@/api/tus")).upload(url, content, overwrite, up),
       fetch: h.fetch,
+      checksum: h.checksum,
       abortResourceUploads: vi.fn(),
     },
     share: {},
@@ -83,7 +96,10 @@ beforeEach(() => {
   ({ server, mod: mods } = loopback);
   vi.spyOn(console, "error").mockImplementation(() => {});
   h.fetch.mockReset();
+  h.checksum.mockReset();
   h.showError.mockReset();
+  // the file there has this upload's content
+  h.checksum.mockResolvedValue(SHA256);
   // the destination has a file of the upload's name and size
   h.fetch.mockResolvedValue({
     isDir: true,
@@ -243,5 +259,60 @@ describe("control: a final PATCH refused outright is never counted as stored", (
     const outcome = await upload("final PATCH 403");
     expect(outcome).toEqual({ asked: false, done: false, toasts: 1 });
     expect(h.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("final PATCH unanswered, a file of its name and size is there", () => {
+  function lostFinalAnswer() {
+    onPatch(3, 502);
+    answer("HEAD", 404);
+    refuseRecreate();
+  }
+
+  it("with this upload's content: counted as stored", async () => {
+    lostFinalAnswer();
+    const outcome = await upload("final PATCH 502, same content");
+    expect(outcome).toEqual({ asked: false, done: true, toasts: 0 });
+    expect(h.checksum).toHaveBeenCalledWith("/files/f.bin", "sha256");
+  });
+
+  it("with other content of the same size: the user is asked", async () => {
+    lostFinalAnswer();
+    h.checksum.mockResolvedValue("0".repeat(64));
+    const outcome = await upload("final PATCH 502, other content");
+    expect(outcome).toEqual({ asked: true, done: false, toasts: 0 });
+  });
+
+  it("its checksum cannot be had (e.g. no Download permission): the user is asked", async () => {
+    lostFinalAnswer();
+    // without the permission the server answers 202 with no body
+    h.checksum.mockRejectedValue(new SyntaxError("Unexpected end of JSON"));
+    const outcome = await upload("final PATCH 502, no checksum");
+    expect(outcome).toEqual({ asked: true, done: false, toasts: 0 });
+  });
+
+  it("no WebCrypto (plain http): the user is asked", async () => {
+    lostFinalAnswer();
+    const subtle = vi
+      .spyOn(globalThis.crypto, "subtle", "get")
+      .mockReturnValue(undefined as any);
+    try {
+      const outcome = await upload("final PATCH 502, no crypto.subtle");
+      expect(outcome).toEqual({ asked: true, done: false, toasts: 0 });
+    } finally {
+      subtle.mockRestore();
+    }
+  });
+
+  it("a file too large to hash here is not checked: the user is asked", async () => {
+    const { isStoredCopy, MAX_VERIFIED_SIZE } = mods.upload;
+    const big = new File(["x"], "big.bin");
+    Object.defineProperty(big, "size", { value: MAX_VERIFIED_SIZE + 1 });
+    h.fetch.mockResolvedValue({
+      isDir: true,
+      items: [{ name: "big.bin", size: MAX_VERIFIED_SIZE + 1, isDir: false }],
+    });
+    expect(await isStoredCopy("/files/big.bin", big)).toBe(false);
+    expect(h.checksum).not.toHaveBeenCalled();
   });
 });
