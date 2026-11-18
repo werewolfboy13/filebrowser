@@ -109,7 +109,7 @@ watch(route, () => {
   fetchData();
 });
 watch(reload, (newValue) => {
-  newValue && fetchData();
+  newValue && fetchData(true);
 });
 
 // Define functions
@@ -140,12 +140,18 @@ const applyPreSelection = () => {
   fileStore.selected.push(index);
 };
 
-const fetchData = async () => {
+const fetchData = async (reloading = false) => {
   // Reset view information.
   fileStore.reload = false;
   fileStore.selected = [];
   fileStore.multiple = false;
-  layoutStore.closeHovers();
+  // A reload (e.g. after another dialog's request) leaves an upload's
+  // Replace/Skip question open: closing it unanswered skips every file
+  // still to be asked about. Opening the listing, or a route change,
+  // closes it.
+  if (!reloading || layoutStore.currentPromptName !== "replace") {
+    layoutStore.closeHovers();
+  }
 
   // Set loading to true and reset the error.
   layoutStore.loading = true;
