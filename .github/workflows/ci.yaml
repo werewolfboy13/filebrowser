@@ -141,9 +141,11 @@ jobs:
     name: Release
     needs: ["lint-frontend", "test-frontend", "lint-backend", "test", "build"]
     # Only for a version tag, and only in a repository that says where its images go: the
-    # repository variable IMAGE_NAME (Settings, Secrets and variables, Actions, Variables), such as
-    # ghcr.io/owner/filebrowser, or owner/filebrowser for Docker Hub, in lower case. Without it
-    # nothing is released, so a tag pushed to a fork that was not set up publishes nothing.
+    # repository variable IMAGE_NAME (Settings, Secrets and variables, Actions, Variables), in lower
+    # case. For this fork that is ghcr.io/werewolfboy13/filebrowser, which is pushed with this
+    # job's own token. A name without a registry, such as owner/filebrowser, is one on Docker Hub.
+    # Without the variable nothing is released, so a tag pushed to a fork that was not set up
+    # publishes nothing.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.IMAGE_NAME != ''
     runs-on: ubuntu-latest
     permissions:
@@ -169,7 +171,7 @@ jobs:
           host='[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?'
           part='[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*'
           if [[ ! "$IMAGE_NAME" =~ ^($host/)?$part(/$part)*$ ]]; then
-            echo "::error::IMAGE_NAME has to be the name of an image, in lower case, with no tag and nothing around it, such as ghcr.io/owner/filebrowser or owner/filebrowser."
+            echo "::error::IMAGE_NAME has to be the name of an image, in lower case, with no tag and nothing around it, such as ghcr.io/werewolfboy13/filebrowser."
             exit 1
           fi
           # The Git tag becomes the tag of the image, which takes fewer characters than Git does:
