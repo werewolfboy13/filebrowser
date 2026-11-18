@@ -51,7 +51,7 @@ docker run --stop-timeout 15 -v filebrowser_data:/srv -v filebrowser_database:/d
 
 What to know about the image:
 
-- It holds the server and nothing else: no shell, no init system, no `PUID` and `PGID`. The server runs as the user 1000, or as the one that `--user` names.
+- It holds the server and nothing else: no shell, no init system, no `PUID` and `PGID`. The server runs as the user 1000, or as the one that `--user` names, to whom every mount, volumes included, then has to belong already: see [User and Permissions](docs/installation.md#user-and-permissions).
 - It needs no capability and no writable root filesystem, and [`compose.yaml`](compose.yaml) runs it that way.
 - It is configured with `FB_` environment variables, such as `FB_PORT`, or with `/config/settings.json`, which the server creates on its first start.
 - It checks its own health with `filebrowser health`. A health check from a Compose file that was written for the original image, with `/healthcheck.sh` or a shell command, has to go.

@@ -109,6 +109,30 @@ One File Browser instance needs nothing else. For several instances that serve t
 
 The server runs as the user with UID 1000 and GID 1000. To run it as another user, use Docker's [`--user`](https://docs.docker.com/engine/containers/run/#user) option, for example `--user "$(id -u):$(id -g)"`. The image has no init system that could switch users after the start, so it does not know the `PUID` and `PGID` variables of other images: they are ignored.
 
+Every mount then has to belong to that user before the server starts, the named volumes too. The image cannot see to that: it has no shell and no `chown`. And Docker gives an empty volume the owner of the image's directory, the user 1000, every time a container starts with it. So a new volume does not work for another user, and neither does one whose owner was changed while it was still empty. That leaves:
+
+- **Bind mounts** of directories that belong to the user: see the note below.
+- **Volumes whose owner is changed with another image**, and which are then mounted with `nocopy`, so that Docker leaves the owner as it is:
+
+  ```sh
+  docker run --rm --user 0 --entrypoint chown \
+      -v filebrowser_data:/srv \
+      -v filebrowser_database:/database \
+      -v filebrowser_config:/config \
+      alpine -R "$(id -u):$(id -g)" /srv /database /config
+
+  docker run \
+      --user "$(id -u):$(id -g)" \
+      --stop-timeout 15 \
+      -v filebrowser_data:/srv:nocopy \
+      -v filebrowser_database:/database:nocopy \
+      -v filebrowser_config:/config:nocopy \
+      -p 8080:80 \
+      filebrowser:local
+  ```
+
+  The first command also hands an installation that ran as the user 1000 over to the new user.
+
 > [!NOTE]
 >
 > When using [bind mounts](https://docs.docker.com/engine/storage/bind-mounts/), that is, when you mount a path on the host in the container, you must manually ensure that they have the correct **permissions**. Docker does not do this automatically for you. The host directories must be readable and writable by the user running inside the container. You can use the [`chown`](https://linux.die.net/man/1/chown) command to change the owner of those paths.
