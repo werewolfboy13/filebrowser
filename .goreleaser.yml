@@ -39,6 +39,9 @@ builds:
         goarch: arm
       - goos: freebsd
         goarch: arm
+      # Does not compile: gopsutil, which reads the disk usage, has no code for it
+      - goos: freebsd
+        goarch: riscv64
 
 archives:
   - name_template: "{{.Os}}-{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}-{{ .ProjectName }}"
