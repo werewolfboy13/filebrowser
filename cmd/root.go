@@ -146,9 +146,10 @@ following directories:
 - $HOME/
 - /etc/filebrowser/
 
-If FB_CONFIG names a file that does not exist and FB_CONFIG_TEMPLATE names
-one that does, the template is copied to the FB_CONFIG path first. The Docker
-image uses this to create its default configuration on the first start.
+If FB_CONFIG names a file that does not exist, or that is empty, and
+FB_CONFIG_TEMPLATE names a file with the same extension, the template is
+copied to the FB_CONFIG path first. The Docker image uses this to create its
+default configuration on the first start.
 
 **Note:** Only the options listed below can be set via the config file or
 environment variables. Other configuration options live exclusively in the

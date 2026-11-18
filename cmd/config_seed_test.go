@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -86,6 +87,174 @@ func TestSeedConfigFile(t *testing.T) {
 		}
 	})
 
+	t.Run("creates the file readable, and leaves nothing else behind", func(t *testing.T) {
+		dir := t.TempDir()
+		templatePath := filepath.Join(t.TempDir(), "template.json")
+		configPath := filepath.Join(dir, "settings.json")
+		writeTestFile(t, templatePath, template)
+
+		if err := seedConfigFile(configPath, templatePath); err != nil {
+			t.Fatal(err)
+		}
+
+		info, err := os.Stat(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != seededConfigPermissions {
+			t.Errorf("mode = %o, want %o", got, seededConfigPermissions)
+		}
+
+		// The file is written under another name first.
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 {
+			t.Errorf("%d files next to the config file, want none", len(entries)-1)
+		}
+	})
+
+	// The file was created first and filled second, so a first start that
+	// was stopped in between left an empty file, which stopped every later
+	// start: "unexpected end of JSON input".
+	t.Run("fills an empty config file, and keeps its permissions", func(t *testing.T) {
+		dir := t.TempDir()
+		templatePath := filepath.Join(dir, "template.json")
+		configPath := filepath.Join(dir, "settings.json")
+		writeTestFile(t, templatePath, template)
+		writeTestFile(t, configPath, "")
+
+		if err := seedConfigFile(configPath, templatePath); err != nil {
+			t.Fatal(err)
+		}
+
+		if got := readTestFile(t, configPath); got != template {
+			t.Errorf("config file = %q, want %q", got, template)
+		}
+		info, err := os.Stat(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0600 {
+			t.Errorf("mode = %o, want the 600 the file had", got)
+		}
+	})
+
+	// As for a file that is mounted in the container by itself: it can be
+	// written, and nothing can be created next to it or renamed over it.
+	t.Run("fills an empty config file where no file can be created", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can create a file in any directory")
+		}
+
+		dir := t.TempDir()
+		templatePath := filepath.Join(t.TempDir(), "template.json")
+		configPath := filepath.Join(dir, "settings.json")
+		writeTestFile(t, templatePath, template)
+		writeTestFile(t, configPath, "")
+		if err := os.Chmod(dir, 0500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+
+		if err := seedConfigFile(configPath, templatePath); err != nil {
+			t.Fatal(err)
+		}
+
+		if got := readTestFile(t, configPath); got != template {
+			t.Errorf("config file = %q, want %q", got, template)
+		}
+	})
+
+	t.Run("names an empty config file that it cannot fill", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can write to any file")
+		}
+
+		dir := t.TempDir()
+		templatePath := filepath.Join(dir, "template.json")
+		configPath := filepath.Join(dir, "settings.json")
+		writeTestFile(t, templatePath, template)
+		writeTestFile(t, configPath, "")
+		if err := os.Chmod(configPath, 0400); err != nil {
+			t.Fatal(err)
+		}
+
+		err := seedConfigFile(configPath, templatePath)
+		if err == nil || !strings.Contains(err.Error(), configPath) {
+			t.Errorf("error = %v, want one that names %s", err, configPath)
+		}
+	})
+
+	// A link is the user's own arrangement, whatever it points to.
+	t.Run("keeps a link at the path", func(t *testing.T) {
+		dir := t.TempDir()
+		templatePath := filepath.Join(dir, "template.json")
+		configPath := filepath.Join(dir, "settings.json")
+		target := filepath.Join(dir, "target.json")
+		writeTestFile(t, templatePath, template)
+		writeTestFile(t, target, "")
+		if err := os.Symlink(target, configPath); err != nil {
+			t.Skip("symbolic links are not available")
+		}
+
+		if err := seedConfigFile(configPath, templatePath); err != nil {
+			t.Fatal(err)
+		}
+
+		if got := readTestFile(t, target); got != "" {
+			t.Errorf("the file the link points to holds %q, want it untouched", got)
+		}
+	})
+
+	// The JSON template was copied to a file named x.toml, which could not
+	// be read as TOML, then or on any later start.
+	t.Run("does not copy the template to a file of another format", func(t *testing.T) {
+		dir := t.TempDir()
+		templatePath := filepath.Join(dir, "template.json")
+		writeTestFile(t, templatePath, template)
+
+		for _, name := range []string{"settings.toml", "settings.yaml", "settings", "settings.json.bak"} {
+			configPath := filepath.Join(dir, name)
+			if err := seedConfigFile(configPath, templatePath); err != nil {
+				t.Fatal(err)
+			}
+			assertNoFile(t, configPath)
+		}
+
+		// An empty file of another format stays empty: as TOML or YAML, it
+		// is a file without settings.
+		emptyPath := filepath.Join(dir, "empty.toml")
+		writeTestFile(t, emptyPath, "")
+		if err := seedConfigFile(emptyPath, templatePath); err != nil {
+			t.Fatal(err)
+		}
+		if got := readTestFile(t, emptyPath); got != "" {
+			t.Errorf("the empty file holds %q, want it untouched", got)
+		}
+	})
+
+	t.Run("takes the extension in any case, and both spellings of YAML", func(t *testing.T) {
+		dir := t.TempDir()
+		for config, templateName := range map[string]string{
+			"upper.JSON":    "a.json",
+			"settings.yaml": "b.yml",
+			"settings.yml":  "c.yaml",
+		} {
+			templatePath := filepath.Join(dir, templateName)
+			configPath := filepath.Join(dir, config)
+			writeTestFile(t, templatePath, template)
+
+			if err := seedConfigFile(configPath, templatePath); err != nil {
+				t.Fatal(err)
+			}
+			if got := readTestFile(t, configPath); got != template {
+				t.Errorf("%s = %q, want the content of %s", config, got, templateName)
+			}
+		}
+	})
+
 	t.Run("does nothing without a template or a path", func(t *testing.T) {
 		dir := t.TempDir()
 		templatePath := filepath.Join(dir, "template.json")
@@ -122,6 +291,29 @@ func TestSeedConfigFile(t *testing.T) {
 			t.Error("expected an error")
 		}
 	})
+}
+
+// A file that another process put at the path while the content was on its
+// way is that process's, and stays.
+func TestCreateConfigFileKeepsAFileThatIsThere(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "settings.json")
+	writeTestFile(t, configPath, `{"port": 1234}`)
+
+	if err := createConfigFile(configPath, []byte(`{"port": 80}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readTestFile(t, configPath); got != `{"port": 1234}` {
+		t.Errorf("config file was overwritten with %q", got)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("%d files next to the config file, want none", len(entries)-1)
+	}
 }
 
 func TestInitViperConfigFromEnv(t *testing.T) {
@@ -165,6 +357,25 @@ func TestInitViperConfigFromEnv(t *testing.T) {
 		// The file's empty address has to win over the flag's default.
 		if got := v.GetString("address"); got != "" {
 			t.Errorf("address = %q, want it empty", got)
+		}
+	})
+
+	t.Run("an empty FB_CONFIG file is filled from FB_CONFIG_TEMPLATE", func(t *testing.T) {
+		dir := t.TempDir()
+		templatePath := filepath.Join(dir, "template.json")
+		configPath := filepath.Join(dir, "settings.json")
+		writeTestFile(t, templatePath, `{"port": 4321}`)
+		writeTestFile(t, configPath, "")
+		t.Setenv(envConfig, configPath)
+		t.Setenv(envConfigTemplate, templatePath)
+
+		v, err := initViper(newServerTestCmd(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if got := v.GetString("port"); got != "4321" {
+			t.Errorf("port = %q, want 4321", got)
 		}
 	})
 
