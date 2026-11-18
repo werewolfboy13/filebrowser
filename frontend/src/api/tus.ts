@@ -84,8 +84,11 @@ export async function upload(
           ? err.originalResponse.getStatus()
           : 0;
 
-        // Do not retry for file conflict.
-        if (status === 409) {
+        // Do not retry for file conflict, nor a refusal (403: e.g. the
+        // final PATCH, or creating the upload again after it, asked to
+        // replace a file the user may no longer modify): asking again is
+        // refused again.
+        if (status === 409 || status === 403) {
           return false;
         }
 

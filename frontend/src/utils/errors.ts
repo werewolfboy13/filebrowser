@@ -8,6 +8,7 @@
 // - 408: a request body (e.g. the login form) did not arrive in time.
 // - 413: a request or the file it asks for is too large to process.
 // - 423: an upload is busy with another request.
+// - 403: the user may not do this (the server says no more than that).
 
 type Translate = (key: string, values?: Record<string, unknown>) => string;
 
@@ -39,6 +40,8 @@ export function statusMessage(t: Translate, error: unknown): string | null {
       return t("errors.tooLarge");
     case 423:
       return t("errors.locked");
+    case 403:
+      return t("errors.forbidden");
   }
   return null;
 }

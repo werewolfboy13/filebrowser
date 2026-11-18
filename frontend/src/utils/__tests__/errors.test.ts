@@ -39,6 +39,7 @@ describe("statusMessage", () => {
     [new StatusError("x", 408), "errors.requestTimeout"],
     [new StatusError("x", 413), "errors.tooLarge"],
     [new StatusError("x", 423), "errors.locked"],
+    [new StatusError("x", 403), "errors.forbidden"],
   ])("%o", (err, expected) => {
     expect(statusMessage(t, err)).toBe(expected);
   });
@@ -78,6 +79,12 @@ describe("errorToast", () => {
       message: 'errors.tooManyAttempts {"seconds":20}',
       isReport: false,
     });
+  });
+  // e.g. an upload refused at its end (403 on the final PATCH): not a bug
+  it("a 403 says the user may not, without a report link", () => {
+    expect(
+      errorToast(t, { status: 403, message: "403\n" } as any, true)
+    ).toEqual({ message: "errors.forbidden", isReport: false });
   });
   it("other errors keep their message and the report link", () => {
     expect(errorToast(t, new StatusError("boom", 500), true)).toEqual({
