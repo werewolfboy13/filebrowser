@@ -155,6 +155,7 @@ The image has nothing in it but the server: no shell, no init system and no entr
 
   The directory of the socket has to be a mount that the server's user can write to.
 - **Other commands** use the same volumes, and need the server to be stopped, because the running server holds the database: `docker run --rm -v filebrowser_database:/database -v filebrowser_config:/config filebrowser:local users ls`. With `docker exec` in the running container, such a command fails after a second with `Error: timeout`.
+- **Commands that write a file** write it to the working directory when its path is not a full one. In the image that is `/`, where the server's user cannot write, so `users export users.json` ends in `Error: open users.json: permission denied`. Give the full path of a file in a volume, or make a volume the working directory with `-w /config`: `docker run --rm -w /config -v filebrowser_database:/database -v filebrowser_config:/config filebrowser:local users export users.json` writes `/config/users.json`. `users import --replace` needs `-w /config` in any case: it writes the users it is about to delete to `users.backup.json` in the working directory first. It then stops at the last administrator, whom it cannot delete, so to change the users that are there, use `users import --overwrite /config/users.json`.
 
 ### Health Check
 
