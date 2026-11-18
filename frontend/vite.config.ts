@@ -25,7 +25,16 @@ const plugins = [
     // defaults already drop IE support
     targets: ["defaults"],
   }),
-  compression({ include: /\.js$/, deleteOriginalAssets: false }),
+  // The Go static handler serves every .js file from its .js.gz sibling
+  // only (http/static.go): gzip each one, even when that is not smaller
+  // (tiny chunks; skipping them made them answer 404), and nothing else
+  // (it never serves brotli). scripts/check-dist-gzip.mjs checks the result.
+  compression({
+    include: /\.js$/,
+    deleteOriginalAssets: false,
+    skipIfLargerOrEqual: false,
+    algorithms: ["gzip"],
+  }),
   selfHostAce(),
 ];
 
