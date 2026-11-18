@@ -29,8 +29,6 @@
     "rename": "重命名",
     "replace": "替换",
     "reportIssue": "反馈问题",
-    "resumeTransfer": "恢复之前的传输任务",
-    "resumeTransferTooltip": "跳过所有同名冲突文件；服务器端文件更小则判定为传输中断，保留该文件并继续传输。",
     "save": "保存",
     "schedule": "计划",
     "search": "搜索",

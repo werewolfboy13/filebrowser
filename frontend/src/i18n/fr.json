@@ -29,8 +29,6 @@
     "rename": "Renommer",
     "replace": "Remplacer",
     "reportIssue": "Signaler un problème",
-    "resumeTransfer": "Reprendre le transfert précédent",
-    "resumeTransferTooltip": "Ignorez tous les fichiers en conflit, à l'exception de ceux dont la taille est inférieure sur le serveur, car nous supposons que leur transfert a été interrompu.",
     "save": "Enregistrer",
     "schedule": "Planifier",
     "search": "Rechercher",

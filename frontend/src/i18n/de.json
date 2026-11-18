@@ -29,8 +29,6 @@
     "rename": "Umbenennen",
     "replace": "Ersetzen",
     "reportIssue": "Problem melden",
-    "resumeTransfer": "Vorherige Übertragung fortsetzen",
-    "resumeTransferTooltip": "Alle Dateien mit Konflikten überspringen, außer denen, die auf dem Server kleiner sind, da wir davon ausgehen, dass deren Übertragung unterbrochen wurde.",
     "save": "Speichern",
     "schedule": "Planen",
     "search": "Suchen",

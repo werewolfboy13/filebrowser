@@ -112,13 +112,13 @@
             <i class="material-icons">undo</i>
             {{ $t("buttons.skipAll") }}
           </button>
-          <button @click="(e) => resume(e)">
+          <button @click="(e) => replaceSmaller(e)">
             <i class="material-icons">replay</i>
-            {{ $t("buttons.resumeTransfer") }}
+            {{ $t("buttons.replaceSmaller") }}
             <span class="info-tooltip" @click.stop="() => {}">
               <i class="material-icons info-icon">info_outline</i>
               <span class="info-tooltip-text">
-                {{ $t("buttons.resumeTransferTooltip") }}
+                {{ $t("buttons.replaceSmallerTooltip") }}
               </span>
             </span>
           </button>
@@ -211,7 +211,11 @@ const humanTime = (modified: string | number | undefined) => {
   return dayjs(modified).format("L LT");
 };
 
-const resume = (event: Event) => {
+// Replaces each file that is smaller in the destination and skips the
+// others. (Upstream offered this to resume interrupted transfers; this
+// server commits an upload only once it is complete, so a smaller file
+// there is a complete one.)
+const replaceSmaller = (event: Event) => {
   conflict.value.forEach((item) => {
     if (item.isSmallerOnServer) {
       item.checked = ["origin"];
