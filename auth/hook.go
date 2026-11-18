@@ -40,12 +40,12 @@ func (a *HookAuth) Auth(r *http.Request, usr users.Store, stg *settings.Settings
 	var cred hookCred
 
 	if r.Body == nil {
-		return nil, os.ErrPermission
+		return nil, ErrNoAttempt
 	}
 
 	err := json.NewDecoder(r.Body).Decode(&cred)
 	if err != nil {
-		return nil, os.ErrPermission
+		return nil, ErrNoAttempt
 	}
 
 	a.Users = usr

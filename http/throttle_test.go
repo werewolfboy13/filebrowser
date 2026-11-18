@@ -237,16 +237,17 @@ func TestLoginThrottleIsNotResetByAFlood(t *testing.T) {
 	wait, _ := strconv.Atoi(h.Get("Retry-After"))
 
 	// A flood of logins under names that do not exist, from the same address.
-	statuses := map[int]int{}
 	for i := 0; i < 60; i++ {
 		code, h, _ := e.tryLogin("nobody-"+strconv.Itoa(i), "x")
-		statuses[code]++
 		if code == http.StatusTooManyRequests && h.Get("Retry-After") == "" {
 			t.Fatal("a refused login carries no Retry-After")
 		}
 	}
-	if statuses[http.StatusTooManyRequests] == 0 {
-		t.Errorf("the flood was let through without a limit: %v", statuses)
+	e.limits.login.mu.Lock()
+	kept := len(e.limits.login.keys)
+	e.limits.login.mu.Unlock()
+	if kept > 30 {
+		t.Errorf("the limiter holds %d keys after the flood, limit 30", kept)
 	}
 
 	if code, _, _ := e.tryLogin("admin", "wrong-after-flood"); code != http.StatusTooManyRequests {

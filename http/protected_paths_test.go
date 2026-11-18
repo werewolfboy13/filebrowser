@@ -332,6 +332,8 @@ func TestServerFilesAreRefusedThroughLinksThatClimbOutOfALink(t *testing.T) {
 		{"pub/statedir", "sub/.."},             // the kernel: state/
 		{"pub/docs", "../docs/deep"},
 		{"pub/cachealias", "docs/../../cache"}, // the kernel: cache/
+		{"pub/cachein", "../cache/ab"},
+		{"pub/cachedir", "cachein/.."}, // the kernel: cache/; read as text: pub/
 		{"pub/keyalias", "docs/../../tls/key.pem"},
 		{"pub/logalias", "docs/../../logs/filebrowser-2026-11-17T10-00-00.000.log"},
 	} {
@@ -357,7 +359,25 @@ func TestServerFilesAreRefusedThroughLinksThatClimbOutOfALink(t *testing.T) {
 			t.Fatalf("control: %s: database download = %d, want 403", user.name, code)
 		}
 
-		for _, p := range []string{"/pub/alias", "/pub/statedir/filebrowser.db", "/pub/cachealias/ab/thumb", "/pub/keyalias", "/pub/logalias"} {
+		// /pub/cachedir/ab/thumb is the one that only following the links
+		// the way the kernel does catches: the cache is a directory, and a
+		// file in it has no identity that is registered. The others are
+		// caught by their identity as well.
+		aliases := []string{"/pub/alias", "/pub/statedir/filebrowser.db", "/pub/cachealias/ab/thumb", "/pub/cachedir/ab/thumb", "/pub/cachein/thumb", "/pub/keyalias", "/pub/logalias"}
+
+		// Reading first, and no further when that gets through: the requests
+		// below write, and what they would write to is this instance's own
+		// database, while it is open.
+		for _, p := range aliases {
+			for _, endpoint := range []string{"/api/raw", "/api/resources", "/api/preview/big"} {
+				code, _, body := e.do(http.MethodGet, endpoint+p, tok, nil, nil)
+				if code != http.StatusForbidden {
+					t.Fatalf("%s: GET %s%s = %d (%d bytes), want 403. The requests that write are not tried.", user.name, endpoint, p, code, len(body))
+				}
+			}
+		}
+
+		for _, p := range aliases {
 			for _, rq := range []struct{ method, path, body string }{
 				{http.MethodGet, "/api/raw" + p, ""},
 				{http.MethodGet, "/api/resources" + p, ""},
@@ -386,7 +406,7 @@ func TestServerFilesAreRefusedThroughLinksThatClimbOutOfALink(t *testing.T) {
 		_, _, statedir := e.do(http.MethodGet, "/api/resources/pub/statedir/", tok, nil, nil)
 		_, _, recursive := e.do(http.MethodGet, "/api/resources/recursive/pub", tok, nil, nil)
 		_, _, search := e.do(http.MethodGet, "/api/search/pub/?query=", tok, nil, nil)
-		for _, name := range []string{`"alias"`, `"cachealias"`, `"keyalias"`, `"logalias"`, `"filebrowser.db"`, `"thumb"`} {
+		for _, name := range []string{`"alias"`, `"cachealias"`, `"cachedir"`, `"cachein"`, `"keyalias"`, `"logalias"`, `"filebrowser.db"`, `"thumb"`} {
 			for where, body := range map[string]string{"listing of /pub": listing, "listing of /pub/statedir": statedir, "recursive listing": recursive} {
 				if strings.Contains(body, `"name":`+name) {
 					t.Errorf("%s: the %s names %s", user.name, where, name)
@@ -397,7 +417,7 @@ func TestServerFilesAreRefusedThroughLinksThatClimbOutOfALink(t *testing.T) {
 			}
 		}
 
-		for _, target := range []string{"/api/raw/pub/?algo=tar", "/api/raw/?algo=tar&files=" + url.QueryEscape("/pub/alias,/pub/statedir,/pub/cachealias")} {
+		for _, target := range []string{"/api/raw/pub/?algo=tar", "/api/raw/?algo=tar&files=" + url.QueryEscape("/pub/alias,/pub/statedir,/pub/cachealias,/pub/cachedir")} {
 			_, _, archive := e.do(http.MethodGet, target, tok, nil, nil)
 			tr := tar.NewReader(strings.NewReader(archive))
 			for {
@@ -420,7 +440,7 @@ func TestServerFilesAreRefusedThroughLinksThatClimbOutOfALink(t *testing.T) {
 	}
 
 	// And for a visitor of a public share of the directory holding the links.
-	for _, sub := range []string{"/alias", "/statedir/filebrowser.db", "/cachealias/ab/thumb", "/keyalias"} {
+	for _, sub := range []string{"/alias", "/statedir/filebrowser.db", "/cachealias/ab/thumb", "/cachedir/ab/thumb", "/keyalias"} {
 		for _, endpoint := range []string{"/api/public/dl/", "/api/public/share/"} {
 			code, _, body := e.do(http.MethodGet, endpoint+"pubshare"+sub, "", nil, nil)
 			if code != http.StatusForbidden {

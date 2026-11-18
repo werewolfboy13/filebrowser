@@ -18,6 +18,18 @@ import (
 	"github.com/filebrowser/filebrowser/v2/users"
 )
 
+// registeredUploadCache is an upload cache in which the same upload is
+// registered for every path.
+type registeredUploadCache struct {
+	UploadCache
+	upload uploadInfo
+}
+
+func (c registeredUploadCache) Get(string) (uploadInfo, error) { return c.upload, nil }
+func (c registeredUploadCache) Has(string) bool                { return true }
+func (c registeredUploadCache) Touch(string)                   {}
+func (c registeredUploadCache) Complete(string)                {}
+
 // Reproduces the TUS write vector of GHSA-v9g6-9pp4-3w22: a scoped user must
 // not be able to create or write files through a symlinked directory that
 // escapes their scope.
@@ -85,9 +97,17 @@ func TestTusHandlersRejectSymlinkScopeEscape(t *testing.T) {
 			handler: tusPostHandler(newMemoryUploadCache()),
 			headers: map[string]string{"Upload-Length": "20"},
 		},
+		// A chunk is only looked at for an upload that is registered, and
+		// no upload can be registered there. Should one be, of either kind,
+		// its chunks are still refused.
 		"PATCH write through symlinked dir": {
 			method:  http.MethodPatch,
-			handler: tusPatchHandler(newMemoryUploadCache()),
+			handler: tusPatchHandler(registeredUploadCache{upload: uploadInfo{Length: 20, Owner: 1}}),
+			headers: map[string]string{"Content-Type": "application/offset+octet-stream", "Upload-Offset": "0"},
+		},
+		"PATCH write through symlinked dir, to the destination itself": {
+			method:  http.MethodPatch,
+			handler: tusPatchHandler(registeredUploadCache{upload: uploadInfo{Length: 20, Owner: 1, Direct: true}}),
 			headers: map[string]string{"Content-Type": "application/offset+octet-stream", "Upload-Offset": "0"},
 		},
 	}

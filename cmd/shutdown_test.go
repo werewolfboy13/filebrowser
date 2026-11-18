@@ -4,9 +4,42 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"regexp"
 	"testing"
 	"time"
 )
+
+// ownProcessEnv names the test a process was started for by inOwnProcess.
+const ownProcessEnv = "FB_TEST_IN_OWN_PROCESS"
+
+// inOwnProcess runs the calling test in a process of its own, and reports
+// whether this is that process: a test starts with
+//
+//	if !inOwnProcess(t) {
+//		return
+//	}
+//
+// It is for tests of code that is not to end the process it runs in. When it
+// does all the same (log.Fatal, os.Exit), a test that runs it directly takes
+// the whole test run down with it, and nothing says which test it was or
+// what it expected. This way the test fails, with what the process printed.
+func inOwnProcess(t *testing.T) bool {
+	t.Helper()
+
+	if os.Getenv(ownProcessEnv) == t.Name() {
+		return true
+	}
+
+	child := exec.Command(os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.count=1", "-test.v") //nolint:gosec // the test binary itself
+	child.Env = append(os.Environ(), ownProcessEnv+"="+t.Name())
+	if output, err := child.CombinedOutput(); err != nil {
+		t.Fatalf("run in a process of its own, the test ended with %v. Its output:\n%s", err, output)
+	}
+
+	return false
+}
 
 // serveForShutdownTest starts a server with handler on a loopback port and
 // returns it with its URL.
@@ -29,6 +62,11 @@ func serveForShutdownTest(t *testing.T, handler http.Handler) (srv *http.Server,
 // Docker's own limit is the same 10 seconds, so more often the server was
 // killed instead. It has to cut the transfer off and return.
 func TestShutdownServerCutsOffARequestThatDoesNotFinish(t *testing.T) {
+	// It made the server exit, and would do the same to the tests.
+	if !inOwnProcess(t) {
+		return
+	}
+
 	started := make(chan struct{})
 	cutOff := make(chan struct{})
 	srv, url := serveForShutdownTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

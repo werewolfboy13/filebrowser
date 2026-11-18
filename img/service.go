@@ -2,6 +2,7 @@
 package img
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -319,11 +320,55 @@ func (s *Service) scale(ctx context.Context, img image.Image, orientation, width
 	return config.format.encode(out, orient(resized, orientation))
 }
 
+// maxHeaderSize is how much of a file is read to find out what image it is.
+// A file that does not say within that is not taken for an image.
+//
+// The decoders read a file from its start until they know the dimensions,
+// which a file can put off for as long as it likes: a JPEG with comments
+// before its frame header, a PNG with text before its palette. What they read
+// on the way is kept for the estimate of what decoding will cost, and none of
+// that is under any of the service's limits yet. This is the limit. Real
+// files have their metadata there (colour profiles, thumbnails), which takes
+// up to a few megabytes.
+const maxHeaderSize = 8 << 20
+
+// randomAccess is a reader for the image decoders that can also be read at
+// any place. The TIFF decoder needs that: the directory of a TIFF file is
+// usually at its end. From a plain reader it gets there by keeping everything
+// up to it in memory, which is the whole file.
+type randomAccess struct {
+	*bufio.Reader
+	io.ReaderAt
+}
+
 // detectFormat reads the header of the image and returns its format, the
 // memory decoding it is estimated to need, and a reader of the whole image.
+//
+// What it read of the image is not kept when in can be gone back to (it is a
+// file): the caller may wait for a long time before it decodes the image, and
+// many callers at once. Only for a reader that can be read just once is it
+// kept, and read again first.
 func (s *Service) detectFormat(in io.Reader) (Format, int64, io.Reader, error) {
+	// Where the image starts, to go back to.
+	seeker, _ := in.(io.Seeker)
+	var start int64
+	if seeker != nil {
+		var err error
+		if start, err = seeker.Seek(0, io.SeekCurrent); err != nil {
+			seeker = nil
+		}
+	}
+	// Places in the image are places in in when it is at its start.
+	var at io.ReaderAt
+	if seeker != nil && start == 0 {
+		at, _ = in.(io.ReaderAt)
+	}
+
 	buf := &bytes.Buffer{}
-	r := io.TeeReader(in, buf)
+	r := io.TeeReader(io.LimitReader(in, maxHeaderSize), buf)
+	if at != nil {
+		r = randomAccess{bufio.NewReader(r), at}
+	}
 
 	imgConfig, imgFormat, err := image.DecodeConfig(r)
 	if err != nil {
@@ -349,7 +394,16 @@ func (s *Service) detectFormat(in io.Reader) (Format, int64, io.Reader, error) {
 		return 0, 0, nil, ErrUnsupportedFormat
 	}
 
-	return format, cost, io.MultiReader(buf, in), nil
+	if seeker == nil {
+		return format, cost, io.MultiReader(buf, in), nil
+	}
+	if _, err := seeker.Seek(start, io.SeekStart); err != nil {
+		return 0, 0, nil, err
+	}
+	if at != nil && format == FormatTiff {
+		return format, cost, randomAccess{bufio.NewReader(in), at}, nil
+	}
+	return format, cost, in, nil
 }
 
 func getEmbeddedThumbnail(in io.Reader) ([]byte, io.Reader, error) {

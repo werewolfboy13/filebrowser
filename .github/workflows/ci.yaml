@@ -157,8 +157,31 @@ jobs:
         env:
           IMAGE_NAME: ${{ vars.IMAGE_NAME }}
         run: |
-          case "$IMAGE_NAME" in
-            filebrowser/* | docker.io/filebrowser/* | index.docker.io/filebrowser/* | ghcr.io/filebrowser/*)
+          # One image has many names. The registry is written in any case, with or without a
+          # port, and can be left out, which means Docker Hub. Docker Hub goes by several host
+          # names. So the name is brought into one form first: registry/repository, in lower
+          # case, with docker.io for Docker Hub.
+          name=$(printf '%s' "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
+          registry=${name%%/*}
+          case "$name" in
+            */*) repository=${name#*/} ;;
+            *) registry= repository=$name ;;
+          esac
+          case "$registry" in
+            # As Docker reads it: the part before the first slash is a registry when it has a
+            # dot or a port in it, or is localhost.
+            *.* | *:* | localhost) registry=${registry%%:*} ;;
+            *) registry=docker.io repository=$name ;;
+          esac
+          case "$registry" in
+            index.docker.io | registry-1.docker.io | registry.hub.docker.com) registry=docker.io ;;
+          esac
+          if [ "$registry" = docker.io ]; then
+            repository=${repository#library/}
+          fi
+
+          case "$registry/$repository" in
+            docker.io/filebrowser/* | ghcr.io/filebrowser/*)
               if [ "$GITHUB_REPOSITORY_OWNER" != "filebrowser" ]; then
                 echo "::error::IMAGE_NAME is $IMAGE_NAME, which belongs to the File Browser project. Use a name of your own."
                 exit 1

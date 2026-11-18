@@ -28,7 +28,7 @@ const (
 	// limiterForget is how long after the last failure a key is forgotten.
 	limiterForget = 30 * time.Minute
 
-	// limiterMaxKeys bounds the memory of a limiter. See makeRoom for what
+	// limiterMaxKeys bounds the memory of a limiter. See add for what
 	// happens when it is full.
 	limiterMaxKeys = 10000
 
@@ -52,8 +52,12 @@ type failureLimiter struct {
 	mu   sync.Mutex
 	keys map[[sha256.Size]byte]*failureState
 
-	// groups counts the keys of each group.
-	groups map[string]int
+	// groups holds the keys of each group, for as long as it has any.
+	groups map[string]*limiterGroup
+
+	// noRoomUntil is set when the limiter was full and looking through it
+	// found no key to forget: it is not looked through again before then.
+	noRoomUntil time.Time
 
 	free         int
 	base         time.Duration
@@ -64,10 +68,30 @@ type failureLimiter struct {
 	now          func() time.Time
 }
 
-type failureState struct {
-	group        string
+// limiterGroup is the keys that count against one bound: those of one client
+// address, for the login.
+type limiterGroup struct {
+	name string
+	keys map[[sha256.Size]byte]*failureState
+
+	// failures, blockedUntil and until are what is left of the keys that had
+	// to make room: the highest count among them, the latest wait, and when
+	// the last of them would have been forgotten anyway. A new key of the
+	// group starts out with them. See evict.
 	failures     int
-	inFlight     int
+	blockedUntil time.Time
+	until        time.Time
+}
+
+type failureState struct {
+	group    *limiterGroup
+	failures int
+	inFlight int
+
+	// failed tells that an attempt for the key itself has failed. Until
+	// then, all it has on it is what its group had left: see evict.
+	failed bool
+
 	lastFailure  time.Time
 	blockedUntil time.Time
 }
@@ -75,7 +99,7 @@ type failureState struct {
 func newFailureLimiter() *failureLimiter {
 	return &failureLimiter{
 		keys:         map[[sha256.Size]byte]*failureState{},
-		groups:       map[string]int{},
+		groups:       map[string]*limiterGroup{},
 		free:         limiterFreeFailures,
 		base:         limiterBaseDelay,
 		maxDelay:     limiterMaxDelay,
@@ -118,7 +142,7 @@ const (
 // returns a function that must be called, once, with the outcome.
 //
 // group names who the key belongs to as far as the room in the limiter goes:
-// the client address for a login. See makeRoom.
+// the client address for a login. See add.
 //
 // Attempts in flight count as failures until they report back, so firing many
 // guesses at once gets no more of them checked than sending them in turn.
@@ -133,22 +157,20 @@ func (l *failureLimiter) begin(group string, key [sha256.Size]byte) (done func(a
 		state = nil
 	}
 
-	if state != nil {
-		if wait := state.blockedUntil.Sub(now); wait > 0 {
+	if state == nil {
+		var wait time.Duration
+		if state, wait = l.add(group, key, now); state == nil {
 			return nil, wait
 		}
-		// Past the free failures, one attempt at a time; before that, as many
-		// as are left of them.
-		if allowed := max(1, l.free-state.failures); state.inFlight >= allowed {
-			return nil, l.base
-		}
-	} else {
-		if wait := l.makeRoom(group, now); wait > 0 {
-			return nil, wait
-		}
-		state = &failureState{group: group, lastFailure: now}
-		l.keys[key] = state
-		l.groups[group]++
+	}
+
+	if wait := state.blockedUntil.Sub(now); wait > 0 {
+		return nil, wait
+	}
+	// Past the free failures, one attempt at a time; before that, as many
+	// as are left of them.
+	if allowed := max(1, l.free-state.failures); state.inFlight >= allowed {
+		return nil, l.base
 	}
 	state.inFlight++
 
@@ -164,11 +186,12 @@ func (l *failureLimiter) forgotten(state *failureState, now time.Time) bool {
 	return state.inFlight == 0 && now.Sub(state.lastFailure) > l.forget
 }
 
-// drop removes a key.
+// drop removes a key, and its group with the last of its keys.
 func (l *failureLimiter) drop(key [sha256.Size]byte, state *failureState) {
 	delete(l.keys, key)
-	if l.groups[state.group]--; l.groups[state.group] <= 0 {
-		delete(l.groups, state.group)
+	delete(state.group.keys, key)
+	if len(state.group.keys) == 0 && l.groups[state.group.name] == state.group {
+		delete(l.groups, state.group.name)
 	}
 }
 
@@ -178,7 +201,8 @@ func (l *failureLimiter) end(key [sha256.Size]byte, state *failureState, outcome
 
 	state.inFlight--
 	if l.keys[key] != state {
-		// Dropped in the meantime, by a success of another attempt.
+		// Dropped in the meantime, by a success of another attempt. (Never to
+		// make room: a key with an attempt in flight stays.)
 		return
 	}
 
@@ -188,13 +212,14 @@ func (l *failureLimiter) end(key [sha256.Size]byte, state *failureState, outcome
 		return
 	case attemptAborted:
 		// A key that was only created for this attempt has nothing to keep.
-		if state.failures == 0 && state.inFlight == 0 {
+		if !state.failed && state.inFlight == 0 {
 			l.drop(key, state)
 		}
 		return
 	}
 
 	now := l.now()
+	state.failed = true
 	state.failures++
 	state.lastFailure = now
 	if over := state.failures - l.free; over >= 0 {
@@ -207,54 +232,200 @@ func (l *failureLimiter) end(key [sha256.Size]byte, state *failureState, outcome
 	}
 }
 
-// makeRoom makes sure a key of group can be added without the limiter growing
-// past maxKeys, or the group past maxGroupKeys. It returns 0 when it can, and
-// otherwise how long the attempt has to wait for room.
+// add makes a new key of group, and room for it when the limiter holds
+// maxKeys keys already, or the group maxGroupKeys. It returns nil, and how
+// long the attempt has to wait, when there is none to be made.
 //
-// Room is only ever made by dropping keys that are forgotten anyway. A key
-// that has a failure on it stays until then, however full the limiter is:
-// dropping one to let a new key in forgets its count, and that is something a
-// client can cause at will, by failing under one throw-away name after the
-// other. It would get the free failures of the key it is really after back,
-// and the wait of that key would start over.
+// Room is made by forgetting a key before its time: see evict for what that
+// costs, and why it is not a way to start a count over. Which key goes is
+// chosen so that it costs the least:
 //
-// So when there is no room, it is the new key that is refused. That is a
-// wait for someone who has done nothing, which is why a group has a bound of
-// its own, well below that of the limiter: a single address fills its own
-// share and is then the only one refused, and it takes many addresses
-// (maxKeys/maxGroupKeys of them, each failing under maxGroupKeys names) to
-// fill the limiter for everyone. While that lasts, logins from an address
-// with no key of its own yet are refused: the limiter fails closed. Users
-// who share an address with such a client (see clientAddr) share its bound.
-func (l *failureLimiter) makeRoom(group string, now time.Time) time.Duration {
-	full := func() bool {
-		return len(l.keys) >= l.maxKeys || l.groups[group] >= l.maxGroupKeys
+//   - a key that is waiting stays for as long as one is left that is not: a
+//     wait is what the limiter is for;
+//   - of those that are not waiting, the one with the fewest failures goes
+//     first, and of those with as many, the one that failed the longest ago;
+//   - a key with an attempt in flight stays.
+//
+// When the group is full, the key that goes is one of its own, and when all
+// of them are waiting (or in flight), the new key is refused: a single
+// address that is full of failures only ever costs that address. Users who
+// share an address with such a client (see clientAddr) share that.
+//
+// When the limiter is full, the key that goes is one of the group that holds
+// the most, whoever is asking: filling the limiter takes many keys, and they
+// are the first to go. A group is never refused because of the keys of the
+// others. It used to be: the limiter failed closed, and failing under 200
+// names from each of 50 addresses kept everybody else from logging in, with
+// the right password too, for as long as it was kept up. Only when every
+// other key in the limiter is in flight is there nothing to forget.
+func (l *failureLimiter) add(group string, key [sha256.Size]byte, now time.Time) (*failureState, time.Duration) {
+	g := l.groups[group]
+	if g != nil {
+		if !now.Before(g.until) {
+			// What its evicted keys left behind is forgotten by now, as
+			// they would have been.
+			g.failures, g.blockedUntil = 0, time.Time{}
+		}
+		// A key of this group that was waiting had to make room. Its wait
+		// goes for every key the group has not got: one of them is that key.
+		if wait := g.blockedUntil.Sub(now); wait > 0 {
+			return nil, wait
+		}
+		if len(g.keys) >= l.maxGroupKeys {
+			if wait := l.makeRoomIn(g, now); wait > 0 {
+				return nil, wait
+			}
+		}
 	}
-	if !full() {
-		return 0
+	if len(l.keys) >= l.maxKeys {
+		if wait := l.makeRoom(now); wait > 0 {
+			return nil, wait
+		}
 	}
 
-	// soonest is when the next key that counts against this one is forgotten.
-	var soonest time.Duration
-	limiterFull := len(l.keys) >= l.maxKeys
-	for key, state := range l.keys {
+	if g == nil {
+		g = &limiterGroup{name: group, keys: map[[sha256.Size]byte]*failureState{}}
+	}
+	// Also when making room has just removed the last key of the group, and
+	// with it the group: it keeps what it remembers.
+	l.groups[group] = g
+
+	state := &failureState{group: g, failures: g.failures, lastFailure: now}
+	l.keys[key] = state
+	g.keys[key] = state
+	return state, 0
+}
+
+// evictable reports whether a key may be forgotten to make room, and whether
+// it is waiting.
+func (l *failureLimiter) evictable(state *failureState, now time.Time) (ok, waiting bool) {
+	return state.inFlight == 0, state.blockedUntil.After(now)
+}
+
+// makeRoomIn makes room for one more key in a group that is full. It returns
+// 0 when there is room, and otherwise how long until a key of the group can
+// be forgotten.
+func (l *failureLimiter) makeRoomIn(g *limiterGroup, now time.Time) time.Duration {
+	var (
+		victimKey [sha256.Size]byte
+		victim    *failureState
+		soonest   time.Duration
+	)
+	for key, state := range g.keys {
 		if l.forgotten(state, now) {
 			l.drop(key, state)
 			continue
 		}
-		if !limiterFull && state.group != group {
-			continue
-		}
-		if left := l.forget - now.Sub(state.lastFailure); soonest == 0 || left < soonest {
-			soonest = left
+		ok, waiting := l.evictable(state, now)
+		switch {
+		case !ok:
+		case waiting:
+			if left := state.blockedUntil.Sub(now); soonest == 0 || left < soonest {
+				soonest = left
+			}
+		case victim == nil || state.failures < victim.failures ||
+			(state.failures == victim.failures && state.lastFailure.Before(victim.lastFailure)):
+			victimKey, victim = key, state
 		}
 	}
-	if !full() {
+	switch {
+	case len(g.keys) < l.maxGroupKeys:
+		return 0
+	case victim != nil:
+		l.evict(victimKey, victim)
 		return 0
 	}
 
 	// Not longer than any other wait, and not nothing.
 	return min(max(soonest, l.base), l.maxDelay)
+}
+
+// makeRoom makes room for one more key in a limiter that is full. It returns
+// 0 when there is room, and otherwise how long to wait.
+//
+// It looks at every key, which is only worth it for an attempt that is going
+// to be made. When that found nothing to forget, the attempts that follow are
+// refused without looking again, for a moment.
+func (l *failureLimiter) makeRoom(now time.Time) time.Duration {
+	if wait := l.noRoomUntil.Sub(now); wait > 0 {
+		return wait
+	}
+
+	var (
+		victimKey     [sha256.Size]byte
+		victim        *failureState
+		victimWaiting bool
+	)
+	for key, state := range l.keys {
+		if l.forgotten(state, now) {
+			l.drop(key, state)
+			continue
+		}
+		ok, waiting := l.evictable(state, now)
+		if !ok {
+			continue
+		}
+		if victim != nil {
+			// The group with the most keys first; in it, a key that is not
+			// waiting before one that is; then the fewest failures, and
+			// the oldest.
+			switch a, b := len(state.group.keys), len(victim.group.keys); {
+			case a != b:
+				if a < b {
+					continue
+				}
+			case waiting != victimWaiting:
+				if waiting {
+					continue
+				}
+			case state.failures != victim.failures:
+				if state.failures > victim.failures {
+					continue
+				}
+			case !state.lastFailure.Before(victim.lastFailure):
+				continue
+			}
+		}
+		victimKey, victim, victimWaiting = key, state, waiting
+	}
+	switch {
+	case len(l.keys) < l.maxKeys:
+		return 0
+	case victim != nil:
+		l.evict(victimKey, victim)
+		return 0
+	}
+
+	l.noRoomUntil = now.Add(l.base)
+	return l.base
+}
+
+// evict forgets a key before its time, to make room.
+//
+// Forgetting a key forgets its count, and that is something a client can
+// bring about: by failing under one throw-away name after the other until the
+// key it is really after has to go. The key would then start over, with its
+// free failures back and its wait gone. A single address could guess at an
+// account without ever waiting longer than the first, shortest wait.
+//
+// So the count is not forgotten with the key. The group keeps the highest
+// count of the keys it lost, and, when one of them was waiting, until when:
+// a new key of the group starts out with that count, and none is made before
+// that wait is over. The key that had to go is back where it was as soon as
+// it is used again, and so, at worst, is every other new key of that group,
+// which is the address the failures came from. It is kept for as long as the
+// key itself would have been: until forget after its last failure, or until
+// the group has no key left.
+func (l *failureLimiter) evict(key [sha256.Size]byte, state *failureState) {
+	g := state.group
+	g.failures = max(g.failures, state.failures)
+	if state.blockedUntil.After(g.blockedUntil) {
+		g.blockedUntil = state.blockedUntil
+	}
+	if until := state.lastFailure.Add(l.forget); until.After(g.until) {
+		g.until = until
+	}
+	l.drop(key, state)
 }
 
 // limits holds the failure limiters of one handler.

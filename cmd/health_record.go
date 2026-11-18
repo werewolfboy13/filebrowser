@@ -105,6 +105,8 @@ func recordListenAddress(server *settings.Server, listener net.Listener) (remove
 
 	if err := writeListenRecord(path, newListenRecord(server, listener)); err != nil {
 		// What an earlier server left there says nothing about this one.
+		// Should it not be this server's to remove either, the health
+		// command does not take its word: see readListenRecord.
 		_ = os.Remove(path)
 		log.Printf("WARNING: can't write %s (%v). The health command will look for the server", path, err)
 		log.Printf("WARNING: in its own flags, the environment and the configuration file instead.")
@@ -152,8 +154,13 @@ func writeListenRecord(path string, record *listenRecord) (err error) {
 	return os.Rename(tmp.Name(), path)
 }
 
-// readListenRecord returns the record at path, if there is one and the server
-// that wrote it is still running.
+// readListenRecord returns the record at path, if there is one, the server
+// that wrote it is still running, and it is that server's.
+//
+// The health command sends its request where the record says, so a record
+// is only as good as whoever wrote it. The file is not always the server's:
+// where it cannot replace one that is already there, it goes on without (see
+// recordListenAddress), and what is there stays.
 func readListenRecord(path string) (*listenRecord, bool) {
 	if path == "" {
 		return nil, false
@@ -165,6 +172,11 @@ func readListenRecord(path string) (*listenRecord, bool) {
 	}
 	defer file.Close()
 
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, false
+	}
+
 	data, err := io.ReadAll(io.LimitReader(file, listenRecordMaxSize))
 	if err != nil {
 		return nil, false
@@ -174,18 +186,65 @@ func readListenRecord(path string) (*listenRecord, bool) {
 	if err := json.Unmarshal(data, record); err != nil {
 		return nil, false
 	}
-	if record.Socket == "" && record.Port == "" {
+	switch {
+	case record.Socket != "":
+	case record.Port == "":
 		return nil, false
+	default:
+		// The server records the number of the port it got. Anything else
+		// in its place would end up in the address of the request.
+		if _, err := strconv.ParseUint(record.Port, 10, 16); err != nil {
+			return nil, false
+		}
 	}
 
 	// A server that was killed could not remove its record. Where the start
 	// time of a process can be read, the record counts only while the process
-	// that wrote it is the one with that number now.
+	// that wrote it is the one with that number now. There, a record says
+	// when its process started: one that does not was not written by a
+	// server on this system.
+	if record.StartTime == "" && processStartTime(os.Getpid()) != "" {
+		return nil, false
+	}
 	if record.StartTime != "" && processStartTime(record.PID) != record.StartTime {
 		return nil, false
 	}
 
+	if !recordOwnerTrusted(info, record.PID) {
+		return nil, false
+	}
+
 	return record, true
+}
+
+// isLocalAddress reports whether address, as a server is configured with it,
+// is one of this machine: none at all (every address), localhost, a loopback
+// address, or an address of one of its interfaces. A server can listen on no
+// other, so a record that names another did not come from one.
+func isLocalAddress(address string) bool {
+	host := strings.TrimSuffix(strings.TrimPrefix(address, "["), "]")
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() {
+		return true
+	}
+
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // processStartTime returns the time at which the process started, as the

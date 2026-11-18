@@ -32,6 +32,12 @@ func waitFor(t *testing.T, what string, done func() bool) {
 // itself, the way the Docker image does: started with flags that the health
 // check cannot see, checked with `health`, and stopped with SIGTERM.
 func TestServerRunRecordsWhereItListensAndStopsCleanly(t *testing.T) {
+	// A server command that ends the process instead of returning would end
+	// the tests with it.
+	if !inOwnProcess(t) {
+		return
+	}
+
 	dir := t.TempDir()
 	root := filepath.Join(dir, "srv")
 	if err := os.Mkdir(root, 0700); err != nil {
