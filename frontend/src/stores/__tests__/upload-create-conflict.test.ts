@@ -27,10 +27,11 @@ vi.hoisted(() => {
 });
 const h = vi.hoisted(() => ({
   post: vi.fn(),
+  fetch: vi.fn(),
   showError: vi.fn(),
 }));
 vi.mock("@/api", () => ({
-  files: { post: h.post, abortResourceUploads: vi.fn() },
+  files: { post: h.post, fetch: h.fetch, abortResourceUploads: vi.fn() },
 }));
 vi.mock("@/api/tus", () => ({ abortAllUploads: vi.fn() }));
 vi.mock("@/utils/buttons", () => ({
@@ -68,6 +69,7 @@ beforeEach(() => {
   app.use(pinia);
   setActivePinia(pinia);
   h.post.mockReset();
+  h.fetch.mockReset();
   h.showError.mockReset();
 });
 afterEach(() => {
@@ -216,6 +218,84 @@ describe("a conflict reported when the upload is created", () => {
 // upload had settled, and that dropped the files queued in the meantime;
 // an aborted upload can settle late (a plain POST reads the whole file
 // first when the page is not served over http(s)).
+// When the answer to the final PATCH is lost (a proxy's 502, a network
+// blip) after the server stored the file, tus resumes: HEAD finds the
+// upload gone (it was completed), so tus creates it again, and that is
+// refused with 409 because the file is now there. That 409 is about the
+// file this upload stored: it must not be asked about as a conflict.
+describe("a conflict when tus creates the upload again", () => {
+  const recreateConflict = () =>
+    Object.assign(conflictOn("POST"), { recreated: true });
+  const listing = (size: number) => ({
+    isDir: true,
+    items: [
+      { name: "other.txt", size: 4, isDir: false },
+      { name: "a b.pdf", size, isDir: false },
+    ],
+  });
+  const queueAB = () => {
+    const file = new File(["data"], "a b.pdf"); // 4 bytes
+    useUploadStore().upload(
+      "/files/docs/a%20b.pdf",
+      "a b.pdf",
+      file,
+      false,
+      "blob"
+    );
+  };
+
+  it("is not asked about when the file at the destination has its size", async () => {
+    h.post.mockRejectedValueOnce(recreateConflict());
+    h.fetch.mockResolvedValueOnce(listing(4));
+    queueAB();
+    await settle();
+    await settle();
+    const layout = useLayoutStore();
+    const store = useUploadStore();
+    console.log(
+      "re-create 409, same size there: prompt:",
+      layout.currentPromptName ?? null,
+      "| listing fetched:",
+      JSON.stringify(h.fetch.mock.calls.map((c) => c[0]))
+    );
+    expect(h.fetch).toHaveBeenCalledWith("/files/docs/");
+    expect(layout.prompts).toEqual([]);
+    expect(h.showError).not.toHaveBeenCalled();
+    expect(useFileStore().reload).toBe(true); // the batch finished
+    expect(store.pendingUploadCount).toBe(0);
+  });
+
+  it("is asked about when the file there has another size", async () => {
+    h.post.mockRejectedValueOnce(recreateConflict());
+    h.fetch.mockResolvedValueOnce(listing(5));
+    queueAB();
+    await settle();
+    await settle();
+    expect(useLayoutStore().currentPromptName).toBe("replace");
+  });
+
+  it("is asked about when the destination cannot be listed", async () => {
+    h.post.mockRejectedValueOnce(recreateConflict());
+    h.fetch.mockRejectedValueOnce(new Error("000 No connection"));
+    queueAB();
+    await settle();
+    await settle();
+    expect(useLayoutStore().currentPromptName).toBe("replace");
+  });
+
+  // A file of the same size may be another file: only the re-create
+  // (after this upload's data was sent) is checked.
+  it("control: a conflict on first creating the upload is asked about without looking", async () => {
+    h.post.mockRejectedValueOnce(conflictOn("POST"));
+    h.fetch.mockResolvedValue(listing(4));
+    queueAB();
+    await settle();
+    await settle();
+    expect(h.fetch).not.toHaveBeenCalled();
+    expect(useLayoutStore().currentPromptName).toBe("replace");
+  });
+});
+
 describe("abort and a late-settling upload", () => {
   it("a file queued after abort is uploaded, and the late settlement changes nothing", async () => {
     let settleBig!: (e: Error) => void;

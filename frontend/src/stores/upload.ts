@@ -137,10 +137,14 @@ export const useUploadStore = defineStore("upload", () => {
 
         await api
           .post(upload.path, upload.file!, upload.overwrite, onUpload)
-          .catch((err) => {
+          .catch(async (err) => {
             succeeded = false;
             if (err.message === "Upload aborted") return;
             if (isCreateConflict(err) && !upload.overwrite && upload.file) {
+              if (err.recreated && (await isStored(upload.path, upload.file))) {
+                succeeded = true;
+                return;
+              }
               conflict = true;
               return;
             }
@@ -212,6 +216,27 @@ export const useUploadStore = defineStore("upload", () => {
 
   const isCreateConflict = (err: any) =>
     err?.status === 409 && err?.method === "POST";
+
+  // A 409 when tus created the upload again (see UploadError.recreated)
+  // can be about the file this upload stored: the answer to its final
+  // PATCH was lost, tus resumed, found the upload gone because it was
+  // completed, and created it anew. A file of its name and size at the
+  // destination is taken to be that file. Only for a re-create: on first
+  // creating the upload, a file of the same size there is another file.
+  // The listing of the folder, not the file itself, whose information
+  // includes the content of a text file.
+  const isStored = async (path: string, file: File) => {
+    try {
+      const slash = path.lastIndexOf("/");
+      const name = decodeURIComponent(path.slice(slash + 1));
+      const folder = await api.fetch(path.slice(0, slash + 1));
+      return (folder.items ?? []).some(
+        (item) => !item.isDir && item.name === name && item.size === file.size
+      );
+    } catch {
+      return false; // ask
+    }
+  };
 
   const askReplace = (upload: Upload, file: File) => {
     conflicts.push({

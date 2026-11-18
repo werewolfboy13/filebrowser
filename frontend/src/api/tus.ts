@@ -15,11 +15,15 @@ const CURRENT_UPLOADS = new Set<tus.Upload>();
 // A failed upload: the answer's body, with its status (0 when the server
 // could not be reached) and the method of the request that failed, so that
 // callers can tell e.g. a conflict on create (POST) from one on a chunk.
+// recreated: the failed POST created the upload again, after it had been
+// created once (tus-js-client does so when resuming finds it gone, e.g.
+// completed by a final PATCH whose answer was lost).
 export class UploadError extends Error {
   constructor(
     message: string,
     public status: number,
-    public method: string
+    public method: string,
+    public recreated = false
   ) {
     super(message);
     this.name = "UploadError";
@@ -51,6 +55,8 @@ export async function upload(
     return false;
   }
   const retryDelays = computeRetryDelays(tusSettings);
+  // set once the upload exists on the server (see UploadError.recreated)
+  let created = false;
   return new Promise<void | string>((resolve, reject) => {
     const upload = new tus.Upload(content, {
       endpoint: `${origin}${baseURL}${resourcePath}`,
@@ -78,6 +84,9 @@ export async function upload(
             console.warn("could not renew the session during an upload", e)
           );
         }
+      },
+      onUploadUrlAvailable: function () {
+        created = true;
       },
       onShouldRetry: function (err) {
         const status = err.originalResponse
@@ -128,7 +137,9 @@ export async function upload(
 
         console.error(error);
 
-        reject(new UploadError(message, status, method));
+        reject(
+          new UploadError(message, status, method, method === "POST" && created)
+        );
       },
       onProgress: function (bytesUploaded) {
         if (typeof onupload === "function") {

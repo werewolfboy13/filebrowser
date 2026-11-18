@@ -9,6 +9,11 @@
 // - 403: the upload asked to replace the file, but the user may no longer
 //   modify it. The server forgets the upload (HEAD then answers 404), and
 //   creating it again is refused the same way.
+// - The answer is lost (e.g. a proxy's 502) after the server stored the
+//   file: tus resumes, HEAD answers 404 (the upload was completed), tus
+//   creates it again and gets 409 (the file is there now). The error says
+//   it was a re-create, so that the upload store can check the destination
+//   rather than ask about a conflict with the file this upload stored.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loopbackPerTest, type TusServer } from "./tus-loopback";
 
@@ -124,6 +129,47 @@ describe("a refusal (403) of the final PATCH or of creating the upload again", (
       "PATCH",
       "HEAD",
       "POST",
+    ]);
+  });
+});
+
+describe("creating the upload again after a lost final answer", () => {
+  it("a 409 then is marked as a re-create", async () => {
+    onPatch(3, 502);
+    answer("HEAD", 404);
+    refuseRecreate(409);
+    const err = await send();
+    console.log(
+      "final PATCH answer lost:",
+      err.status,
+      err.method,
+      "recreated:",
+      err.recreated,
+      "| requests:",
+      methods().join(" ")
+    );
+    expect([err.status, err.method, err.recreated]).toEqual([
+      409,
+      "POST",
+      true,
+    ]);
+    expect(methods()).toEqual([
+      "POST",
+      "PATCH",
+      "PATCH",
+      "PATCH",
+      "HEAD",
+      "POST",
+    ]);
+  });
+
+  it("control: a 409 on first creating the upload is not", async () => {
+    answer("POST", 409);
+    const err = await send();
+    expect([err.status, err.method, err.recreated]).toEqual([
+      409,
+      "POST",
+      false,
     ]);
   });
 });
