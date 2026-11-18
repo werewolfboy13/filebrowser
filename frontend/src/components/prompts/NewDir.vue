@@ -56,8 +56,19 @@ const $showError = inject<IToastError>("$showError")!;
 const fileStore = useFileStore();
 const layoutStore = useLayoutStore();
 
+// The prompt this instance was created for (Prompts.vue gives every prompt
+// shown its own instance). Another prompt can be on top of it once the
+// request is answered (e.g. an upload's Replace/Skip question): never
+// confirm or close that one.
+const prompt = layoutStore.currentPrompt;
+
+const close = () => {
+  if (layoutStore.currentPrompt === prompt) layoutStore.closeHovers();
+  else layoutStore.prompts = layoutStore.prompts.filter((p) => p !== prompt);
+};
+
 const base = computed(() => {
-  return layoutStore.currentPrompt?.props?.base;
+  return prompt?.props?.base;
 });
 
 const route = useRoute();
@@ -85,14 +96,14 @@ const submit = async (event: Event) => {
 
   try {
     await api.post(uri);
-    if (layoutStore.currentPrompt?.props?.redirect) {
+    if (prompt?.props?.redirect) {
       router.push({ path: uri });
     } else if (!base.value) {
       const res = await api.fetch(url.removeLastDir(uri) + "/");
       fileStore.updateRequest(res);
     }
-    if (layoutStore.currentPrompt?.confirm) {
-      layoutStore.currentPrompt?.confirm(uri);
+    if (layoutStore.currentPrompt === prompt) {
+      prompt?.confirm?.(uri);
     }
   } catch (e) {
     if (e instanceof Error) {
@@ -100,6 +111,6 @@ const submit = async (event: Event) => {
     }
   }
 
-  layoutStore.closeHovers();
+  close();
 };
 </script>

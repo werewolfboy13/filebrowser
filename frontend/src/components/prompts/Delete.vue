@@ -42,6 +42,15 @@ import { useLayoutStore } from "@/stores/layout";
 export default {
   name: "delete",
   inject: ["$showError"],
+  data: function () {
+    return {
+      // The prompt this instance was created for (Prompts.vue gives every
+      // prompt shown its own instance). Another prompt can be on top of it
+      // once the request is answered (e.g. an upload's Replace/Skip
+      // question): never confirm or close that one.
+      prompt: useLayoutStore().currentPrompt,
+    };
+  },
   computed: {
     ...mapState(useFileStore, [
       "isListing",
@@ -54,6 +63,14 @@ export default {
   },
   methods: {
     ...mapActions(useLayoutStore, ["closeHovers"]),
+    close: function () {
+      const layoutStore = useLayoutStore();
+      if (layoutStore.currentPrompt === this.prompt) this.closeHovers();
+      else
+        layoutStore.prompts = layoutStore.prompts.filter(
+          (p) => p !== this.prompt
+        );
+    },
     submit: async function () {
       buttons.loading("delete");
 
@@ -62,8 +79,8 @@ export default {
           await api.remove(this.$route.path);
           buttons.success("delete");
 
-          this.currentPrompt?.confirm();
-          this.closeHovers();
+          if (this.currentPrompt === this.prompt) this.prompt?.confirm?.();
+          this.close();
           return;
         }
 
