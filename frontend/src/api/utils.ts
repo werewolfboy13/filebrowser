@@ -50,8 +50,9 @@ export async function fetchURL(
 
   // A change to the user's own account that revokes their sessions (e.g. a
   // password change) hands this tab its new token with the answer. Adopt it
-  // first, like a renewal, and do not renew on top of it.
-  const handedOut = auth ? res.headers.get("X-Auth-Token") : null;
+  // first, like a renewal, and do not renew on top of it. Only from a
+  // successful answer: the server sends it with nothing else.
+  const handedOut = auth && res.ok ? res.headers.get("X-Auth-Token") : null;
   if (handedOut && isCurrent()) {
     try {
       parseToken(handedOut);

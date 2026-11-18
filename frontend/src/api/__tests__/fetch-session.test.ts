@@ -189,6 +189,27 @@ describe("fetchURL and a token handed out with a response (X-Auth-Token)", () =>
     expect(calls).not.toContain("POST /api/renew");
   });
 
+  // The server hands a token out only with the 200 of the user's own PUT;
+  // an error answer that carries one (a proxy, a bug) is not a session.
+  it("a token on an error answer is not adopted", async () => {
+    stubFetch(
+      async () =>
+        new Response("500 Internal Server Error\n", {
+          status: 500,
+          headers: { "X-Auth-Token": NEW },
+        })
+    );
+    expect(
+      await outcome(fetchURL("/api/users/2", { method: "PUT", body: "{}" }))
+    ).toBe("rejected: 500");
+    console.log(
+      "token after a 500 carrying X-Auth-Token:",
+      useAuthStore().jwt === NEW ? "NEW" : "OLD"
+    );
+    expect(useAuthStore().jwt).toBe(OLD);
+    expect(localStorage.getItem("jwt")).toBe(OLD);
+  });
+
   it("control: a 401 for the current token after the change logs out", async () => {
     stubFetch(async (url) =>
       url === "/api/users/2"
