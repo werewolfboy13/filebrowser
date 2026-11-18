@@ -34,12 +34,17 @@ func (a JSONAuth) Auth(r *http.Request, usr users.Store, _ *settings.Settings, s
 	var cred jsonCred
 
 	if r.Body == nil {
-		return nil, os.ErrPermission
+		return nil, ErrNoAttempt
 	}
 
 	err := json.NewDecoder(r.Body).Decode(&cred)
 	if err != nil {
-		return nil, os.ErrPermission
+		return nil, ErrNoAttempt
+	}
+
+	// No account has an empty name: there is no password to compare with.
+	if cred.Username == "" {
+		return nil, ErrNoAttempt
 	}
 
 	// If ReCaptcha is enabled, check the code.
@@ -51,7 +56,7 @@ func (a JSONAuth) Auth(r *http.Request, usr users.Store, _ *settings.Settings, s
 		}
 
 		if !ok {
-			return nil, os.ErrPermission
+			return nil, ErrNoAttempt
 		}
 	}
 

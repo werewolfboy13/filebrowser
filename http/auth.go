@@ -213,10 +213,20 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 		// vouches for its users itself.
 		done := func(attemptOutcome) {}
 		if d.limits != nil && checksPassword(d.settings.AuthMethod) {
+			// Read the way the authers read the body: the first JSON value
+			// in it, with a user name and a password that are strings.
 			var cred struct {
 				Username string `json:"username"`
+				Password string `json:"password"`
 			}
-			_ = json.Unmarshal(body, &cred)
+			if err := json.NewDecoder(bytes.NewReader(body)).Decode(&cred); err != nil || cred.Username == "" {
+				// The authers refuse such a body before they look at a
+				// password, or have no account to look one up for. It is
+				// not a guess, so it is not counted, and it leaves nothing
+				// behind in the limiter: requests that cost the server
+				// nothing must not be able to fill it.
+				return http.StatusForbidden, nil
+			}
 
 			addr := clientAddr(r)
 			attempt, retryAfter := d.limits.login.begin(addr, limiterKey("login", addr, cred.Username))
@@ -228,6 +238,12 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 
 		user, err := auther.Auth(r, d.store.Users, d.settings, d.server)
 		switch {
+		case errors.Is(err, fbAuth.ErrNoAttempt):
+			// Refused before a password was looked at, for a reason the
+			// check above does not know (a failed captcha, a field of the
+			// auther's own): not a guess either.
+			done(attemptAborted)
+			return http.StatusForbidden, nil
 		case errors.Is(err, os.ErrPermission):
 			done(attemptFailed)
 			return http.StatusForbidden, nil
