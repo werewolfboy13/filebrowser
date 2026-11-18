@@ -139,7 +139,7 @@ jobs:
     needs: ["lint-frontend", "test-frontend", "lint-backend", "test", "build"]
     # Only for a version tag, and only in a repository that says where its images go: the
     # repository variable IMAGE_NAME (Settings, Secrets and variables, Actions, Variables), such as
-    # ghcr.io/OWNER/filebrowser, or OWNER/filebrowser for Docker Hub, in lower case. Without it
+    # ghcr.io/owner/filebrowser, or owner/filebrowser for Docker Hub, in lower case. Without it
     # nothing is released, so a tag pushed to a fork that was not set up publishes nothing.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.IMAGE_NAME != ''
     runs-on: ubuntu-latest
@@ -157,30 +157,48 @@ jobs:
         env:
           IMAGE_NAME: ${{ vars.IMAGE_NAME }}
         run: |
-          # One image has many names. The registry is written in any case, with or without a
-          # port, and can be left out, which means Docker Hub. Docker Hub goes by several host
-          # names. So the name is brought into one form first: registry/repository, in lower
-          # case, with docker.io for Docker Hub.
-          name=$(printf '%s' "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
-          registry=${name%%/*}
-          case "$name" in
-            */*) repository=${name#*/} ;;
-            *) registry= repository=$name ;;
+          # First, the name and the tag are held to what they may be made of. The step that
+          # pushes the image takes its tags as a list, which it splits at line breaks and commas
+          # and trims: with a space before it, or a comma or a line break in it, what is checked
+          # below would not be what is pushed. The name is [registry[:port]/]path, in lower case
+          # and without a tag. The whole value is matched, line breaks included.
+          LC_ALL=C
+          host='[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?'
+          part='[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*'
+          if [[ ! "$IMAGE_NAME" =~ ^($host/)?$part(/$part)*$ ]]; then
+            echo "::error::IMAGE_NAME has to be the name of an image, in lower case, with no tag and nothing around it, such as ghcr.io/owner/filebrowser or owner/filebrowser."
+            exit 1
+          fi
+          # The Git tag becomes the tag of the image, which takes fewer characters than Git does:
+          # no plus sign, as in v1.0.0+build, and no comma.
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9A-Za-z._-]{1,127}$ ]]; then
+            echo "::error::The tag has to be a v followed by letters, digits, dots, underscores and hyphens only, such as v2.63.23 or v3.0.0-rc.1: it becomes the tag of the image."
+            exit 1
+          fi
+
+          # One image has many names. The registry can be left out, which means Docker Hub, and
+          # Docker Hub goes by several host names. So the name is brought into one form first:
+          # registry/repository, with docker.io for Docker Hub.
+          registry=${IMAGE_NAME%%/*}
+          case "$IMAGE_NAME" in
+            */*) repository=${IMAGE_NAME#*/} ;;
+            *) registry='' repository=$IMAGE_NAME ;;
           esac
           case "$registry" in
             # As Docker reads it: the part before the first slash is a registry when it has a
             # dot or a port in it, or is localhost.
-            *.* | *:* | localhost) registry=${registry%%:*} ;;
-            *) registry=docker.io repository=$name ;;
+            *.* | *:* | localhost) ;;
+            *) registry=docker.io repository=$IMAGE_NAME ;;
           esac
-          case "$registry" in
-            index.docker.io | registry-1.docker.io | registry.hub.docker.com) registry=docker.io ;;
+          # Whose registry it is does not depend on the port.
+          host=${registry%%:*}
+          case "$host" in
+            docker.io | index.docker.io | registry-1.docker.io | registry.hub.docker.com)
+              host=docker.io registry=docker.io repository=${repository#library/}
+              ;;
           esac
-          if [ "$registry" = docker.io ]; then
-            repository=${repository#library/}
-          fi
 
-          case "$registry/$repository" in
+          case "$host/$repository" in
             docker.io/filebrowser/* | ghcr.io/filebrowser/*)
               if [ "$GITHUB_REPOSITORY_OWNER" != "filebrowser" ]; then
                 echo "::error::IMAGE_NAME is $IMAGE_NAME, which belongs to the File Browser project. Use a name of your own."
@@ -189,18 +207,20 @@ jobs:
               ;;
           esac
 
-          # For the tag v2.63.23, the version is 2.63.23 and the major tag is v2. A tag with a
-          # hyphen, such as v3.0.0-rc.1, is a prerelease: it gets its own tag only, and neither the
-          # major tag nor `latest` moves to it.
+          # The tags are made from the name in the form that was checked, not from the value of
+          # the variable. For the tag v2.63.23, the version is 2.63.23 and the major tag is v2. A
+          # tag with a hyphen, such as v3.0.0-rc.1, is a prerelease: it gets its own tag only, and
+          # neither the major tag nor `latest` moves to it.
+          image=$registry/$repository
           {
             echo "version=${GITHUB_REF_NAME#v}"
             echo "tags<<END_OF_TAGS"
-            echo "$IMAGE_NAME:$GITHUB_REF_NAME"
+            echo "$image:$GITHUB_REF_NAME"
             case "$GITHUB_REF_NAME" in
               *-*) ;;
               *)
-                echo "$IMAGE_NAME:${GITHUB_REF_NAME%%.*}"
-                echo "$IMAGE_NAME:latest"
+                echo "$image:${GITHUB_REF_NAME%%.*}"
+                echo "$image:latest"
                 ;;
             esac
             echo "END_OF_TAGS"
