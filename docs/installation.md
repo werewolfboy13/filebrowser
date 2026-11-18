@@ -143,6 +143,17 @@ The image has nothing in it but the server: no shell, no init system and no entr
 
 - **The settings file** is `/config/settings.json`, which the `FB_CONFIG` environment variable names. When that file does not exist, the server creates it on its start from `/defaults/settings.json`, which `FB_CONFIG_TEMPLATE` names: port 80 on every address, the files in `/srv` and the database in `/database/filebrowser.db`. A file with anything in it is never replaced. An empty one is filled, such as the one that `touch settings.json` makes before it is mounted at `/config/settings.json` by itself. The template is JSON, so it is only copied to a file whose name ends in `.json`: with `FB_CONFIG` pointing at a `.yaml` or `.toml` file, write that file yourself. With the `--config` flag, the server reads the file you name instead, and creates nothing. Either way, the file that is named has to be there and readable by then: the server does not start without it, and says which file it is.
 - **Single settings**, such as the port, are best set as environment variables: `-e FB_PORT=8080`, `-e FB_ADDRESS=0.0.0.0`, `-e FB_BASE_URL=/files`. Every flag of the [server](cli/filebrowser.md) has one. Flags after the image name work as well: `filebrowser:local --port 8080`.
+- **A unix socket** takes a settings file of its own, named with `--config` or `FB_CONFIG`. The file that the image creates sets `port` and `address`, and the server refuses a socket next to those: `--socket` or `FB_SOCKET` alone ends in `Error: --socket flag cannot be used with --address, --port, --key nor --cert`. The file has `socket` in their place, and the rest of what the image's file has:
+
+  ```json
+  {
+    "socket": "/sock/filebrowser.sock",
+    "database": "/database/filebrowser.db",
+    "root": "/srv"
+  }
+  ```
+
+  The directory of the socket has to be a mount that the server's user can write to.
 - **Other commands** use the same volumes, and need the server to be stopped, because the running server holds the database: `docker run --rm -v filebrowser_database:/database -v filebrowser_config:/config filebrowser:local users ls`. With `docker exec` in the running container, such a command fails after a second with `Error: timeout`.
 
 ### Health Check
