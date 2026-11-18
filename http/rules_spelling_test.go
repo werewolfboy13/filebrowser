@@ -33,8 +33,8 @@ func escapePath(p string) string {
 // TMPDIR at a filesystem that does ignore them to see it for real.
 func TestRulesDenyEverySpellingOfADeniedName(t *testing.T) {
 	e := newFullEnv(t)
-	real := e.server.CaseInsensitiveFs
-	t.Logf("the filesystem under test ignores case: %v", real)
+	ignoresCase := e.server.CaseInsensitiveFs
+	t.Logf("the filesystem under test ignores case: %v", ignoresCase)
 
 	denied := []struct {
 		rule      string
@@ -111,7 +111,7 @@ func TestRulesDenyTheOtherCompositionOnACaseSensitiveFilesystem(t *testing.T) {
 // the same letters stays closed.
 func TestAllowRulesAreNotWidenedBySpelling(t *testing.T) {
 	e := newFullEnv(t)
-	real := e.server.CaseInsensitiveFs
+	ignoresCase := e.server.CaseInsensitiveFs
 	e.writeBobFile("closed/stra\u00dfe/note.txt", "allowed")
 	if _, err := os.Stat(filepath.Join(e.bobDir, "closed", "strasse")); err != nil {
 		e.writeBobFile("closed/strasse/note.txt", "not allowed")
@@ -130,7 +130,7 @@ func TestAllowRulesAreNotWidenedBySpelling(t *testing.T) {
 	}
 	code, _, body := e.do(http.MethodGet, "/api/raw/closed/strasse/note.txt", tok, nil, nil)
 	if code != http.StatusForbidden {
-		t.Errorf("GET of a directory that folds to the allowed one = %d %q, want 403 (the filesystem ignores case: %v)", code, body, real)
+		t.Errorf("GET of a directory that folds to the allowed one = %d %q, want 403 (the filesystem ignores case: %v)", code, body, ignoresCase)
 	}
 }
 
