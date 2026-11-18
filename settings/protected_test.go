@@ -206,3 +206,47 @@ func TestIsProtectedInEverySpelling(t *testing.T) {
 		}
 	}
 }
+
+// With FollowExternalSymlinks, a link inside the root leads anywhere, so the
+// server's own files are registered wherever they are. Protect still reports
+// whether the path is inside the root, which is what its caller warns about.
+func TestProtectRegistersPathsOutsideTheRootWhenLinksLeadThere(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "srv")
+	for _, dir := range []string{root, filepath.Join(base, "database")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outside := filepath.Join(base, "database", "filebrowser.db")
+
+	s := &Server{Root: root, FollowExternalSymlinks: true}
+	if s.Protect(outside) {
+		t.Error("a path outside the root is reported as inside it")
+	}
+	if !s.HasProtectedPaths() || !s.IsProtected(outside) {
+		t.Error("a path outside the root is not registered although links are followed out of it")
+	}
+	if s.IsProtected(filepath.Join(base, "database", "other.db")) || s.IsProtected(filepath.Join(root, "filebrowser.db")) {
+		t.Error("another path is reported as protected")
+	}
+
+	// A directory that is the root, or contains it, is never registered: it
+	// would refuse everything that is served.
+	for name, path := range map[string]string{"the root itself": root, "an ancestor of the root": base} {
+		s := &Server{Root: root, FollowExternalSymlinks: true}
+		if s.Protect(path) || s.HasProtectedPaths() || s.IsProtected(filepath.Join(root, "holiday.jpg")) {
+			t.Errorf("%s was registered", name)
+		}
+	}
+
+	// Without the option nothing leads out of the root, and nothing outside
+	// it is registered: checking costs something on every request.
+	plain := &Server{Root: root}
+	if plain.Protect(outside) || plain.HasProtectedPaths() {
+		t.Error("a path outside the root was registered although no link is followed there")
+	}
+}
