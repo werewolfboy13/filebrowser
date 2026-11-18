@@ -26,6 +26,18 @@ type hookCred struct {
 	Username string `json:"username"`
 }
 
+// ErrHookRefused is returned by hook authentication when the hook was run
+// with the credentials and did not answer with an action it knows: it ended
+// with an error status, or printed no action, or another one. Whatever the
+// hook meant by it, the password was put to the test and was not accepted,
+// so it counts as a failed attempt at guessing it. It is not reported as a
+// wrong password (os.ErrPermission), because the hook did not say that
+// either: a hook that fails for a reason of its own answers the same way.
+//
+// A hook that could not be run at all is not reported with it: nothing was
+// tested.
+var ErrHookRefused = errors.New("the authentication hook did not accept the login")
+
 // HookAuth is a hook implementation of an Auther.
 type HookAuth struct {
 	Users    users.Store        `json:"-"`
@@ -56,6 +68,12 @@ func (a *HookAuth) Auth(r *http.Request, usr users.Store, stg *settings.Settings
 
 	action, err := a.RunCommand()
 	if err != nil {
+		// An exit error is the hook's own doing: it ran, with the
+		// credentials, and ended with an error status.
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return nil, fmt.Errorf("%w: %w", ErrHookRefused, err)
+		}
 		return nil, err
 	}
 
@@ -75,7 +93,7 @@ func (a *HookAuth) Auth(r *http.Request, usr users.Store, stg *settings.Settings
 		}
 		return u, nil
 	default:
-		return nil, fmt.Errorf("invalid hook action: %s", action)
+		return nil, fmt.Errorf("%w: invalid hook action: %s", ErrHookRefused, action)
 	}
 }
 

@@ -137,3 +137,76 @@ fi
 		t.Error("a login with the stored password ended a session")
 	}
 }
+
+// A hook can turn a login down without printing an action: by ending with an
+// error status, or by printing nothing. Either way it was given the
+// credentials and did not accept them, which is a failed guess at the
+// password. It was treated as a failure of the server instead, which the
+// limiter does not count, so guessing through such a hook was never slowed
+// down.
+func TestLoginsTheHookTurnsDownWithoutAnActionAreSlowedDown(t *testing.T) {
+	for name, refuse := range map[string]string{
+		"error status": "exit 1",
+		"no action":    "exit 0",
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newFullEnv(t)
+			e.useHookAuth(`if [ "$USERNAME" = bob ] && [ "$PASSWORD" = the-right-password-33 ]; then echo hook.action=auth; else ` + refuse + `; fi
+`)
+
+			codes := map[int]int{}
+			for i := 0; i < limiterFreeFailures; i++ {
+				code, _, _ := e.tryLogin("bob", "wrong-guess")
+				codes[code]++
+			}
+			// What the answer is did not change: the hook did not say that
+			// the password is wrong, so it is still the server's error.
+			if codes[http.StatusInternalServerError] != limiterFreeFailures {
+				t.Errorf("the first %d wrong guesses were answered %v, want 500 each", limiterFreeFailures, codes)
+			}
+
+			code, h, _ := e.tryLogin("bob", "wrong-guess")
+			if code != http.StatusTooManyRequests || h.Get("Retry-After") == "" {
+				t.Errorf("guess %d = %d (Retry-After %q), want 429 with a Retry-After", limiterFreeFailures+1, code, h.Get("Retry-After"))
+			}
+			// The right password gets no further while the name waits.
+			if code, _, _ := e.tryLogin("bob", "the-right-password-33"); code != http.StatusTooManyRequests {
+				t.Errorf("login while the name has to wait = %d, want 429", code)
+			}
+		})
+	}
+}
+
+// A few such refusals cost nothing, and the right password forgets them.
+func TestLoginAfterAFewHookRefusalsStillWorks(t *testing.T) {
+	e := newFullEnv(t)
+	e.useHookAuth(`if [ "$USERNAME" = bob ] && [ "$PASSWORD" = the-right-password-33 ]; then echo hook.action=auth; else exit 1; fi
+`)
+	for round := 0; round < 3; round++ {
+		for i := 0; i < limiterFreeFailures-1; i++ {
+			if code, _, _ := e.tryLogin("bob", "wrong-guess"); code != http.StatusInternalServerError {
+				t.Fatalf("round %d, wrong guess %d = %d, want 500", round, i+1, code)
+			}
+		}
+		if code, _, body := e.tryLogin("bob", "the-right-password-33"); code != http.StatusOK {
+			t.Fatalf("round %d: login with the right password after %d refusals = %d %q", round, limiterFreeFailures-1, code, body)
+		}
+	}
+}
+
+// A hook that cannot be run at all was not given any credentials: nothing
+// was guessed, and nothing is counted. Counting it would make users wait,
+// once the hook is repaired, for logins that failed because of it.
+func TestLoginsWithAHookThatCannotRunAreNotCounted(t *testing.T) {
+	e := newFullEnv(t)
+	e.useHookAuth("echo hook.action=auth\n")
+	if err := e.st.Auth.Save(&auth.HookAuth{Command: filepath.Join(t.TempDir(), "no-such-hook")}); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3*limiterFreeFailures; i++ {
+		if code, _, _ := e.tryLogin("bob", "whatever"); code != http.StatusInternalServerError {
+			t.Fatalf("login %d with a hook that cannot run = %d, want 500", i+1, code)
+		}
+	}
+}

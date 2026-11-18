@@ -1,7 +1,14 @@
 package auth
 
 import (
+	"errors"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/filebrowser/filebrowser/v2/settings"
@@ -175,5 +182,45 @@ func TestHookPasswordChangeRevokesTokens(t *testing.T) {
 
 	if u := login("the-new-password"); u.TokensNotBefore != mark {
 		t.Errorf("a login with the password that is now stored moved the mark from %d to %d", mark, u.TokensNotBefore)
+	}
+}
+
+// How a hook that does not answer with an action is told apart from a hook
+// that could not be run: only the former was given the credentials.
+func TestHookThatDoesNotVouchIsReported(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX shell")
+	}
+
+	body := func() io.Reader { return strings.NewReader(`{"username":"bob","password":"guess"}`) }
+	auth := func(command string) error {
+		r, err := http.NewRequest(http.MethodPost, "/api/login", body())
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := &HookAuth{Command: command}
+		_, err = a.Auth(r, &mockUserStore{users: map[string]*users.User{}}, &settings.Settings{}, &settings.Server{Root: t.TempDir()})
+		return err
+	}
+
+	for name, script := range map[string]string{
+		"error status":   "exit 1\n",
+		"no action":      "exit 0\n",
+		"unknown action": "echo hook.action=maybe\n",
+	} {
+		err := auth(writeHookScript(t, script))
+		if !errors.Is(err, ErrHookRefused) {
+			t.Errorf("%s: error %v, want ErrHookRefused", name, err)
+		}
+		if errors.Is(err, os.ErrPermission) {
+			t.Errorf("%s: the error says that the password is wrong, which the hook did not say", name)
+		}
+	}
+
+	if err := auth(writeHookScript(t, "echo hook.action=block\n")); !errors.Is(err, os.ErrPermission) || errors.Is(err, ErrHookRefused) {
+		t.Errorf("a hook that blocks: error %v, want os.ErrPermission", err)
+	}
+	if err := auth(filepath.Join(t.TempDir(), "no-such-hook")); err == nil || errors.Is(err, ErrHookRefused) || errors.Is(err, os.ErrPermission) {
+		t.Errorf("a hook that cannot be run: error %v, want an error that is neither a refusal nor a wrong password", err)
 	}
 }
