@@ -165,6 +165,7 @@
     "renameMessage": "Insert a new name for",
     "replace": "Replace",
     "uploadConflict": "\"{name}\" was not uploaded: the server reports a conflict at its destination. Either a file of that name has appeared there in the meantime, or an unfinished upload of it from the last few minutes is still pending (for example in another tab, or one that was interrupted). Replace overwrites that file, or starts the pending upload over, discarding what it had sent (it fails if it is still running). Skip leaves it as it is.",
+    "uploadConflictsSkipped": "{count} file was not uploaded: it has a conflict at its destination, and the question about it was closed without an answer. | {count} files were not uploaded: they have a conflict at their destination, and the question about them was closed without an answer.",
     "replaceMessage": "One of the files you're trying to upload has a conflicting name. Do you wish to skip this file and continue to upload or replace the existing one?\n",
     "schedule": "Schedule",
     "scheduleMessage": "Pick a date and time to schedule the publication of this post.",

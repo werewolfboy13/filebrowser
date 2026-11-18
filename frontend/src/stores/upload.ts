@@ -5,6 +5,7 @@ import { files as api } from "@/api";
 import buttons from "@/utils/buttons";
 import { computed, inject, markRaw, ref } from "vue";
 import * as tus from "@/api/tus";
+import i18n from "@/i18n";
 
 // TODO: make this into a user setting
 const UPLOADS_LIMIT = 5;
@@ -274,20 +275,41 @@ export const useUploadStore = defineStore("upload", () => {
             conflict.type
           );
         }
+        shown.answered = true;
         layoutStore.closeHovers();
       },
-      // runs however the question is closed (Replace, Skip, Cancel, Escape)
+      // runs however the question is closed: answered (Replace, Skip,
+      // Escape, a click beside it), or from outside it
       close: async () => {
         if (asked !== generation) return "";
         asking = null;
-        askNext();
+        if (shown.answered) {
+          askNext();
+        } else {
+          // Closed without an answer, e.g. by a route change, which closes
+          // the open prompt twice (Layout and Files each do) and would
+          // silently skip the next question too: skip every file still to
+          // be asked about, and say so.
+          skipAll();
+        }
         // the last question answered: finish the batch (unless Replace
         // queued an upload, which finishes it in turn)
         processUploads();
         return "";
       },
     });
-    asking = layoutStore.prompts[layoutStore.prompts.length - 1];
+    // the question as shown (the callbacks above run only once it is)
+    const shown = layoutStore.prompts[layoutStore.prompts.length - 1];
+    asking = shown;
+  };
+
+  const skipAll = () => {
+    const count = 1 + conflicts.length;
+    conflicts = [];
+    $showError(
+      i18n.global.t("prompts.uploadConflictsSkipped", { count }, count),
+      false
+    );
   };
 
   const dropConflicts = () => {

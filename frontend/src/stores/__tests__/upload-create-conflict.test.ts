@@ -32,6 +32,13 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock("@/api", () => ({
   files: { post: h.post, fetch: h.fetch, abortResourceUploads: vi.fn() },
+  share: {},
+  users: {},
+  pub: {},
+}));
+vi.mock("@/utils/upload", () => ({
+  checkConflict: vi.fn(),
+  handleFiles: vi.fn(),
 }));
 vi.mock("@/api/tus", () => ({ abortAllUploads: vi.fn() }));
 vi.mock("@/utils/buttons", () => ({
@@ -48,6 +55,7 @@ import { useLayoutStore } from "@/stores/layout";
 import { useFileStore } from "@/stores/file";
 import { watch } from "vue";
 import Replace from "@/components/prompts/Replace.vue";
+import Prompts from "@/components/prompts/Prompts.vue";
 
 const conflictOn = (method: string) =>
   Object.assign(new Error("409 Conflict\n"), { status: 409, method });
@@ -58,6 +66,13 @@ function queue(name: string, overwrite = false) {
   const file = new File(["data"], name);
   useUploadStore().upload(`/files/${name}`, name, file, overwrite, "blob");
   return file;
+}
+
+// what the question's Skip button does (see Replace.vue)
+function skipQuestion() {
+  const layout = useLayoutStore();
+  layout.currentPrompt!.answered = true;
+  layout.closeHovers();
 }
 
 let wrapper: VueWrapper | null = null;
@@ -127,7 +142,7 @@ describe("a conflict reported when the upload is created", () => {
     expect(layout.currentPromptName).toBe("replace");
     expect(reloads).toBe(0);
 
-    layout.closeHovers(); // Skip
+    skipQuestion();
     await settle();
     expect(reloads).toBe(1);
   });
@@ -152,7 +167,7 @@ describe("a conflict reported when the upload is created", () => {
     h.post.mockRejectedValueOnce(conflictOn("POST"));
     queue("a.pdf");
     await settle();
-    useLayoutStore().closeHovers();
+    skipQuestion();
     await settle();
     expect(h.post).toHaveBeenCalledTimes(1);
     expect(h.showError).not.toHaveBeenCalled();
@@ -171,7 +186,7 @@ describe("a conflict reported when the upload is created", () => {
     expect(layout.currentPrompt?.props.messageParams).toEqual({
       name: "a.pdf",
     });
-    layout.closeHovers(); // skip a.pdf
+    skipQuestion(); // a.pdf
     expect(layout.currentPrompt?.props.messageParams).toEqual({
       name: "b.pdf",
     });
@@ -251,6 +266,73 @@ describe("a conflict reported when the upload is created", () => {
 // upload gone (it was completed), so tus creates it again, and that is
 // refused with 409 because the file is now there. That 409 is about the
 // file this upload stored: it must not be asked about as a conflict.
+// The question can be closed from outside it: a route change closes the
+// open prompt twice (Layout's route watcher and Files' fetchData each call
+// closeHovers), and closing a question showed the next one at once, so
+// one Back press skipped two files without a word. Closed from outside,
+// the question now skips every file still to be asked about, with one
+// toast saying how many. Skip, Escape and a click beside the question
+// still skip just that file.
+describe("closing the question from outside it, e.g. by navigating away", () => {
+  const names = () => useLayoutStore().currentPrompt?.props?.messageParams;
+  async function threeConflicts() {
+    h.post
+      .mockRejectedValueOnce(conflictOn("POST"))
+      .mockRejectedValueOnce(conflictOn("POST"))
+      .mockRejectedValueOnce(conflictOn("POST"));
+    queue("a.pdf");
+    queue("b.pdf");
+    queue("c.pdf");
+    await settle();
+  }
+
+  it("skips every file still to be asked about, with one toast saying so", async () => {
+    await threeConflicts();
+    const layout = useLayoutStore();
+    expect(names()).toEqual({ name: "a.pdf" });
+    // one route change
+    layout.closeHovers();
+    layout.closeHovers();
+    await settle();
+    console.log(
+      "after one route change: question:",
+      JSON.stringify(names() ?? null),
+      "| toasts:",
+      JSON.stringify(h.showError.mock.calls)
+    );
+    expect(layout.prompts).toEqual([]);
+    expect(h.showError).toHaveBeenCalledTimes(1);
+    const [message, report] = h.showError.mock.calls[0];
+    expect(message).toMatch(/^3 files were not uploaded/);
+    expect(report).toBe(false);
+    expect(h.post).toHaveBeenCalledTimes(3); // nothing replaced
+    expect(useFileStore().reload).toBe(true); // the batch finished
+  });
+
+  it("Skip, Escape and a click beside the question skip just that file", async () => {
+    wrapper = mount(Prompts, {
+      attachTo: document.body,
+      global: { mocks: { $t: tfn } },
+    });
+    await threeConflicts();
+    await flushPromises();
+    const skip = wrapper
+      .findAll("button")
+      .find((b) => b.text() === "prompts.skip")!;
+    await skip.trigger("click");
+    await flushPromises();
+    expect(names()).toEqual({ name: "b.pdf" });
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flushPromises();
+    expect(names()).toEqual({ name: "c.pdf" });
+    await wrapper.find("#modal-background").trigger("click");
+    await flushPromises();
+    expect(useLayoutStore().prompts).toEqual([]);
+    expect(h.showError).not.toHaveBeenCalled();
+    expect(h.post).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("a conflict when tus creates the upload again", () => {
   const recreateConflict = () =>
     Object.assign(conflictOn("POST"), { recreated: true });

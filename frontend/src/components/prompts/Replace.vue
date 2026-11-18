@@ -57,6 +57,7 @@ const replace = (event: Event) => {
 
 const skip = () => {
   if (prompt == null || layoutStore.currentPrompt !== prompt) return;
+  prompt.answered = true;
   layoutStore.closeHovers();
 };
 </script>

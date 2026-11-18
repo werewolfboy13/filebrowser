@@ -9,6 +9,10 @@ interface PopupProps {
   saveAction?: () => void;
   props?: any;
   close?: (() => Promise<string>) | null;
+  // set when the user answers the prompt itself (its buttons, Escape, a
+  // click beside it), as opposed to its being closed from outside (e.g. on
+  // navigation)
+  answered?: boolean;
 }
 
 type PopupAction = (e: Event) => void;

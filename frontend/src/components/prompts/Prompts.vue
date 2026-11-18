@@ -68,8 +68,10 @@ const modal = computed(() => {
   return modal;
 });
 
+// Escape or a click beside the dialog: the user's answer to it
 const close = () => {
   if (!layoutStore.currentPrompt) return;
+  layoutStore.currentPrompt.answered = true;
   layoutStore.closeHovers();
 };
 </script>
