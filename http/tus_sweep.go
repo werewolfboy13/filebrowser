@@ -171,7 +171,7 @@ func (s *tusSweeper) sweep() {
 	// being created must not wait for a slow disk.
 	done := []string{}
 	for key, f := range files {
-		if f.look(now, s.maxAge) {
+		if s.look(f, now) {
 			done = append(done, key)
 		}
 	}
@@ -188,8 +188,22 @@ func (s *tusSweeper) sweep() {
 
 // look checks on the file, removes it if it was abandoned, and reports
 // whether there is nothing left to keep an eye on.
-func (f *tusTempFile) look(now time.Time, maxAge time.Duration) (done bool) {
+//
+// The filesystem is asked without the lock, but what is remembered of the file
+// is only read and changed with it: track reads the same fields, with the
+// lock, when it looks for the file to forget.
+func (s *tusSweeper) look(f *tusTempFile, now time.Time) (done bool) {
 	info, err := lstatPath(f.fs, f.path)
+
+	s.mu.Lock()
+	changed := err == nil && (info.Size() != f.size || !info.ModTime().Equal(f.modTime))
+	if changed {
+		// It was written since the last look: the upload is alive.
+		f.size, f.modTime, f.since = info.Size(), info.ModTime(), now
+	}
+	quiet := now.Sub(f.since)
+	s.mu.Unlock()
+
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		// The upload was completed or cancelled.
@@ -197,18 +211,11 @@ func (f *tusTempFile) look(now time.Time, maxAge time.Duration) (done bool) {
 	case err != nil:
 		// It cannot be told (the scope refuses the path now, the disk is
 		// away): try again later, for as long as it could still be ours.
-		return now.Sub(f.since) > 2*maxAge
+		return quiet > 2*s.maxAge
 	case !info.Mode().IsRegular() || !os.SameFile(info, f.created):
 		// Something else has taken the name: not ours.
 		return true
-	}
-
-	if info.Size() != f.size || !info.ModTime().Equal(f.modTime) {
-		// It was written since the last look: the upload is alive.
-		f.size, f.modTime, f.since = info.Size(), info.ModTime(), now
-		return false
-	}
-	if now.Sub(f.since) < maxAge {
+	case changed || quiet < s.maxAge:
 		return false
 	}
 
