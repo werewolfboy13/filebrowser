@@ -4,13 +4,23 @@ File Browser is a single binary and can be used as standalone executable. It can
 
 > [!NOTE]
 >
-> This repository is a fork of File Browser, a project that was archived on 2026-09-01. Nothing here is published by the File Browser project, and the project's own downloads do not have the changes made here. That goes for the `filebrowser/filebrowser` images on Docker Hub, the Homebrew tap, the download scripts and the releases of `github.com/filebrowser/filebrowser`.
+> This is a community-maintained fork of File Browser, at [github.com/werewolfboy13/filebrowser](https://github.com/werewolfboy13/filebrowser). The original project was archived on 2026-09-01. Nothing here is published by it, and its own downloads do not have the changes made here. That goes for the `filebrowser/filebrowser` images on Docker Hub, the Homebrew tap `filebrowser/tap`, the download scripts and the releases of `github.com/filebrowser/filebrowser`: they install the original project's last release, which gets no fixes any more.
 
 ## Binary
 
-### This Build, From Source
+### Releases
 
-There are no downloads of this build. With [Go](https://go.dev), [pnpm](https://pnpm.io) and [Task](https://taskfile.dev) installed, build the binary in a clone of this repository, as [CONTRIBUTING.md](../CONTRIBUTING.md) describes:
+A released version of this fork has its binaries on the fork's [releases page](https://github.com/werewolfboy13/filebrowser/releases), for Linux, macOS, Windows, FreeBSD and OpenBSD. Unpack the archive for your system and run the binary:
+
+```sh
+./filebrowser -r /path/to/your/files
+```
+
+There is no release yet. Until there is one, and for anything newer than the last one, build it from source.
+
+### From Source
+
+With [Go](https://go.dev), [pnpm](https://pnpm.io) and [Task](https://taskfile.dev) installed, build the binary in a clone of this repository, as [CONTRIBUTING.md](../CONTRIBUTING.md) describes:
 
 ```sh
 task build
@@ -19,37 +29,13 @@ task build
 
 To run it in a container instead, without installing any of these, see [Docker](#docker).
 
-### The Original Project's Last Release
-
-The package manager and the download scripts below install the last release of the original File Browser project, not this build. That release gets no fixes any more.
-
-#### Brew
-
-```sh
-brew tap filebrowser/tap
-brew install filebrowser
-filebrowser -r /path/to/your/files
-```
-
-#### Unix
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash
-filebrowser -r /path/to/your/files
-```
-
-#### Windows
-
-```sh
-iwr -useb https://raw.githubusercontent.com/filebrowser/get/master/get.ps1 | iex
-filebrowser -r /path/to/your/files
-```
-
 File Browser is now up and running. Read the ["First Boot"](#first-boot) section for more information.
 
 ## Docker
 
 The image is built from this repository, with the [Dockerfile](../Dockerfile) at its root. It is not the `filebrowser/filebrowser` image of the original project, and it does not behave the same in every respect: read [Coming From the Original Image](#coming-from-the-original-image) before you replace one with the other.
+
+A released version of this fork has its image at `ghcr.io/werewolfboy13/filebrowser`, which can take the place of `filebrowser:local` in the commands below. There is no release yet. Until there is one, and for anything newer than the last one, build the image.
 
 ### Building the Image
 

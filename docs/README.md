@@ -2,13 +2,9 @@
   <img src="../branding/banner.png" width="550"/>
 </p>
 
-> [!WARNING]
->
-> **File Browser is archived on 2026-09-01.** There will be no further releases and no security fixes. Existing releases and Docker images stay online. For the known unaddressed security issues and hardening guidance, read the [README](../README.md#security).
-
 > [!NOTE]
 >
-> This is the documentation of a fork of File Browser, not of the archived project itself. The fork has its own Docker image, which is built from this repository: see [Installation](installation.md#docker).
+> This is the documentation of a community-maintained fork of File Browser, at [github.com/werewolfboy13/filebrowser](https://github.com/werewolfboy13/filebrowser). The original project was archived on 2026-09-01 and gets no further releases or fixes, and its downloads do not have the changes made here. For the known limitations and hardening guidance, read the [README](../README.md#security) and the [Security Policy](../SECURITY.md).
 
 File Browser provides a file managing interface within a specified directory and it can be used to upload, delete, preview and edit your files. It is a **create-your-own-cloud**-kind of software where you can just install it on your server, direct it to a path and access your files through a nice web interface.
 

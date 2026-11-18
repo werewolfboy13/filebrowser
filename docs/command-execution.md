@@ -2,7 +2,7 @@
 
 > [!CAUTION]
 >
-> The **hook runner** and **interactive shell** functionalities have been disabled for all existent and new installations by default from version v2.33.8 and onwards, due to continuous and known security vulnerabilities. You should only use this feature if you are aware of all of the security risks involved. For more up to date information, consult issue [#5199](https://github.com/filebrowser/filebrowser/issues/5199).
+> The **hook runner** and **interactive shell** functionalities have been disabled for all existent and new installations by default from version v2.33.8 and onwards, due to continuous and known security vulnerabilities. You should only use this feature if you are aware of all of the security risks involved. For the background, see issue [#5199](https://github.com/filebrowser/filebrowser/issues/5199) of the original project, and for what this fork says about it, its [Security Policy](../SECURITY.md#known-limitations).
 
 ## Hook Runner
 
