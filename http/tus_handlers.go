@@ -170,6 +170,21 @@ func tusPending(d *data, dst string, upload uploadInfo) bool {
 	return err == nil
 }
 
+// tusOwns reports whether the user is the one who created the upload. An
+// upload that does not say who did (it was registered by a version that did
+// not write it down) is nobody's.
+func tusOwns(d *data, upload uploadInfo) bool {
+	return upload.Owner != 0 && upload.Owner == d.user.ID
+}
+
+// tusMayCancel reports whether the user may discard what the upload has
+// written so far: by cancelling it, or by starting it over. That is up to
+// whoever created it. Doing it to somebody else's upload takes the Delete
+// permission.
+func tusMayCancel(d *data, upload uploadInfo) bool {
+	return d.user.Perm.Delete || tusOwns(d, upload)
+}
+
 // tusDiscardAbandoned removes the temporary file at path, which was created
 // through afs for the upload known by key, unless that upload is registered:
 // an upload that is registered is not abandoned, and its file is all it has.
@@ -254,12 +269,16 @@ func tusPostHandler(cache UploadCache) handleFunc {
 		}
 
 		// The destination of an upload in progress does not exist yet, so the
-		// check above does not see it. A second upload to the same path would
-		// start the first one over; without override it is a conflict, as it
-		// was when the destination was created up front.
+		// check above does not see it. A second upload to the same path
+		// starts the first one over, and what that has written is lost.
+		// Without override it is a conflict, as it was when the destination
+		// was created up front. With it, it is for those who may cancel the
+		// first one. For anyone else the path is taken, and stays a
+		// conflict: being allowed to create files is not being allowed to
+		// discard the upload of another user.
 		uploadKey := tusUploadKey(d, r.URL.Path)
-		if !exists && !override {
-			if pending, cacheErr := cache.Get(uploadKey); cacheErr == nil && !pending.Direct && tusPending(d, r.URL.Path, pending) {
+		if pending, cacheErr := cache.Get(uploadKey); cacheErr == nil && tusPending(d, r.URL.Path, pending) {
+			if !override || !tusMayCancel(d, pending) {
 				return http.StatusConflict, nil
 			}
 		}
@@ -369,6 +388,12 @@ func tusHeadHandler(cache UploadCache) handleFunc {
 			return http.StatusNotFound, err
 		}
 
+		// An upload is continued by whoever created it, and by nobody else:
+		// see tusPatchUpload.
+		if !tusOwns(d, upload) {
+			return http.StatusForbidden, nil
+		}
+
 		// The offset is how much the upload has written, to the file it
 		// writes to. Without that file there is no upload to report on.
 		writePath, _, err := tusWritePath(d, r.URL.Path, upload)
@@ -433,6 +458,14 @@ func tusPatchUpload(w http.ResponseWriter, r *http.Request, d *data, cache Uploa
 		return http.StatusNotFound, err
 	}
 	uploadLength := upload.Length
+
+	// The upload was created by one user, with what they are allowed to do,
+	// and is put in place with what they asked for. Everyone who may create
+	// files in the directory could send its chunks: another user could
+	// complete it with bytes of their own.
+	if !tusOwns(d, upload) {
+		return http.StatusForbidden, nil
+	}
 
 	writePath, temp, err := tusWritePath(d, r.URL.Path, upload)
 	switch {
@@ -575,21 +608,24 @@ func tusDeleteHandler(cache UploadCache) handleFunc {
 			return http.StatusForbidden, nil
 		}
 
+		// Whose upload it is is read with the upload held, like everything
+		// else about it: read before, it could be another upload by the time
+		// it is removed.
+		release, ok := tusAcquire(d, r)
+		if !ok {
+			return http.StatusLocked, errTusBusy
+		}
+		defer release()
+
 		uploadKey := tusUploadKey(d, r.URL.Path)
 		upload, err := cache.Get(uploadKey)
 		if err != nil {
 			return http.StatusNotFound, err
 		}
 
-		if !d.user.Perm.Delete && (upload.Owner == 0 || upload.Owner != d.user.ID) {
+		if !tusMayCancel(d, upload) {
 			return http.StatusForbidden, nil
 		}
-
-		release, ok := tusAcquire(d, r)
-		if !ok {
-			return http.StatusLocked, errTusBusy
-		}
-		defer release()
 
 		writePath, temp, err := tusWritePath(d, r.URL.Path, upload)
 		switch {
