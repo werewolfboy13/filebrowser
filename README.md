@@ -66,6 +66,18 @@ Documentation on how to install, configure, and build this project lives in [`do
 
 [CONTRIBUTING.md](CONTRIBUTING.md) documents how to build and develop the project, which remains useful to anyone forking it.
 
+## Before Publishing This Fork
+
+This fork has no home of its own yet. Until it is decided where it lives, these are left as they are, and each has to be looked at before the repository is made public:
+
+- **[`.github/CODEOWNERS`](.github/CODEOWNERS)** names `@filebrowser/maintainers`, a team that only the original organization has.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** has the reader clone `github.com/filebrowser/filebrowser`, and [`docs/installation.md`](docs/installation.md) sends the reader there to build this repository: followed as written, that builds the original code, without the changes made here.
+- **[SECURITY.md](SECURITY.md)**, the [Security](#security) section above and the notice that the server logs on every start (`cmd/root.go`) point to the original project's advisories and say that nothing gets fixed. The fork has no place of its own to report a vulnerability to.
+- **The issue and pull request templates** in [`.github`](.github) link to the original project's issues, releases and discussions.
+- **The tags of the original project.** Every tag up to `v2.63.23` carries the original project's workflow, which releases on any pushed `v*` tag, with nothing that checks where it runs. GitHub runs the workflow of the commit that a tag points to, so pushing these tags to a new repository that has Actions enabled starts that workflow. It should stop early there, for lack of the `GH_PAT` secret it uses, but this was not tried. Push the old tags before Actions is enabled, or all of them in one push: GitHub starts nothing when more than three tags are pushed at once.
+- **The first release.** The release job in [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) has never run. It needs the repository variable `IMAGE_NAME`, and the secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` for the base images. Make the first tag a prerelease, such as `v3.0.0-rc.1`, which moves neither `latest` nor the major tag of the image.
+- **The branch that CI runs on.** Pushes are built on `master` and `modernize`. Another default branch has to be added to the workflow, in `on.push.branches` and in the condition of the `docker` job.
+
 ## License
 
 [Apache License 2.0](LICENSE) © File Browser Contributors

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "master"
+      - "modernize"
     tags:
       - "v*"
   pull_request:
@@ -100,7 +101,7 @@ jobs:
   docker:
     name: Build Docker image
     # A version tag is built by the release job.
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/master'
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/modernize'
     runs-on: ubuntu-latest
     env:
       # The Dockerfile's base images need a login to dhi.io. The secrets for it are not given to
