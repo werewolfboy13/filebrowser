@@ -37,3 +37,6 @@ build/
 
 default.nix
 Dockerfile.dev
+
+# Local assistant tooling stays out of the repository
+.claude/
