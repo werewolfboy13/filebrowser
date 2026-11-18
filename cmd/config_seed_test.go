@@ -53,6 +53,21 @@ func assertNoFile(t *testing.T, path string) {
 	}
 }
 
+// assertErrorNames fails the test unless err is an error whose message has
+// every one of parts in it.
+func assertErrorNames(t *testing.T, err error, parts ...string) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, part := range parts {
+		if !strings.Contains(err.Error(), part) {
+			t.Errorf("error = %q, want it to name %s", err, part)
+		}
+	}
+}
+
 func TestSeedConfigFile(t *testing.T) {
 	const template = `{"port": 80}`
 
@@ -434,22 +449,71 @@ func TestInitViperConfigFromEnv(t *testing.T) {
 		assertNoFile(t, envPath)
 	})
 
-	t.Run("a missing --config file is not created from the template", func(t *testing.T) {
+	// A file that is asked for by name and is not there was passed over in
+	// silence. The server went on with its defaults: in the Docker image
+	// that ended in "open /filebrowser.db: permission denied", and as root
+	// it served the working directory.
+	t.Run("a missing --config file is an error, and is not created from the template", func(t *testing.T) {
 		dir := t.TempDir()
 		templatePath := filepath.Join(dir, "template.json")
 		flagPath := filepath.Join(dir, "flag.json")
 		writeTestFile(t, templatePath, `{"port": 4321}`)
 		t.Setenv(envConfigTemplate, templatePath)
 
-		v, err := initViper(newServerTestCmd(t, "--config", flagPath))
-		if err != nil {
-			t.Fatal(err)
-		}
-
+		_, err := initViper(newServerTestCmd(t, "--config", flagPath))
+		assertErrorNames(t, err, flagPath, "--config")
 		assertNoFile(t, flagPath)
-		if got := v.GetString("port"); got != "8080" {
-			t.Errorf("port = %q, want the default 8080", got)
-		}
+	})
+
+	t.Run("a missing FB_CONFIG file is an error when there is no template", func(t *testing.T) {
+		configPath := filepath.Join(t.TempDir(), "settings.json")
+		t.Setenv(envConfig, configPath)
+		t.Setenv(envConfigTemplate, "")
+
+		_, err := initViper(newServerTestCmd(t))
+		assertErrorNames(t, err, configPath, envConfig)
+		assertNoFile(t, configPath)
+	})
+
+	t.Run("a missing FB_CONFIG file of another format than the template is an error", func(t *testing.T) {
+		dir := t.TempDir()
+		templatePath := filepath.Join(dir, "template.json")
+		configPath := filepath.Join(dir, "settings.toml")
+		writeTestFile(t, templatePath, `{"port": 4321}`)
+		t.Setenv(envConfig, configPath)
+		t.Setenv(envConfigTemplate, templatePath)
+
+		_, err := initViper(newServerTestCmd(t))
+		assertErrorNames(t, err, configPath, envConfig)
+		assertNoFile(t, configPath)
+	})
+
+	t.Run("a config file of a type that cannot be read is an error", func(t *testing.T) {
+		configPath := filepath.Join(t.TempDir(), "settings.conf")
+		writeTestFile(t, configPath, `{"port": 1234}`)
+		t.Setenv(envConfig, configPath)
+
+		_, err := initViper(newServerTestCmd(t))
+		assertErrorNames(t, err, configPath, envConfig)
+	})
+
+	t.Run("a config file that cannot be parsed is named in the error", func(t *testing.T) {
+		flagPath := filepath.Join(t.TempDir(), "flag.json")
+		writeTestFile(t, flagPath, "")
+
+		_, err := initViper(newServerTestCmd(t, "--config", flagPath))
+		assertErrorNames(t, err, flagPath, "--config")
+	})
+
+	t.Run("a config file that is found and cannot be parsed is named in the error", func(t *testing.T) {
+		home := t.TempDir()
+		found := filepath.Join(home, ".filebrowser.json")
+		writeTestFile(t, found, `{"port": `)
+		t.Setenv("HOME", home)
+		t.Setenv(envConfig, "")
+
+		_, err := initViper(newServerTestCmd(t))
+		assertErrorNames(t, err, found)
 	})
 
 	t.Run("without FB_CONFIG the default locations are searched", func(t *testing.T) {

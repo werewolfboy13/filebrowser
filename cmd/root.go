@@ -151,6 +151,9 @@ FB_CONFIG_TEMPLATE names a file with the same extension, the template is
 copied to the FB_CONFIG path first. The Docker image uses this to create its
 default configuration on the first start.
 
+A file that "--config" or FB_CONFIG names has to be there and readable by
+then: File Browser does not start without it.
+
 **Note:** Only the options listed below can be set via the config file or
 environment variables. Other configuration options live exclusively in the
 database and so they must be set by the "config set" or "config
