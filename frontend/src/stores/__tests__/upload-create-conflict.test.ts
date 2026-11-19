@@ -209,6 +209,29 @@ describe("a conflict reported when the upload is created", () => {
     ]);
   });
 
+  // logout() reports this count ("N uploads were cancelled"): the files the
+  // user is being asked about, and those still to be asked about, were not
+  // stored either
+  it("abort counts the file asked about and the conflicts still queued", async () => {
+    h.post
+      .mockRejectedValueOnce(conflictOn("POST")) // a.pdf: asked about
+      .mockRejectedValueOnce(conflictOn("POST")) // b.pdf: queued question
+      .mockReturnValueOnce(new Promise(() => {})); // c.pdf: still running
+    queue("a.pdf");
+    queue("b.pdf");
+    queue("c.pdf");
+    const layout = useLayoutStore();
+    await vi.waitFor(() => {
+      expect(h.post).toHaveBeenCalledTimes(3);
+      expect(layout.currentPrompt?.props.messageParams).toEqual({
+        name: "a.pdf",
+      });
+    });
+    await settle(); // b.pdf's conflict queued behind a.pdf's question
+    expect(layout.prompts).toHaveLength(1);
+    expect(useUploadStore().abort()).toBe(3);
+  });
+
   it("after abort (or logout) the question goes away and Replace does nothing", async () => {
     h.post.mockRejectedValueOnce(conflictOn("POST"));
     queue("a.pdf");
