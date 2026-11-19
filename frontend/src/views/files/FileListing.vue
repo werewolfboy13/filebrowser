@@ -374,6 +374,7 @@ import { removePrefix } from "@/api/utils";
 import { isListingDrag } from "@/utils/dragdrop";
 import { withTrailingSlash } from "@/utils/url";
 import { isTypingTarget } from "@/utils/keyboard";
+import { ownAccountChangeError } from "@/utils/errors";
 
 const showLimit = ref<number>(50);
 const columnWidth = ref<number>(280);
@@ -969,7 +970,8 @@ const sort = async (by: string) => {
       ]);
     }
   } catch (e: any) {
-    $showError(e);
+    const shown = ownAccountChangeError(t, e, authStore.user !== null);
+    if (shown !== null) $showError(shown);
   }
 
   fileStore.reload = true;
@@ -1044,8 +1046,14 @@ const switchView = async () => {
       "list") as ViewModeType,
   };
 
-  users.update(data, ["viewMode"]).catch($showError);
-
+  // shown in the page once it is stored
+  try {
+    await users.update(data, ["viewMode"]);
+  } catch (e) {
+    const shown = ownAccountChangeError(t, e, authStore.user !== null);
+    if (shown !== null) $showError(shown);
+    return;
+  }
   authStore.updateUser(data);
 
   setItemWeight();

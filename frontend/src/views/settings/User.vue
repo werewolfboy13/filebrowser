@@ -214,7 +214,9 @@ const send = async (currentPassword: string) => {
     }
   } catch (e: any) {
     if (!self) {
-      $showError(e);
+      // 409: the user was changed elsewhere (sessions ended) meanwhile
+      const changed = !isNew.value && e?.status === 409;
+      $showError(changed ? t("errors.userChangedConcurrently") : e);
       return;
     }
     const shown = ownAccountChangeError(t, e, authStore.user !== null);

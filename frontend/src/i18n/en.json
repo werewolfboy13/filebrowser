@@ -77,7 +77,8 @@
     "tooLarge": "This is too large for the server to process.",
     "subtitleUnavailable": "The subtitles \"{name}\" could not be loaded (the file may be too large to convert).",
     "locked": "The server is still busy with an earlier request for this item. Please try again in a moment.",
-    "accountChangedConcurrently": "Your account was changed by someone else at the same time, so this change was not saved. Please try again."
+    "accountChangedConcurrently": "Your account was changed by someone else at the same time, so this change was not saved. Please try again.",
+    "userChangedConcurrently": "This user was changed by someone else at the same time, so your changes were not saved. Reload the page and try again."
   },
   "files": {
     "body": "Body",
