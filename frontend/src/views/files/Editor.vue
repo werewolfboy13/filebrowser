@@ -164,6 +164,9 @@ const executeEditorCommand = (name: string) => {
 
 // The file's content as this editor last loaded or saved it.
 let baseContent = "";
+// A kept text of this file not answered yet (the restore question open,
+// or closed with Cancel or Escape): a save of the file keeps it.
+let keptPending = false;
 
 // What a forced logout keeps of this editor (see utils/unsavedEdit).
 const unsavedSource = () =>
@@ -276,6 +279,7 @@ const offerUnsaved = (fileContent: string) => {
     dropUnsaved(path);
     return;
   }
+  keptPending = true;
   layoutStore.showHover({
     prompt: "restoreEditorChanges",
     props: { changed: kept.base !== fingerprint(fileContent) },
@@ -283,11 +287,13 @@ const offerUnsaved = (fileContent: string) => {
     // (Undo brings back the file's content; nothing is saved yet)
     confirm: () => {
       editor.value?.setValue(kept.content, -1);
+      keptPending = false;
       dropUnsaved(path);
       layoutStore.closeHovers();
     },
     // Discard
     action: () => {
+      keptPending = false;
       dropUnsaved(path);
       layoutStore.closeHovers();
     },
@@ -329,7 +335,7 @@ const save = async (throwError?: boolean) => {
     await api.put(route.path, content);
     baseContent = content ?? "";
     editor.value?.session.getUndoManager().markClean();
-    dropUnsaved(route.path);
+    if (!keptPending) dropUnsaved(route.path);
     buttons.success(button);
   } catch (e: any) {
     buttons.done(button);

@@ -63,6 +63,7 @@ import ace from "ace-builds";
 import router from "@/router";
 import i18n from "@/i18n";
 import Prompts from "@/components/prompts/Prompts.vue";
+import buttons from "@/utils/buttons";
 import { logout, parseToken } from "@/utils/auth";
 import { useAuthStore } from "@/stores/auth";
 import { useFileStore } from "@/stores/file";
@@ -284,7 +285,19 @@ describe(
       expect(storedText()).toBe(true);
     });
 
-    it("a successful save drops the kept text of that file", async () => {
+    // A save of the file while the question is unanswered (closed with
+    // Escape or Cancel: "offered again next time", or still open) keeps the
+    // text: it dropped it, without a word. Restore or Discard drops it.
+    const ctrlS = () =>
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true })
+      );
+    const saved = async (count: number) =>
+      waitFor(() =>
+        expect(vi.mocked(buttons.success)).toHaveBeenCalledTimes(count)
+      );
+
+    it("a save after Escape keeps the text: it is offered again next time", async () => {
       await setup();
       await saveAnswered401(await openFile());
       parseToken(token(1, "alice"));
@@ -295,11 +308,110 @@ describe(
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
       await waitFor(() => expect(promptNames()).toEqual([]));
       putStatus = 200;
+      vi.mocked(buttons.success).mockClear();
       reopened.setValue("saved now");
-      window.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true })
+      ctrlS();
+      await saved(1);
+      expect(reopened.session.getUndoManager().isClean()).toBe(true);
+      expect(storedText()).toBe(true);
+    });
+
+    it("Cancel on the changed-file question, an edit, Save: offered again, as changed", async () => {
+      await setup();
+      await saveAnswered401(await openFile("/files/notes.md", "draft v1"));
+      parseToken(token(1, "alice"));
+      const reopened = await openFile("/files/notes.md", "v2: bob's work");
+      await waitFor(() =>
+        expect(promptNames()).toEqual(["restoreEditorChanges"])
       );
-      await waitFor(() => expect(storedText()).toBe(false));
+      expect(document.activeElement?.textContent?.trim()).toBe("Cancel");
+      (document.activeElement as HTMLElement).click();
+      await waitFor(() => expect(promptNames()).toEqual([]));
+      putStatus = 200;
+      vi.mocked(buttons.success).mockClear();
+      reopened.setValue("v2: bob's work (typo fixed)");
+      ctrlS();
+      await saved(1);
+      expect(storedText()).toBe(true);
+
+      await router.push("/login");
+      await openFile("/files/notes.md", "v2: bob's work (typo fixed)");
+      await waitFor(() =>
+        expect(promptNames()).toEqual(["restoreEditorChanges"])
+      );
+      expect(question()).toMatch(/changed since you were logged out/);
+    });
+
+    it("Ctrl+S while the question is open saves the file and keeps the text", async () => {
+      await setup();
+      await saveAnswered401(await openFile("/files/notes.md", "draft v1"));
+      parseToken(token(1, "alice"));
+      const reopened = await openFile("/files/notes.md", "v2: bob's work");
+      await waitFor(() =>
+        expect(promptNames()).toEqual(["restoreEditorChanges"])
+      );
+      putStatus = 200;
+      vi.mocked(buttons.success).mockClear();
+      ctrlS();
+      await saved(1);
+      // the file's own content, unchanged, was saved
+      const puts = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.filter((c) => c[1]?.method === "PUT");
+      expect(puts.at(-1)?.[1]?.body).toBe("v2: bob's work");
+      expect(promptNames()).toEqual(["restoreEditorChanges"]);
+      expect(storedText()).toBe(true);
+      // Cancel still leaves it for next time
+      const cancel = [...document.querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === "Cancel"
+      )!;
+      cancel.click();
+      await waitFor(() => expect(promptNames()).toEqual([]));
+      expect(reopened.getValue()).toBe("v2: bob's work");
+      expect(storedText()).toBe(true);
+    });
+
+    it("Restore, then Save: the text is saved and no longer kept", async () => {
+      await setup();
+      await saveAnswered401(await openFile());
+      parseToken(token(1, "alice"));
+      const reopened = await openFile();
+      await waitFor(() =>
+        expect(promptNames()).toEqual(["restoreEditorChanges"])
+      );
+      const restore = [...document.querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === "Restore"
+      )!;
+      restore.click();
+      await waitFor(() => expect(promptNames()).toEqual([]));
+      putStatus = 200;
+      vi.mocked(buttons.success).mockClear();
+      ctrlS();
+      await saved(1);
+      expect(reopened.getValue()).toBe(UNSAVED);
+      expect(storedText()).toBe(false);
+    });
+
+    it("Discard, then Save: the text is no longer kept", async () => {
+      await setup();
+      await saveAnswered401(await openFile());
+      parseToken(token(1, "alice"));
+      const reopened = await openFile();
+      await waitFor(() =>
+        expect(promptNames()).toEqual(["restoreEditorChanges"])
+      );
+      const discard = [...document.querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === "Discard"
+      )!;
+      discard.click();
+      await waitFor(() => expect(promptNames()).toEqual([]));
+      expect(storedText()).toBe(false);
+      putStatus = 200;
+      vi.mocked(buttons.success).mockClear();
+      reopened.setValue("saved now");
+      ctrlS();
+      await saved(1);
+      expect(storedText()).toBe(false);
     });
 
     it("a full storage does not stop the logout", async () => {
