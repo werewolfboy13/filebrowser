@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/werewolfboy13/filebrowser/v2/rules"
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v3/rules"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 // The tests in this file put two requests that change, or read, one account

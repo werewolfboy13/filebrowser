@@ -13,12 +13,12 @@ import (
 
 	"github.com/asdine/storm/v3"
 	"github.com/spf13/afero"
-	"github.com/werewolfboy13/filebrowser/v2/files"
-	"github.com/werewolfboy13/filebrowser/v2/settings"
-	"github.com/werewolfboy13/filebrowser/v2/share"
-	"github.com/werewolfboy13/filebrowser/v2/storage"
-	"github.com/werewolfboy13/filebrowser/v2/storage/bolt"
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v3/files"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
+	"github.com/werewolfboy13/filebrowser/v3/share"
+	"github.com/werewolfboy13/filebrowser/v3/storage"
+	"github.com/werewolfboy13/filebrowser/v3/storage/bolt"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 // symlinkShareStorage builds a storage whose single user is rooted at a real

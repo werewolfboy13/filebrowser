@@ -8,7 +8,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	fbhttp "github.com/werewolfboy13/filebrowser/v2/http"
+	fbhttp "github.com/werewolfboy13/filebrowser/v3/http"
 )
 
 // containsPieceOf reports whether text holds any four characters in a row of

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/werewolfboy13/filebrowser/v2/diskcache"
-	"github.com/werewolfboy13/filebrowser/v2/settings"
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v3/diskcache"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 // An upload looks for a file at its destination when it starts, and puts its

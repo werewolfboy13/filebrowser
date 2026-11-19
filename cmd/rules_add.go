@@ -3,9 +3,9 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/werewolfboy13/filebrowser/v2/rules"
-	"github.com/werewolfboy13/filebrowser/v2/settings"
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v3/rules"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 func init() {

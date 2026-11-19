@@ -7,9 +7,9 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/werewolfboy13/filebrowser/v2/auth"
-	"github.com/werewolfboy13/filebrowser/v2/rules"
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v3/auth"
+	"github.com/werewolfboy13/filebrowser/v3/rules"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 // useHookAuth switches the instance to hook authentication, with a POSIX

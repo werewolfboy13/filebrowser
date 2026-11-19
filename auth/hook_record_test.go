@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	fberrors "github.com/werewolfboy13/filebrowser/v2/errors"
-	"github.com/werewolfboy13/filebrowser/v2/settings"
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	fberrors "github.com/werewolfboy13/filebrowser/v3/errors"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 // updatingStore is mockUserStore with updates that store the user as the real

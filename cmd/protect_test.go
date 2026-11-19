@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
 )
 
 // At startup, the server's own files that lie inside the served directory are

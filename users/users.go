@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/spf13/afero"
-	fberrors "github.com/werewolfboy13/filebrowser/v2/errors"
-	"github.com/werewolfboy13/filebrowser/v2/files"
-	"github.com/werewolfboy13/filebrowser/v2/rules"
+	fberrors "github.com/werewolfboy13/filebrowser/v3/errors"
+	"github.com/werewolfboy13/filebrowser/v3/files"
+	"github.com/werewolfboy13/filebrowser/v3/rules"
 )
 
 // ViewMode describes a view mode.

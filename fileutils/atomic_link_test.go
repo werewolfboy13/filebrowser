@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/afero"
 
-	fberrors "github.com/werewolfboy13/filebrowser/v2/errors"
-	"github.com/werewolfboy13/filebrowser/v2/files"
+	fberrors "github.com/werewolfboy13/filebrowser/v3/errors"
+	"github.com/werewolfboy13/filebrowser/v3/files"
 )
 
 // racedFs is a filesystem on which somebody else's file appears at the

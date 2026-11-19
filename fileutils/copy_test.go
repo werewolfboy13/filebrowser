@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/spf13/afero"
-	"github.com/werewolfboy13/filebrowser/v2/files"
+	"github.com/werewolfboy13/filebrowser/v3/files"
 )
 
 // failingOpenFs wraps an afero.Fs and makes Open fail for one specific path,

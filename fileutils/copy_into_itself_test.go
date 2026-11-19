@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/afero"
 
-	"github.com/werewolfboy13/filebrowser/v2/files"
+	"github.com/werewolfboy13/filebrowser/v3/files"
 )
 
 // deepestDirectory returns how many directories deep the tree below root

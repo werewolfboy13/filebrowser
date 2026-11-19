@@ -6,8 +6,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/werewolfboy13/filebrowser/v2/settings"
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 // writeHookScript writes a POSIX shell script to a temp file and returns its

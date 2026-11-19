@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
 )
 
 // With followExternalSymlinks, a symbolic link inside the served directory

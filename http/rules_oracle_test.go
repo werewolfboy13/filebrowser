@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/werewolfboy13/filebrowser/v2/rules"
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v3/rules"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 // Share creation and the recursive listing looked the path up on disk without

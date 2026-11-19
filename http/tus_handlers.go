@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/spf13/afero"
-	fberrors "github.com/werewolfboy13/filebrowser/v2/errors"
-	"github.com/werewolfboy13/filebrowser/v2/files"
-	"github.com/werewolfboy13/filebrowser/v2/fileutils"
+	fberrors "github.com/werewolfboy13/filebrowser/v3/errors"
+	"github.com/werewolfboy13/filebrowser/v3/files"
+	"github.com/werewolfboy13/filebrowser/v3/fileutils"
 )
 
 // maxPatchDrainBytes bounds how much of a rejected PATCH body is discarded to

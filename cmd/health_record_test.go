@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
 )
 
 // closedPort returns a loopback port that nothing listens on.

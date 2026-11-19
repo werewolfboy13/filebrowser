@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/werewolfboy13/filebrowser/v2/rules"
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v3/rules"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 // A copy authorizes its source and then copies everything below it, so every

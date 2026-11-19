@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/werewolfboy13/filebrowser/v2/auth"
-	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v3/auth"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
 )
 
 func init() {

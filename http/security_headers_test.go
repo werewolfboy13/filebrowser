@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/werewolfboy13/filebrowser/v2/auth"
-	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v3/auth"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
 )
 
 func cspHas(h http.Header, directive string) bool {

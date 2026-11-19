@@ -17,8 +17,8 @@ import (
 
 	"github.com/spf13/afero"
 
-	libErrors "github.com/werewolfboy13/filebrowser/v2/errors"
-	imgErrors "github.com/werewolfboy13/filebrowser/v2/img"
+	libErrors "github.com/werewolfboy13/filebrowser/v3/errors"
+	imgErrors "github.com/werewolfboy13/filebrowser/v3/img"
 )
 
 // slashClean canonicalizes a virtual path to the absolute, "/"-separated,

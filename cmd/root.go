@@ -22,14 +22,14 @@ import (
 	"github.com/spf13/viper"
 	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 
-	"github.com/werewolfboy13/filebrowser/v2/auth"
-	"github.com/werewolfboy13/filebrowser/v2/diskcache"
-	"github.com/werewolfboy13/filebrowser/v2/frontend"
-	fbhttp "github.com/werewolfboy13/filebrowser/v2/http"
-	"github.com/werewolfboy13/filebrowser/v2/img"
-	"github.com/werewolfboy13/filebrowser/v2/settings"
-	"github.com/werewolfboy13/filebrowser/v2/storage"
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v3/auth"
+	"github.com/werewolfboy13/filebrowser/v3/diskcache"
+	"github.com/werewolfboy13/filebrowser/v3/frontend"
+	fbhttp "github.com/werewolfboy13/filebrowser/v3/http"
+	"github.com/werewolfboy13/filebrowser/v3/img"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
+	"github.com/werewolfboy13/filebrowser/v3/storage"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 var (

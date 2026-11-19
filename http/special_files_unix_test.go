@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
 )
 
 // Opening a named pipe blocks until something opens its other end, which for

@@ -1,7 +1,7 @@
 package runner
 
 import (
-	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
 )
 
 // ParseCommand parses the command taking in account if the current

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/werewolfboy13/filebrowser/v2/settings"
+	"github.com/werewolfboy13/filebrowser/v3/settings"
 )
 
 const (

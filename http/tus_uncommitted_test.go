@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/afero"
 
-	"github.com/werewolfboy13/filebrowser/v2/fileutils"
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v3/fileutils"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 // stuckFs is a filesystem on which, while stuck is set, a complete temporary

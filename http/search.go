@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/werewolfboy13/filebrowser/v2/search"
+	"github.com/werewolfboy13/filebrowser/v3/search"
 )
 
 const searchPingInterval = 5

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 // The web interface cancels its uploads in flight when the user logs out, is

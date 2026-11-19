@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/werewolfboy13/filebrowser/v2/rules"
+	"github.com/werewolfboy13/filebrowser/v3/rules"
 )
 
 // isProtectedAsBefore is IsProtected as it was before the forms of the

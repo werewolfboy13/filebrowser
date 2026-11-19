@@ -7,8 +7,8 @@ import (
 
 	"github.com/asdine/storm/v3"
 
-	fberrors "github.com/werewolfboy13/filebrowser/v2/errors"
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	fberrors "github.com/werewolfboy13/filebrowser/v3/errors"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 // GetByScope must match case-insensitively: on a case-insensitive filesystem

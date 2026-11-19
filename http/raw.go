@@ -16,9 +16,9 @@ import (
 
 	"github.com/mholt/archives"
 	"github.com/spf13/afero"
-	"github.com/werewolfboy13/filebrowser/v2/files"
-	"github.com/werewolfboy13/filebrowser/v2/fileutils"
-	"github.com/werewolfboy13/filebrowser/v2/users"
+	"github.com/werewolfboy13/filebrowser/v3/files"
+	"github.com/werewolfboy13/filebrowser/v3/fileutils"
+	"github.com/werewolfboy13/filebrowser/v3/users"
 )
 
 func parseQueryFiles(r *http.Request, f *files.FileInfo, _ *users.User) ([]string, error) {

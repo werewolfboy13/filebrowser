@@ -9,7 +9,7 @@ import (
 
 	"github.com/asticode/go-astisub"
 
-	"github.com/werewolfboy13/filebrowser/v2/files"
+	"github.com/werewolfboy13/filebrowser/v3/files"
 )
 
 var srtLineBreakTag = regexp.MustCompile(`(?i)<br(?:\s+[^>]*)?\s*/?>`)

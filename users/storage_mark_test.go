@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	fberrors "github.com/werewolfboy13/filebrowser/v2/errors"
+	fberrors "github.com/werewolfboy13/filebrowser/v3/errors"
 )
 
 // memoryBackend is a StorageBackend that keeps users in a map, and stores

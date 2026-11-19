@@ -11,7 +11,7 @@ tasks:
   build:backend:
     desc: Build backend binary
     cmds:
-      - go build -ldflags='-s -w -X "github.com/werewolfboy13/filebrowser/v2/version.Version={{.VERSION}}" -X "github.com/werewolfboy13/filebrowser/v2/version.CommitSHA={{.GIT_COMMIT}}"' -o filebrowser .
+      - go build -ldflags='-s -w -X "github.com/werewolfboy13/filebrowser/v3/version.Version={{.VERSION}}" -X "github.com/werewolfboy13/filebrowser/v3/version.CommitSHA={{.GIT_COMMIT}}"' -o filebrowser .
     vars:
       # Seven characters, as in the released binaries and in the Docker image.
       GIT_COMMIT:
