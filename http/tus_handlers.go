@@ -336,11 +336,20 @@ func tusPostHandler(cache UploadCache) handleFunc {
 		// link, and the upload would go on to empty its destination right
 		// here, for as long as that thing is there, for everyone who uploads
 		// to this path. It is refused instead, and nothing is touched.
+		//
+		// So is a temporary path that cannot be looked at. Only "there is
+		// nothing" says that the path is free: a symbolic link that leads
+		// out of the scope is not shown by the scoped filesystem at all (it
+		// answers "permission denied"), and taking that for a free path
+		// ended in the same emptied destination.
 		tmp := tusTempPath(r.URL.Path)
 		direct := exists && (file.IsSymlink || !file.Mode.IsRegular())
 		if !direct {
-			if info, statErr := lstatPath(d.user.Fs, tmp); statErr == nil && !info.Mode().IsRegular() {
+			switch info, statErr := lstatPath(d.user.Fs, tmp); {
+			case statErr == nil && !info.Mode().IsRegular():
 				return http.StatusInternalServerError, fmt.Errorf("cannot upload to %s: %s, where the upload is collected, is not a file", r.URL.Path, tmp)
+			case statErr != nil && !errors.Is(statErr, fs.ErrNotExist):
+				return http.StatusInternalServerError, fmt.Errorf("cannot upload to %s: %s, where the upload is collected, cannot be used: %w", r.URL.Path, tmp, statErr)
 			}
 
 			tmpFile, tmpErr := d.user.Fs.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, d.settings.FileMode)
