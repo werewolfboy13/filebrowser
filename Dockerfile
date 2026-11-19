@@ -57,7 +57,16 @@ COPY --from=frontend /opt/workdir/frontend/dist ./frontend/dist
 # Run the checks and the tests, so an image that fails them is never built or pushed. Without a
 # network, so no test can reach an outside service.
 RUN --network=none go vet ./... && \
-    go test ./...
+    go test ./... && \
+    go test -c -o /tmp/cmd.test ./cmd
+
+# The tests of the command line again, as a regular user. Above they run as root, to whom no file
+# is closed, so the ones about a file or a socket that the server may not write to or connect to
+# are skipped there. The server of the image is a regular user too. The tests are the ones that
+# were compiled above, and they run in their package's directory, as `go test` runs them.
+USER 65532:65532
+RUN --network=none cd cmd && /tmp/cmd.test
+USER 0
 
 # The version and the commit that `filebrowser version` and the web client show, which CI passes
 # in. A plain build leaves them empty, and the binary keeps "(untracked)" and "(unknown)". They are
