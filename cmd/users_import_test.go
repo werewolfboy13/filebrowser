@@ -317,11 +317,16 @@ func TestUsersImportDoesNotTakeAnImportedUserForARegisteredOne(t *testing.T) {
 	t.Run("replace", func(t *testing.T) {
 		dbPath := newImportDB(t, "alice", "bob")
 
-		if err := runUsersImport(t, dbPath, file, "--replace"); err != nil {
+		// With a user whose name is registered now: by the time the file is
+		// imported that user is deleted, so the name is free, and the user
+		// of the file is a new one like the others.
+		withAlice := strings.Replace(file, "]", `,{"id":1,"username":"alice","password":"new-hash-of-alice","scope":"/elsewhere"}]`, 1)
+
+		if err := runUsersImport(t, dbPath, withAlice, "--replace"); err != nil {
 			t.Error(err)
 		}
 
-		assertUsers(t, dbPath, "3:carol:/carol:0", "4:dave:/dave:0")
+		assertUsers(t, dbPath, "3:carol:/carol:0", "4:dave:/dave:0", "5:alice:/elsewhere:0")
 	})
 }
 
