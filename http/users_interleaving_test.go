@@ -1,12 +1,14 @@
 package fbhttp
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	fberrors "github.com/werewolfboy13/filebrowser/v3/errors"
 	"github.com/werewolfboy13/filebrowser/v3/rules"
 	"github.com/werewolfboy13/filebrowser/v3/users"
 )
@@ -680,5 +682,36 @@ func TestUpdatesThatEndNoSessionAreNotRefused(t *testing.T) {
 	}
 	if !e.works(bobTok) {
 		t.Error("bob's session ended")
+	}
+}
+
+// A change of a display preference of a user who was deleted between the
+// read and the write of the request was answered 500: the store reported the
+// missing record with an error of the database's own, which nothing took for
+// "no such user". It is a 404, and the user is not brought back.
+func TestPreferenceUpdateOfAUserDeletedMeanwhileIsNotFound(t *testing.T) {
+	e := newFullEnv(t)
+	w := e.watchUsers()
+	inner := w.Store
+	adminTok := e.login("admin", fullEnvAdminPassword)
+
+	var fired atomic.Bool
+	del := onceWhen(&fired, func() {
+		if err := inner.Delete(uint(2)); err != nil {
+			t.Error(err)
+		}
+	})
+	before := func(u *users.User, _ []string) { del(u.ID == 2) }
+	w.beforeWrite.Store(&before)
+
+	code, body := e.putUser(adminTok, 2, `{"what":"user","which":["locale"],"data":{"id":2,"locale":"de"}}`)
+	if !fired.Load() {
+		t.Fatal("bob was not deleted in between")
+	}
+	if code != http.StatusNotFound {
+		t.Errorf("preference update of a user deleted meanwhile = %d %q, want 404", code, body)
+	}
+	if _, err := inner.Get(e.root, false, uint(2)); !errors.Is(err, fberrors.ErrNotExist) {
+		t.Errorf("the deleted user after the update: %v, want not to exist", err)
 	}
 }
