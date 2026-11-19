@@ -54,7 +54,7 @@ func insideSource(afs afero.Fs, src os.FileInfo, srcPath, dst string) bool {
 		return true
 	}
 
-	real, ok := afs.(interface {
+	located, ok := afs.(interface {
 		RealPath(name string) (string, error)
 	})
 	if !ok {
@@ -62,7 +62,7 @@ func insideSource(afs afero.Fs, src os.FileInfo, srcPath, dst string) bool {
 		// links to follow either.
 		return false
 	}
-	onDisk, err := real.RealPath(dst)
+	onDisk, err := located.RealPath(dst)
 	if err != nil {
 		return false
 	}

@@ -272,7 +272,7 @@ func (a *HookAuth) saveUser() (*users.User, error) {
 			// code) sees a password that is not the stored one at almost
 			// every login, with nothing having changed, and each login
 			// would end the sessions of the user's other devices. Such a
-			// hook answers hookKeepSessions=true, for the logins it knows
+			// hook answers hook.keepSessions=true, for the logins it knows
 			// to be of that kind.
 			revoke = !a.Fields.GetBoolean(hookKeepSessions, false)
 		}
