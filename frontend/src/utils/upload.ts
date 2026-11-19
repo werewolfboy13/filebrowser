@@ -26,6 +26,7 @@ type ServerConflictEntry = {
   name: string;
   size: number;
   modified: string;
+  isDir?: boolean;
 };
 
 async function fetchConflictEntries(
@@ -141,7 +142,12 @@ export async function checkConflict(
       origin: { lastModified: file.file?.lastModified, size: file.size },
       dest: { lastModified: server.modified, size: server.size },
       checked: ["origin"],
-      isSmallerOnServer: file.size > server.size,
+      // A folder's listed size is its directory entry's, not its content's,
+      // and replacing a folder merges it, replacing every same-named file in
+      // it whatever its size. So a folder, on either side, never counts as
+      // smaller here, and "Replace the files that are smaller" skips it.
+      isSmallerOnServer:
+        !file.isDir && !server.isDir && file.size > server.size,
     });
   });
 
