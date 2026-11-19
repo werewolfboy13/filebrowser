@@ -86,11 +86,23 @@ const rawReason = route.query["logout-reason"] ?? null;
 const reason =
   rawReason === "uploadsCancelled" && count === null ? null : rawReason;
 
+// Where to go once logged in: the page given as redirect (the one a forced
+// logout left), query included, if it is a path of this app; else the
+// default page. A path with an empty segment ("//host/x", or "/\host",
+// which a browser reads as "//host") is not one: no route matches it, and
+// the catch-all route redirected it to itself until router.push failed.
+const redirectTarget = (): string => {
+  const value = route.query.redirect;
+  if (typeof value !== "string" || !value.startsWith("/")) return "/files/";
+  const path = value.split(/[?#]/)[0].replace(/\\/g, "/");
+  return path.includes("//") ? "/files/" : value;
+};
+
 const submit = async (event: Event) => {
   event.preventDefault();
   event.stopPropagation();
 
-  const redirect = (route.query.redirect || "/files/") as string;
+  const redirect = redirectTarget();
 
   let captcha = "";
   if (recaptcha) {
@@ -115,7 +127,7 @@ const submit = async (event: Event) => {
     }
 
     await auth.login(username.value, password.value, captcha);
-    router.push({ path: redirect });
+    router.push(redirect);
   } catch (e: any) {
     // console.error(e);
     if (e instanceof StatusError) {
