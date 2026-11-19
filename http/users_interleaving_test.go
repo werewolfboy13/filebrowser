@@ -574,10 +574,6 @@ func TestLoginAndRenewalOverlappingARevocationDoNotSurvive(t *testing.T) {
 
 	for name, rv := range revocations {
 		for _, request := range []string{"login", "renewal"} {
-			if rv.hook && request == "login" {
-				// Two hook logins of one user: covered where the hook is.
-				continue
-			}
 			t.Run(request+" overlapping "+name, func(t *testing.T) {
 				// Each has an instance of its own, and waits for a second
 				// to pass: side by side.
@@ -590,7 +586,10 @@ func TestLoginAndRenewalOverlappingARevocationDoNotSurvive(t *testing.T) {
 				tok := e.login("bob", fullEnvUserPassword)
 				w := e.watchUsers()
 				if rv.hook {
-					e.useHookAuth(`if [ "$USERNAME" = bob ] && [ "$PASSWORD" = 'new-source-password-5' ]; then
+					// Accepts the password that is stored as well: a login
+					// with it is what overlaps the one that brings the
+					// new password.
+					e.useHookAuth(`if [ "$USERNAME" = bob ] && { [ "$PASSWORD" = 'new-source-password-5' ] || [ "$PASSWORD" = '` + fullEnvUserPassword + `' ]; }; then
   echo hook.action=auth
 else
   echo hook.action=block

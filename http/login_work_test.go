@@ -138,6 +138,8 @@ func TestLoginsOfOneAddressAreWorkedOnAFewAtATime(t *testing.T) {
 	w.afterGet.Store(&after)
 
 	// As many as the failure limiter lets one name have under way at once.
+	// The one that is beyond the bound waits for as long as the test takes.
+	e.limits.loginWork.setWait(time.Minute)
 	const logins = limiterFreeFailures
 	done := make(chan int, logins)
 	for i := 0; i < logins; i++ {

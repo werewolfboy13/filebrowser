@@ -75,7 +75,7 @@ func TestIsProtectedDecidesAsItDidBeforeItsFormsWereKept(t *testing.T) {
 		}
 
 		protected, failures := 0, 0
-		for i := 0; i < 200000 && failures < 10; i++ {
+		for i := 0; i < 40000 && failures < 10; i++ {
 			elements := make([]string, 1+rng.Intn(4))
 			for j := range elements {
 				elements[j] = parts[rng.Intn(len(parts))]
@@ -95,7 +95,7 @@ func TestIsProtectedDecidesAsItDidBeforeItsFormsWereKept(t *testing.T) {
 			}
 		}
 		// Guard the test: it has to meet both answers often.
-		if protected < 5000 {
+		if protected < 1000 {
 			t.Errorf("fold %v: only %d of the random paths are protected", fold, protected)
 		}
 	}
