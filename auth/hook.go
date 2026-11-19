@@ -265,7 +265,16 @@ func (a *HookAuth) saveUser() (*users.User, error) {
 			// The password changed where the hook asks: the sessions that
 			// were opened with the old one end here, as they do when a
 			// password is changed through the API.
-			revoke = true
+			//
+			// Unless the hook says that this is not what happened. A hook
+			// that accepts more than one password for a user (an app
+			// password next to the account's, a password with a one-time
+			// code) sees a password that is not the stored one at almost
+			// every login, with nothing having changed, and each login
+			// would end the sessions of the user's other devices. Such a
+			// hook answers hookKeepSessions=true, for the logins it knows
+			// to be of that kind.
+			revoke = !a.Fields.GetBoolean(hookKeepSessions, false)
 		}
 
 		if len(fields) == 0 {
@@ -328,6 +337,12 @@ func (a *HookAuth) GetUser(d *users.User) *users.User {
 	return &user
 }
 
+// hookKeepSessions is the field a hook sets to "true" to say that the
+// password of this login, when it is not the one that is stored, is one of
+// several it accepts for the user and not a password that was changed: the
+// login must not end the other sessions of the user. See saveUser.
+const hookKeepSessions = "hook.keepSessions"
+
 // hookFields is used to access fields from the hook
 type hookFields struct {
 	Values map[string]string
@@ -336,6 +351,7 @@ type hookFields struct {
 // validHookFields contains names of the fields that can be used
 var validHookFields = []string{
 	"hook.action",
+	hookKeepSessions,
 	"user.scope",
 	"user.locale",
 	"user.viewMode",

@@ -370,3 +370,56 @@ func TestHookLoginGivesUpWhenTheAccountKeepsChanging(t *testing.T) {
 		t.Error("the login that gave up stored its change")
 	}
 }
+
+// A hook that accepts several passwords for a user says so, and a login
+// with another one than the last then ends no session. The password is
+// still stored, as it always was. The answer is given per login: without
+// it, and with anything but "true", a password that is not the stored one
+// ends the sessions as before.
+func TestHookThatKeepsSessionsDoesNotRevokeTokens(t *testing.T) {
+	stored := storedHookUser(t, "the-account-password")
+	stored.TokensNotBefore = 100
+
+	store := &updatingStore{mockUserStore: &mockUserStore{users: map[string]*users.User{"bob": stored}}}
+	login := func(password string, fields map[string]string) *users.User {
+		t.Helper()
+		a := newHookAuth(store.mockUserStore, &settings.Settings{}, &settings.Server{Root: t.TempDir()}, "bob", fields)
+		a.Users = store
+		a.Cred.Password = password
+		u, err := a.SaveUser()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+
+	u := login("an-app-password-42", map[string]string{"hook.keepSessions": "true"})
+	if u.TokensNotBefore != 100 {
+		t.Errorf("a login the hook said to keep the sessions for moved the mark from 100 to %d", u.TokensNotBefore)
+	}
+	if !users.CheckPwd("an-app-password-42", u.Password) || !reflect.DeepEqual(store.fields, []string{"Password"}) {
+		t.Errorf("the accepted password was not stored, or more than it was: fields %v", store.fields)
+	}
+
+	for _, value := range []string{"false", "yes", "1", "TRUE", ""} {
+		before := store.users["bob"].TokensNotBefore
+		u := login("another-password-"+value, map[string]string{"hook.keepSessions": value})
+		if u.TokensNotBefore <= before {
+			t.Errorf("hook.keepSessions=%q: a password that is not the stored one left the mark at %d", value, u.TokensNotBefore)
+		}
+	}
+
+	before := store.users["bob"].TokensNotBefore
+	if u := login("yet-another-password", map[string]string{}); u.TokensNotBefore <= before {
+		t.Errorf("without the field, a password that is not the stored one left the mark at %d", u.TokensNotBefore)
+	}
+}
+
+// The field is one the hook's output is read for.
+func TestHookKeepSessionsIsAFieldOfTheOutput(t *testing.T) {
+	a := &HookAuth{}
+	a.GetValues("hook.action=auth\nhook.keepSessions=true\nhook.unknown=1\n")
+	if a.Fields.Values["hook.keepSessions"] != "true" || len(a.Fields.Values) != 2 {
+		t.Errorf("values read from the output: %v", a.Fields.Values)
+	}
+}
