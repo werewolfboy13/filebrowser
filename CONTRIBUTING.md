@@ -117,7 +117,7 @@ Nothing is pushed. To publish, push the branch and the tag to the fork, for exam
 
 What decides the version:
 
-- **The fork's first tag is `v3.0.0-rc.1`**, made with `task release:rc VERSION=3.0.0`. `task release` refuses to run for as long as the last version tag is one of the original project's: the commits since `v2.63.23` hold a breaking change, so it would tag `v3.0.0` at once, a full release, for which the release job moves the image tags `latest` and `v3`.
+- **The fork's first tag is `v3.0.0-rc.1`**, made with `task release:rc VERSION=3.0.0`. `task release` refuses to run for as long as the last version tag is one of the original project's: the commits since `v2.63.23` hold a breaking change, so it would tag `v3.0.0` at once, a full release, for which the release job moves the image tags `latest` and `v3`. It also refuses in a clone that has no tags, where it would tag `v2.0.0`: fetch the tags first.
 - **`task release:rc VERSION=x.y.z`** tags `vx.y.z-rc.1`. It refuses a `VERSION` that is not three numbers, and one whose first candidate exists.
 - **`task release:rc`** without `VERSION` tags the candidate after the last one, and refuses when the last version tag is not a candidate: the tool would number the first candidate of a version `rc.0`.
 - **`task release`** after candidates tags their version without the suffix. Otherwise the version follows from the [Conventional Commits](https://www.conventionalcommits.org) since the last release: `v3.0.1` after fixes only, `v3.1.0` after a `feat`, `v4.0.0` after a breaking change (`feat!:`, or a `BREAKING CHANGE:` footer).

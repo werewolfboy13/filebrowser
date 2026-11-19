@@ -54,9 +54,10 @@ tasks:
     desc: "Tag a release, such as v3.0.0: the version follows from the commits since the last release"
     preconditions:
       # The fork's first tag is a candidate. From the original project's last tag, this task would
-      # tag v3.0.0 at once, a full release.
-      - sh: 'case "$(git describe --tags --abbrev=0 --match "v*" 2> /dev/null)" in v2.*) false ;; esac'
-        msg: "The last version tag is the original project's, a v2: this fork has no release candidate yet, and its first tag is one. Tag it first: task release:rc VERSION=3.0.0"
+      # tag v3.0.0 at once, a full release, and in a clone without tags v2.0.0. So it runs only
+      # from a version tag of the fork, a v3 or later.
+      - sh: 'case "$(git describe --tags --abbrev=0 --match "v*" 2> /dev/null)" in v[3-9]*|v[1-9][0-9]*) ;; *) false ;; esac'
+        msg: "The last version tag is not one of this fork, a v3 or later. If this clone has no tags, fetch the tags first: git fetch --tags. If the last one is the original project's, a v2, this fork has no release candidate yet, and its first tag is one. Tag it first: task release:rc VERSION=3.0.0"
     cmds:
       - task: release:check
       - task: release:docs
