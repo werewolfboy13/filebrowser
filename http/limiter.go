@@ -1,6 +1,7 @@
 package fbhttp
 
 import (
+	"context"
 	"crypto/sha256"
 	"net"
 	"net/http"
@@ -428,6 +429,109 @@ func (l *failureLimiter) evict(key [sha256.Size]byte, state *failureState) {
 	l.drop(key, state)
 }
 
+// Defaults of the gate in front of the work a login costs.
+const (
+	// loginWorkPerAddress is how many logins of one client address are
+	// worked on at a time: compared with a password hash, or handed to the
+	// hook. A hash takes the better part of a tenth of a second of one
+	// processor, so this is also how many processors one address can keep
+	// busy.
+	loginWorkPerAddress = 4
+
+	// loginWorkWait is how long a login waits for its turn before it is
+	// turned away. It is long next to the time a login takes, so that the
+	// users behind one address (an office, a proxy that hides its clients)
+	// who log in at the same moment are served one after the other and
+	// never notice, and short enough not to hold a connection for long.
+	loginWorkWait = 10 * time.Second
+)
+
+// workGate bounds how much work is under way at a time for each group: for
+// each client address, in front of the login.
+//
+// The failure limiter does not do that. It lets an address try a few
+// passwords at once for each of a couple of hundred user names, which is
+// about a thousand password hashes under way at the same time, for as long
+// as the address keeps them coming. They are cheap to ask for and costly to
+// compute.
+//
+// Work beyond the bound waits for its turn, in the order it came, and is
+// only turned away when the turn does not come within wait. The wait is on
+// the address that causes it: whoever shares an address with a flood of
+// logins waits in the same line, and is delayed, but the line moves, and no
+// other address is kept waiting.
+//
+// What it holds is in proportion to the requests that are under way: a
+// group is forgotten when the last of them leaves.
+type workGate struct {
+	mu     sync.Mutex
+	groups map[string]*workGroup
+	slots  int
+	wait   time.Duration
+}
+
+type workGroup struct {
+	// slots holds one value for each piece of work that is under way.
+	slots chan struct{}
+
+	// users counts who is in the group: at work or waiting.
+	users int
+}
+
+func newWorkGate(slots int, wait time.Duration) *workGate {
+	return &workGate{groups: map[string]*workGroup{}, slots: slots, wait: wait}
+}
+
+// enter waits for a turn in group. It returns the function that ends the
+// turn, which must be called, once; or nil when the turn did not come in
+// time or ctx ended first, and the work must not be done.
+func (g *workGate) enter(ctx context.Context, group string) (leave func()) {
+	g.mu.Lock()
+	gr := g.groups[group]
+	if gr == nil {
+		gr = &workGroup{slots: make(chan struct{}, g.slots)}
+		g.groups[group] = gr
+	}
+	gr.users++
+	wait := g.wait
+	g.mu.Unlock()
+
+	forget := func() {
+		g.mu.Lock()
+		gr.users--
+		if gr.users == 0 {
+			delete(g.groups, group)
+		}
+		g.mu.Unlock()
+	}
+
+	select {
+	case gr.slots <- struct{}{}:
+	default:
+		// Those who wait on a channel get their turn in the order they
+		// came.
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case gr.slots <- struct{}{}:
+		case <-timer.C:
+			forget()
+			return nil
+		case <-ctx.Done():
+			forget()
+			return nil
+		}
+	}
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			<-gr.slots
+			forget()
+		})
+	}
+}
+
 // limits holds the failure limiters of one handler.
 type limits struct {
 	login *failureLimiter
@@ -437,10 +541,19 @@ type limits struct {
 	// question the users API asks before it changes an account: see
 	// confirmPassword.
 	password *failureLimiter
+
+	// loginWork bounds the logins of one client address that are worked on
+	// at a time.
+	loginWork *workGate
 }
 
 func newLimits() *limits {
-	return &limits{login: newFailureLimiter(), share: newFailureLimiter(), password: newFailureLimiter()}
+	return &limits{
+		login:     newFailureLimiter(),
+		share:     newFailureLimiter(),
+		password:  newFailureLimiter(),
+		loginWork: newWorkGate(loginWorkPerAddress, loginWorkWait),
+	}
 }
 
 // tooManyAttempts answers a request that has to wait.
