@@ -94,8 +94,11 @@ jobs:
           node-version: "26.x"
           cache: "pnpm"
           cache-dependency-path: "frontend/pnpm-lock.yaml"
+      # Task itself is pinned too: the action installs the newest 3.x otherwise.
       - name: Install Task
         uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+        with:
+          version: "3.54.0"
       - run: task build
 
   docker:
@@ -174,10 +177,15 @@ jobs:
             echo "::error::IMAGE_NAME has to be the name of an image, in lower case, with no tag and nothing around it, such as ghcr.io/werewolfboy13/filebrowser."
             exit 1
           fi
-          # The Git tag becomes the tag of the image, which takes fewer characters than Git does:
-          # no plus sign, as in v1.0.0+build, and no comma.
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9A-Za-z._-]{1,127}$ ]]; then
-            echo "::error::The tag has to be a v followed by letters, digits, dots, underscores and hyphens only, such as v2.63.23 or v3.0.0-rc.1: it becomes the tag of the image."
+          # The Git tag has to be a version: v, three numbers without leading zeros, and for a
+          # prerelease a hyphen and what it is, such as v3.0.0 or v3.0.0-rc.1. Any other tag
+          # that starts with a v, such as vnext or v3, would be released as a version, and move
+          # `latest`. The tag also becomes the tag of the image, which takes at most 128
+          # characters and no plus sign, so build metadata, as in v3.0.0+build, is not taken.
+          number='(0|[1-9][0-9]*)'
+          word='[0-9A-Za-z-]+'
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v$number\.$number\.$number(-$word(\.$word)*)?$ ]] || [ "${#GITHUB_REF_NAME}" -gt 128 ]; then
+            echo "::error::The tag has to be a version, such as v3.0.0, or v3.0.0-rc.1 for a prerelease: v, three numbers without leading zeros, and for a prerelease a hyphen and its name. It becomes the tag of the image."
             exit 1
           fi
 
@@ -213,9 +221,9 @@ jobs:
           esac
 
           # The tags are made from the name in the form that was checked, not from the value of
-          # the variable. For the tag v2.63.23, the version is 2.63.23 and the major tag is v2. A
-          # tag with a hyphen, such as v3.0.0-rc.1, is a prerelease: it gets its own tag only, and
-          # neither the major tag nor `latest` moves to it.
+          # the variable. For the tag v3.1.4, the version is 3.1.4 and the major tag is v3. A
+          # tag with a hyphen, which the check above leaves to a prerelease such as v3.0.0-rc.1,
+          # gets its own tag only: neither the major tag nor `latest` moves to it.
           image=$registry/$repository
           {
             echo "version=${GITHUB_REF_NAME#v}"
@@ -244,8 +252,11 @@ jobs:
           node-version: "26.x"
           cache: "pnpm"
           cache-dependency-path: "frontend/pnpm-lock.yaml"
+      # Task itself is pinned too: the action installs the newest 3.x otherwise.
       - name: Install Task
         uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+        with:
+          version: "3.54.0"
       - run: task build:frontend
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -293,12 +304,14 @@ jobs:
             org.opencontainers.image.version=${{ steps.image.outputs.version }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: ${{ steps.image.outputs.tags }}
-      # The release is created in this repository, with this job's token. A v2 release of
-      # GoReleaser, which is what .goreleaser.yml is written for.
+      # The release is created in this repository, with this job's token. GoReleaser is pinned
+      # to one release, like the actions: this job may write to the repository and to its
+      # packages, and with a range such as "~> v2" it would run whatever was released last.
+      # .goreleaser.yml is written for version 2.
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
-          version: "~> v2"
+          version: "v2.20.2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
