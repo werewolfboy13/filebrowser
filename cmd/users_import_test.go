@@ -346,3 +346,57 @@ func TestUsersImportRefusesAUsernameTwiceInTheFile(t *testing.T) {
 		assertUsers(t, dbPath, "1:alice:/alice:1000", "2:bob:/bob:2000")
 	}
 }
+
+// makeAdministrators gives the named users of the database the administrator
+// right.
+func makeAdministrators(t *testing.T, dbPath string, names ...string) {
+	t.Helper()
+
+	db, err := storm.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	st, err := bolt.NewStorage(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		user, err := st.Users.Get("", false, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		user.Perm.Admin = true
+		if err := st.Users.Update(user, "Perm"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The store does not delete the last administrator, and --replace deletes
+// the registered users one by one. With an administrator registered, it
+// wrote the backup, deleted every user before the last administrator,
+// stopped there and imported nothing, and a second attempt wrote the backup
+// again, from the users that were left. It refuses before all of that.
+func TestUsersImportReplaceRefusesWithAnAdministrator(t *testing.T) {
+	file := `[{"username":"carol","password":"hash-of-carol","scope":"/carol"}]`
+
+	for _, admins := range [][]string{{"bob"}, {"alice", "bob"}, {"alice"}} {
+		dbPath := newImportDB(t, "alice", "bob")
+		makeAdministrators(t, dbPath, admins...)
+
+		err := runUsersImport(t, dbPath, file, "--replace")
+		if err == nil {
+			t.Errorf("administrators %v: the users were replaced", admins)
+		} else if msg := err.Error(); !strings.Contains(msg, admins[0]) || !strings.Contains(msg, "Nothing was deleted or imported") {
+			t.Errorf("administrators %v: the error does not name an administrator, or does not say that nothing was done: %v", admins, err)
+		}
+
+		assertUsers(t, dbPath, "1:alice:/alice:1000", "2:bob:/bob:2000")
+
+		// In the working directory, which is the one of the database.
+		if _, err := os.Stat("users.backup.json"); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("administrators %v: an import that was refused left a backup behind: %v", admins, err)
+		}
+	}
+}

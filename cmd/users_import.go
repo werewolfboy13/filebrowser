@@ -38,9 +38,12 @@ users in the file are added as new users, as without the flag.
 
 With --replace, the registered users are written to
 users.backup.json in the working directory and deleted, and the
-users in the file are added as new users. The last administrator
-cannot be deleted: the command stops there, with the users before
-that one deleted and none imported.
+users in the file are added as new users. It can be used only while
+no registered user is an administrator, as in a database that has
+no users yet: the last administrator cannot be deleted, so with an
+administrator registered the command refuses, before it writes the
+backup or deletes a user. To change the users of such a database,
+use --overwrite, and remove users with "users rm".
 
 The file is checked as a whole first: if one of its users is
 refused, or it has a username twice, nothing is imported and no
@@ -94,6 +97,18 @@ user is replaced or deleted.`,
 		}
 
 		if replace {
+			// The store does not delete the last administrator. The loop
+			// below would delete the users before that one and stop, so
+			// the command refuses here, before the backup and the first
+			// deletion.
+			for _, user := range oldUsers {
+				if user.Perm.Admin {
+					return fmt.Errorf("can't replace the users: %q is an administrator, and the last "+
+						"administrator cannot be deleted. Nothing was deleted or imported. "+
+						"Use --overwrite, or remove users with \"users rm\"", user.Username)
+				}
+			}
+
 			// Back up the users that are about to be deleted, not the ones
 			// being imported. The file holds their password hashes.
 			err = marshalPrivate("users.backup.json", oldUsers)
