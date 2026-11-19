@@ -114,8 +114,9 @@ watch(reload, (newValue) => {
   // (the end of an upload batch, say), and reloading it would swap the view
   // for the spinner: the editor would come back blank, its unsaved edits in
   // a detached instance, and an open question would be closed. The listing
-  // is fetched anew when the file is closed.
-  if (fileStore.req && !fileStore.req.isDir) {
+  // is fetched anew when the file is closed (if that is on its way already,
+  // it may miss what the batch stored: fetch it again).
+  if (fileStore.req && !fileStore.req.isDir && !layoutStore.loading) {
     fileStore.reload = false;
     return;
   }

@@ -122,6 +122,8 @@ const RESOURCES: Record<string, object> = {
 };
 
 let wrapper: VueWrapper | null = null;
+// a resource whose fetch is held until released
+const hold = { path: "", release: () => {} };
 let gets: string[] = [];
 let puts: string[] = [];
 const waitFor = (check: () => void) => vi.waitFor(check, { timeout: 10_000 });
@@ -140,6 +142,16 @@ async function open(path: string) {
     }
     const path = String(url).split("?")[0];
     gets.push(path);
+    if (path === hold.path) {
+      // answered when released, or aborted
+      await new Promise<void>((resolve, reject) => {
+        hold.release = resolve;
+        // as a browser's fetch does (jsdom's DOMException is no Error)
+        init?.signal?.addEventListener("abort", () =>
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }))
+        );
+      });
+    }
     const body = RESOURCES[path];
     return body
       ? new Response(JSON.stringify(body), {
@@ -184,6 +196,7 @@ describe("a listing reload while a file is open", { timeout: 60_000 }, () => {
     wrapper?.unmount();
     wrapper = null;
     sessionStorage.clear();
+    hold.path = "";
     await router.push("/login");
   });
 
@@ -239,6 +252,35 @@ describe("a listing reload while a file is open", { timeout: 60_000 }, () => {
     useFileStore().reload = true;
     await waitFor(() => expect(gets.length).toBe(listingFetches + 1));
     expect(gets.at(-1)).toBe("/api/resources/");
+  });
+
+  // closing the file fetches the listing; a batch that ends while that is
+  // on its way may not be in it: that reload still happens
+  it("still reloads the listing that is being fetched after the file closed", async () => {
+    await open("/files/notes.md");
+    await waitFor(() =>
+      expect(
+        document.getElementById("editor")?.classList.contains("ace_editor")
+      ).toBe(true)
+    );
+    hold.path = "/api/resources/";
+    const closing = router.push("/files/");
+    await waitFor(() => expect(gets.at(-1)).toBe("/api/resources/"));
+    // the file is still the current resource while its listing loads
+    expect(useFileStore().req?.isDir).toBe(false);
+    const listingFetches = gets.filter((g) => g === "/api/resources/").length;
+    hold.path = "";
+    useFileStore().reload = true;
+    await waitFor(() =>
+      expect(gets.filter((g) => g === "/api/resources/").length).toBe(
+        listingFetches + 1
+      )
+    );
+    hold.release();
+    await closing;
+    await waitFor(() =>
+      expect(document.getElementById("listing")).not.toBeNull()
+    );
   });
 
   it("leaves a file in the preview alone", async () => {
