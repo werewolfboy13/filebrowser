@@ -16,8 +16,8 @@ Report a vulnerability privately, as [SECURITY.md](SECURITY.md) describes, and n
 
 Two classes of issue are known and not fixed. [SECURITY.md](SECURITY.md#known-limitations) has these and the other known limitations:
 
-- **Command execution, runner, and hooks.** The original project published many advisories about this feature, and it would need a full rewrite to be made safe. It is disabled by default; if you re-enable it with `--disableExec=false`, treat the ability to run commands as equivalent to shell access on the host. Background: [#5199](https://github.com/filebrowser/filebrowser/issues/5199) of the original project.
-- **Session and JWT handling.** Sessions are self-contained JWTs rather than server-side identifiers. This fork ends all of a user's sessions when the user's password, permissions or scope change, but logging out does not end one on the server. Assume a leaked token is valid until it expires. Background: [#5216](https://github.com/filebrowser/filebrowser/issues/5216) of the original project.
+- **Command execution, runner, and hooks.** The original project published many advisories about this feature, and it would need a full rewrite to be made safe. It is disabled by default; if you re-enable it with `--disableExec=false`, treat the ability to run commands as equivalent to shell access on the host. In this fork's Docker image it cannot work, because the image has nothing in it to run. Background: [#5199](https://github.com/filebrowser/filebrowser/issues/5199) of the original project.
+- **Session and JWT handling.** Sessions are self-contained JWTs rather than server-side identifiers. Sessions are revoked on password, permission and scope changes; there is no server-side logout. Assume a leaked token is valid until it expires, or until the user's sessions are revoked in one of those ways. Background: [#5216](https://github.com/filebrowser/filebrowser/issues/5216) of the original project.
 
 However you run File Browser:
 

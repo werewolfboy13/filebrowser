@@ -89,7 +89,7 @@ docker compose up --build
 
 Its volumes are the three of the `docker run` command above, under the same names, so it continues an installation that was started with that command, and the other way around.
 
-One File Browser instance needs nothing else. For several instances that serve the same files, [`compose.redis.yaml`](../compose.redis.yaml) adds the Redis that they share for uploads. It says at its top how to use it.
+One File Browser instance needs nothing else. For several instances that serve the same files, [`compose.redis.yaml`](../compose.redis.yaml) adds the Redis that they share for uploads. It says at its top how to use it. Redis keeps track of the uploads in progress and locks nothing: two instances can still write the same file at the same time, which is a [known limitation](../SECURITY.md#known-limitations).
 
 ### User and Permissions
 
