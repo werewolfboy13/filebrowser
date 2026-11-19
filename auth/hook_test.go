@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -46,7 +47,7 @@ func TestRunCommandNoCredentialInjection(t *testing.T) {
 		},
 	}
 
-	action, err := a.RunCommand()
+	action, err := a.RunCommand(context.Background())
 	if err != nil {
 		t.Fatalf("RunCommand returned error: %v", err)
 	}
@@ -81,7 +82,7 @@ fi
 		},
 	}
 
-	action, err := a.RunCommand()
+	action, err := a.RunCommand(context.Background())
 	if err != nil {
 		t.Fatalf("RunCommand returned error: %v", err)
 	}

@@ -122,6 +122,8 @@ The hook must output one of the following actions:
 
 For most custom authentication flows, auth or block are used.
 
+The command has **30 seconds** to answer. After that, or as soon as the client that is logging in gives up, FileBrowser stops the command and answers the login with an error (`500`). Such a login is not counted as a wrong password. Only the command itself is stopped, not the processes it may have started, so a hook that calls a slow service should set a timeout of its own on that call.
+
 Example of a successful authentication:
 
 ```sh
