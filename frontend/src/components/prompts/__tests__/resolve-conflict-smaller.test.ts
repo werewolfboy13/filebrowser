@@ -120,7 +120,9 @@ describe("the conflict dialog's option for smaller files", () => {
     const button = wrapper
       .findAll("button")
       .find((b) => b.find("i").text() === "replay")!;
-    expect(button.text()).toMatch(/folder that already exists .* is skipped/i);
+    expect(button.text()).toMatch(
+      /conflict that involves a folder, yours or the one in the destination, is skipped/i
+    );
     await button.trigger("click");
     const result = confirm.mock.calls[0][1].map((c: any) => [
       c.name,

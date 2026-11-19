@@ -30,7 +30,7 @@
     "replace": "Replace",
     "reportIssue": "Report Issue",
     "replaceSmaller": "Replace the files that are smaller in the destination",
-    "replaceSmallerTooltip": "Replace each conflicting file that is smaller in the destination than yours, and skip the others. A folder that already exists in the destination is skipped, with everything in it. A smaller file there is not necessarily incomplete: it can be a newer version.",
+    "replaceSmallerTooltip": "Replace each conflicting file that is smaller in the destination than yours, and skip the others. A conflict that involves a folder, yours or the one in the destination, is skipped, with everything in that folder. A smaller file there is not necessarily incomplete: it can be a newer version.",
     "save": "Save",
     "schedule": "Schedule",
     "search": "Search",
