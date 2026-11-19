@@ -91,7 +91,8 @@ const reason =
 // default page. A path with an empty segment once decoded ("//host/x",
 // "/%2Fx", or "/\host", which a browser reads as "//host") is not one: no
 // route matches it, and the catch-all route redirected it to itself until
-// router.push failed.
+// router.push failed. Nor is one with a control character: the browser
+// strips a tab, CR or LF from the URL ("/files/%09/x" becomes /files//x).
 const redirectTarget = (): string => {
   const value = route.query.redirect;
   if (typeof value !== "string" || !value.startsWith("/")) return "/files/";
@@ -101,6 +102,7 @@ const redirectTarget = (): string => {
   } catch {
     return "/files/";
   }
+  if ([...path].some((c) => c < " " || c === "\x7f")) return "/files/";
   return path.replace(/\\/g, "/").includes("//") ? "/files/" : value;
 };
 

@@ -7,7 +7,7 @@
 // It now goes to the whole value, and only to a path of this app: a value
 // that is not one ("https://host/x", "@host", "javascript:..."), or whose
 // path has an empty segment once decoded ("//host/x", "/\host", "/%2Fx",
-// "/files//x": no route
+// "/files//x", or "/files/%09/x", whose tab the browser strips: no route
 // matches it, and the catch-all route redirected it to itself until
 // router.push failed with "Maximum call stack size exceeded"), leads to
 // the default page instead. Real Login.vue and the app's route table and
@@ -117,6 +117,17 @@ describe("the login page's redirect", { timeout: 60_000 }, () => {
       "/%2F%2Fevil.example/x",
       "/files/a%2F%2Fb",
       "/%5Cevil.example/x",
+      // a tab, CR or LF is stripped by the browser when the URL is
+      // written ("/files/\t/x" becomes /files//x): any control character
+      "/files/\t/x",
+      "/files/\n/x",
+      "/files/\r/x",
+      "/files/%09/x",
+      "/files/%0A/x",
+      "/files/%0d/x",
+      "/\t/evil.example/x",
+      "/files/a%00b",
+      "/files/a%7Fb",
       ["/files/a", "/files/b"],
     ]) {
       expect(await loginWith(value), JSON.stringify(value)).toBe("/files/");
