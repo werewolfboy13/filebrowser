@@ -183,6 +183,65 @@ func TestHookThatAnswersInTimeIsNotStopped(t *testing.T) {
 	}
 }
 
+// A hook that had refused the login by itself was taken for one that was
+// stopped when its request ended before RunCommand returned: the hook has
+// ended with an error status, a process it left behind still has its output,
+// and the client goes away while that output is waited for. The login of a
+// stopped hook is not counted as a failed guess, and the right password was
+// let in all the same, so a client that left at that moment could guess
+// without ever being slowed down.
+func TestRefusalAHookMadeBeforeItsClientWentAwayIsCounted(t *testing.T) {
+	login := func(password string) (*users.User, error) {
+		// The hook decides by its exit status, and notes that it has, just
+		// before it ends. The process it leaves behind (a call sent off in
+		// the background, say) has its output until the test lets it go.
+		answered := filepath.Join(t.TempDir(), "answered")
+		script, release := hungHook(t, `( while [ ! -e "$release" ]; do sleep 0.05; done ) &
+if [ "$PASSWORD" = 'the-right-password' ]; then
+  echo hook.action=auth
+  : > '`+answered+`'
+  exit 0
+fi
+: > '`+answered+`'
+exit 1
+`)
+		a := &HookAuth{Command: script}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+				if _, err := os.Stat(answered); err == nil {
+					break
+				}
+			}
+			time.Sleep(300 * time.Millisecond) // the hook has ended
+			cancel()                           // the client went away
+			release()
+		}()
+
+		r, err := http.NewRequestWithContext(ctx, http.MethodPost, "/api/login", strings.NewReader(`{"username":"bob","password":"`+password+`"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var u *users.User
+		within(t, 40*time.Second, "the login", func() {
+			u, err = a.Auth(r, &mockUserStore{users: map[string]*users.User{}}, &settings.Settings{MinimumPasswordLength: 1}, &settings.Server{Root: t.TempDir()})
+		})
+		if ctx.Err() == nil {
+			t.Fatal("the request had not ended when the login returned")
+		}
+		return u, err
+	}
+
+	if u, err := login("a-wrong-guess"); u != nil || !errors.Is(err, ErrHookRefused) {
+		t.Errorf("a login the hook refused before its client went away: user %v, error %v; want ErrHookRefused, which is counted", u != nil, err)
+	}
+	if u, err := login("the-right-password"); u == nil || err != nil {
+		t.Errorf("a login the hook accepted before its client went away: user %v, error %v; want the user", u != nil, err)
+	}
+}
+
 // The captcha service was asked without a time limit, and without regard
 // for the request: a service that took the connection and never answered
 // held the login, and its turn, for good.

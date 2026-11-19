@@ -187,6 +187,13 @@ func TestCanonicalNameIsIdempotent(t *testing.T) {
 		check("a" + string(r) + "B")
 	}
 
+	// A byte that is not UTF-8 before every letter that has a case: the
+	// form replaces the byte, and has to fold the letter after it all the
+	// same. A reduced run draws too few random names to come across it.
+	for _, r := range cased {
+		check("\xf0" + string(r))
+	}
+
 	names := 200000
 	if reduced {
 		names = 10000

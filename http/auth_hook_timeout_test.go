@@ -1,10 +1,14 @@
 package fbhttp
 
 import (
+	"bufio"
 	"context"
+	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -258,4 +262,115 @@ fi
 	if code, _, _ := e.tryLogin("bob", "not-the-password"); code != http.StatusForbidden {
 		t.Errorf("a login the hook blocks after a while = %d, want 403", code)
 	}
+}
+
+// halfCloseLogin sends a login over a connection of its own and, 300ms after
+// the hook of that login has answered (the hook notes it in dir, just before
+// it ends), shuts down the sending side of the connection. The Go server
+// takes that, a TCP FIN, for a client that went away and ends the request,
+// and still sends its answer, which is returned. A login that is answered
+// before that is over as it is: one that is turned away never has a hook.
+func (e *fullEnv) halfCloseLogin(dir, addr, user, password string) (code int, body string) {
+	e.t.Helper()
+	answered := func() int {
+		noted, _ := filepath.Glob(filepath.Join(dir, "answered-*"))
+		return len(noted)
+	}
+	before := answered()
+
+	conn, err := net.Dial("tcp", e.srv.Listener.Addr().String())
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	login := `{"username":"` + user + `","password":"` + password + `"}`
+	if _, err := io.WriteString(conn, "POST /api/login HTTP/1.1\r\nHost: filebrowser.test\r\nContent-Type: application/json\r\nX-Forwarded-For: "+addr+
+		"\r\nContent-Length: "+strconv.Itoa(len(login))+"\r\n\r\n"+login); err != nil {
+		e.t.Fatal(err)
+	}
+
+	type answer struct {
+		code int
+		body []byte
+		err  error
+	}
+	answers := make(chan answer, 1)
+	go func() {
+		res, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			answers <- answer{err: err}
+			return
+		}
+		defer res.Body.Close()
+		b, err := io.ReadAll(res.Body)
+		answers <- answer{res.StatusCode, b, err}
+	}()
+
+	poll := time.NewTicker(2 * time.Millisecond)
+	defer poll.Stop()
+	polls := poll.C
+	var leave <-chan time.Time
+	for {
+		select {
+		case a := <-answers:
+			if a.err != nil {
+				e.t.Fatalf("no answer to the login: %v", a.err)
+			}
+			return a.code, string(a.body)
+		case <-polls:
+			if answered() > before {
+				// The hook has ended. What it left behind still has its
+				// output, so the login is still waiting.
+				polls, leave = nil, time.After(300*time.Millisecond)
+			}
+		case <-leave:
+			if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+				e.t.Fatal(err)
+			}
+		}
+	}
+}
+
+// A hook that refuses by its exit status, and leaves a process behind that
+// has its output for a second. A client that shut down its side of the
+// connection once the hook had ended was a client that went away, and the
+// hook one that was stopped: every wrong guess was answered with a 500 that
+// the limiter never saw, and the right password with a token. Guessing a
+// password that way was never slowed down.
+func TestWrongGuessesOfAClientThatHalfClosesAreCounted(t *testing.T) {
+	e := newFullEnv(t)
+	dir := t.TempDir()
+	e.useHookAuth(`( sleep 1 ) &
+if [ "$USERNAME" = bob ] && [ "$PASSWORD" = '` + fullEnvUserPassword + `' ]; then
+  echo hook.action=auth
+  : > '` + dir + `'/answered-$$
+  exit 0
+fi
+: > '` + dir + `'/answered-$$
+exit 1
+`)
+
+	const addr = "198.51.100.88"
+	for i := 1; i <= 3*limiterFreeFailures; i++ {
+		code, body := e.halfCloseLogin(dir, addr, "bob", "wrong-guess-"+strconv.Itoa(i))
+		switch code {
+		case http.StatusTooManyRequests:
+			if i > limiterFreeFailures+1 {
+				t.Errorf("the first wrong guess that was turned away is guess %d, want guess %d at the latest", i, limiterFreeFailures+1)
+			}
+			return
+		case http.StatusInternalServerError:
+		default:
+			t.Fatalf("wrong guess %d = %d %q, want 500 or 429", i, code, body)
+		}
+	}
+
+	e.limits.login.mu.Lock()
+	kept := len(e.limits.login.keys)
+	e.limits.login.mu.Unlock()
+	code, token := e.halfCloseLogin(dir, addr, "bob", fullEnvUserPassword)
+	t.Errorf("%d wrong guesses of a client that half-closed were answered 500 and none was turned away (keys the limiter kept: %d); "+
+		"the right password, sent the same way, = %d, and its token works: %v",
+		3*limiterFreeFailures, kept, code, code == http.StatusOK && e.works(token))
 }
