@@ -8,8 +8,10 @@ env:
 builds:
   - env:
       - CGO_ENABLED=0
+    # The commit is cut to seven characters, as in the Docker image and in `task build`.
+    # ShortCommit is as long as Git makes it in the clone at hand, which is seven or more.
     ldflags:
-      - -s -w -X github.com/werewolfboy13/filebrowser/v3/version.Version={{ .Version }} -X github.com/werewolfboy13/filebrowser/v3/version.CommitSHA={{ .ShortCommit }}
+      - -s -w -X github.com/werewolfboy13/filebrowser/v3/version.Version={{ .Version }} -X github.com/werewolfboy13/filebrowser/v3/version.CommitSHA={{ slice .FullCommit 0 7 }}
     main: main.go
     binary: filebrowser
     goos:
