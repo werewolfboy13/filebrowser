@@ -7,6 +7,10 @@ Export all users to a file.
 Export all users to a json or yaml file. Please indicate the
 path to the file where you want to write the users.
 
+The file holds the password hashes of the users. It is written so
+that only its owner can read it, also when it replaces a file that
+others could read.
+
 ```
 filebrowser users export <path> [flags]
 ```

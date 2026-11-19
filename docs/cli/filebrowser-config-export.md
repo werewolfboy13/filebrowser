@@ -8,6 +8,11 @@ Export the configuration to a file. The path must be for a
 json or yaml file. This exported configuration can be changed,
 and imported again with 'config import' command.
 
+The file holds the key that signs the sessions of the users, and
+what the authentication method keeps secret. It is written so that
+only its owner can read it, also when it replaces a file that
+others could read.
+
 ```
 filebrowser config export <path> [flags]
 ```

@@ -225,20 +225,14 @@ func withStore(fn func(cmd *cobra.Command, args []string, store *store) error, o
 	}, options)
 }
 
-func marshal(filename string, data interface{}) error {
-	fd, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-	defer fd.Close()
-
-	return encodeTo(fd, filename, data)
-}
-
-// marshalPrivate is marshal for a file that holds secrets: it is readable and
-// writable by the owner only, also when it replaces an existing file.
+// marshalPrivate writes data to the file in the format that its extension
+// names. The file is for secrets, such as the password hashes of the users
+// and the key that signs sessions: it is readable and writable by its owner
+// only, also when it replaces a file that was there and open to others.
 func marshalPrivate(filename string, data interface{}) error {
-	fd, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	// Not emptied yet: a file that cannot be closed to others keeps what it
+	// holds.
+	fd, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0600)
 	if err != nil {
 		return err
 	}
@@ -246,6 +240,9 @@ func marshalPrivate(filename string, data interface{}) error {
 
 	// The mode above only applies to a file that did not exist yet.
 	if err := fd.Chmod(0600); err != nil {
+		return err
+	}
+	if err := fd.Truncate(0); err != nil {
 		return err
 	}
 
