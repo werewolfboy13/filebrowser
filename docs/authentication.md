@@ -124,6 +124,8 @@ For most custom authentication flows, auth or block are used.
 
 The command has **30 seconds** to answer. After that, or as soon as the client that is logging in gives up, FileBrowser stops the command and answers the login with an error (`500`). Such a login is not counted as a wrong password. Only the command itself is stopped, not the processes it may have started, so a hook that calls a slow service should set a timeout of its own on that call.
 
+In a container, run FileBrowser under an init process (`docker run --init`, `init: true` in Compose, or tini as the entrypoint): the processes a stopped command had started are handed to the container's first process, and when that is FileBrowser itself nothing reaps them, so they pile up as zombies until the container's process limit stops every hook from starting, and with it every login.
+
 Example of a successful authentication:
 
 ```sh
