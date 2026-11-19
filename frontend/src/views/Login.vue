@@ -88,14 +88,20 @@ const reason =
 
 // Where to go once logged in: the page given as redirect (the one a forced
 // logout left), query included, if it is a path of this app; else the
-// default page. A path with an empty segment ("//host/x", or "/\host",
-// which a browser reads as "//host") is not one: no route matches it, and
-// the catch-all route redirected it to itself until router.push failed.
+// default page. A path with an empty segment once decoded ("//host/x",
+// "/%2Fx", or "/\host", which a browser reads as "//host") is not one: no
+// route matches it, and the catch-all route redirected it to itself until
+// router.push failed.
 const redirectTarget = (): string => {
   const value = route.query.redirect;
   if (typeof value !== "string" || !value.startsWith("/")) return "/files/";
-  const path = value.split(/[?#]/)[0].replace(/\\/g, "/");
-  return path.includes("//") ? "/files/" : value;
+  let path = value.split(/[?#]/)[0];
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    return "/files/";
+  }
+  return path.replace(/\\/g, "/").includes("//") ? "/files/" : value;
 };
 
 const submit = async (event: Event) => {
@@ -127,7 +133,8 @@ const submit = async (event: Event) => {
     }
 
     await auth.login(username.value, password.value, captcha);
-    router.push(redirect);
+    // anything the check above lets through that the router cannot go to
+    router.push(redirect).catch(() => router.push("/files/"));
   } catch (e: any) {
     // console.error(e);
     if (e instanceof StatusError) {
