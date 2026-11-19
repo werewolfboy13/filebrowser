@@ -95,4 +95,35 @@ describe("an admin editing their own user", () => {
     expect(body.password).toBe("N3w-Secret!");
     expect((useAuthStore().user as any).password).toBeUndefined();
   });
+
+  // 409: an administrator changed the same account at the same moment
+  // (the server's answer to a change of one's own account)
+  it("a 409 says the account was changed at the same time", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const me = { id: 7, username: "root", locale: "en", perm: { admin: true } };
+    useAuthStore().user = { ...me } as any;
+    h.get.mockResolvedValue({ ...me, password: "" });
+    const { StatusError } = await import("@/api/utils");
+    h.update.mockRejectedValueOnce(new StatusError("409 Conflict\n", 409));
+    const showError = vi.fn();
+    const global = {
+      plugins: [pinia],
+      mocks: { $t: (k: string) => k },
+      provide: { $showError: showError, $showSuccess: vi.fn() },
+      stubs: { "router-link": true },
+    };
+    const page = mount(User, { attachTo: document.body, global });
+    const prompts = mount(Prompts, { attachTo: document.body, global });
+    await flushPromises();
+    await page.find("form").trigger("submit");
+    await nextTick();
+    await prompts.find('input[type="password"]').setValue("my-current");
+    await prompts
+      .findAll("button")
+      .find((b) => b.text() === "buttons.ok")!
+      .trigger("click");
+    await flushPromises();
+    expect(showError).toHaveBeenCalledWith("errors.accountChangedConcurrently");
+  });
 });

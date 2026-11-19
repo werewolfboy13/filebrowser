@@ -30,7 +30,7 @@
     "replace": "Replace",
     "reportIssue": "Report Issue",
     "replaceSmaller": "Replace the files that are smaller in the destination",
-    "replaceSmallerTooltip": "Replace each conflicting file that is smaller in the destination than yours, and skip the others. A smaller file there is not necessarily incomplete: it can be a newer version.",
+    "replaceSmallerTooltip": "Replace each conflicting file that is smaller in the destination than yours, and skip the others. A conflict that involves a folder, yours or the one in the destination, is skipped, with everything in that folder. A smaller file there is not necessarily incomplete: it can be a newer version.",
     "save": "Save",
     "schedule": "Schedule",
     "search": "Search",
@@ -76,7 +76,8 @@
     "requestTimeout": "The request took too long to reach the server. Please try again.",
     "tooLarge": "This is too large for the server to process.",
     "subtitleUnavailable": "The subtitles \"{name}\" could not be loaded (the file may be too large to convert).",
-    "locked": "The server is still busy with an earlier request for this item. Please try again in a moment."
+    "locked": "The server is still busy with an earlier request for this item. Please try again in a moment.",
+    "accountChangedConcurrently": "Your account was changed by someone else at the same time, so this change was not saved. Please try again."
   },
   "files": {
     "body": "Body",
@@ -180,6 +181,7 @@
     "resolution": "Resolution",
     "discardEditorChanges": "Are you sure you wish to discard the changes you've made?",
     "restoreEditorChanges": "You were logged out before saving your changes to this file. Restore them in the editor (not saved until you save), or discard them?",
+    "restoreEditorChangesFileChanged": "You were logged out before saving your changes, and this file has changed since you were logged out (someone saved it, or another file is now at this path). If you restore your changes in the editor and then save, they replace its current content. Restore them, or discard them?",
     "replaceOrSkip": "Replace or skip files",
     "resolveConflict": "Which files do you want to keep?",
     "singleConflictResolve": "If you select both versions, a number will be added to the name of the copied file.",

@@ -444,4 +444,63 @@ describe("checkConflict", () => {
 
     expect(conflicts).toHaveLength(0);
   });
+
+  // "Replace the files that are smaller in the destination" replaces the
+  // conflicts marked smaller-on-server. For a folder, the listed size is the
+  // directory entry's own size (filesystem and entry count, not content), and
+  // replacing it means merging with override, which replaces every same-named
+  // file inside whatever its size. So a folder, on either side, is never
+  // "smaller in the destination": the option skips it.
+  it("never marks a folder (either side) as smaller in the destination", async () => {
+    mockListing([
+      {
+        name: "photos",
+        path: "/dst/photos",
+        size: 4096,
+        modified: "",
+        isDir: true,
+      },
+      {
+        name: "a.txt",
+        path: "/dst/a.txt",
+        size: 10,
+        modified: "",
+        isDir: false,
+      },
+      {
+        name: "b.txt",
+        path: "/dst/b.txt",
+        size: 10,
+        modified: "",
+        isDir: false,
+      },
+      { name: "c", path: "/dst/c", size: 4096, modified: "", isDir: true },
+      { name: "d", path: "/dst/d", size: 1, modified: "", isDir: false },
+    ]);
+
+    const conflicts = await checkConflict(
+      [
+        { ...moveItem("photos", "/files/dst/", 20480), isDir: true },
+        moveItem("a.txt", "/files/dst/", 5),
+        moveItem("b.txt", "/files/dst/", 50),
+        // a file whose name is taken by a folder in the destination
+        moveItem("c", "/files/dst/", 9000),
+        // a folder whose name is taken by a smaller file in the destination
+        { ...moveItem("d", "/files/dst/", 4096), isDir: true },
+      ],
+      "/files/dst/",
+      true
+    );
+
+    const smaller = Object.fromEntries(
+      conflicts.map((c) => [c.name.split("/").pop(), c.isSmallerOnServer])
+    );
+    expect(smaller).toEqual({
+      photos: false,
+      "a.txt": false,
+      "b.txt": true,
+      c: false,
+      d: false,
+    });
+  });
 });

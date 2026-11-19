@@ -110,6 +110,7 @@ import Languages from "@/components/settings/Languages.vue";
 import { computed, inject, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { authMethod, noAuth } from "@/utils/constants";
+import { ownAccountChangeError } from "@/utils/errors";
 
 const layoutStore = useLayoutStore();
 const authStore = useAuthStore();
@@ -128,6 +129,11 @@ const redirectAfterCopyMove = ref<boolean>(false);
 const dateFormat = ref<boolean>(false);
 const locale = ref<string>("");
 const aceEditorTheme = ref<string>("");
+
+const showUpdateError = (e: unknown) => {
+  const shown = ownAccountChangeError(t, e, authStore.user !== null);
+  if (shown !== null) $showError(shown);
+};
 
 const passwordClass = computed(() => {
   const baseClass = "input input--block";
@@ -180,8 +186,8 @@ const updatePassword = async (event: Event) => {
       isCurrentPasswordRequired.value ? currentPassword.value : null
     );
     $showSuccess(t("settings.passwordUpdated"));
-  } catch (e: any) {
-    $showError(e);
+  } catch (e) {
+    showUpdateError(e);
   } finally {
     password.value = passwordConf.value = currentPassword.value = "";
   }
@@ -216,7 +222,7 @@ const updateSettings = async (event: Event) => {
     $showSuccess(t("settings.settingsUpdated"));
   } catch (err) {
     if (err instanceof Error) {
-      $showError(err);
+      showUpdateError(err);
     }
   }
 };

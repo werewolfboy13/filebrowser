@@ -60,6 +60,7 @@ import { useI18n } from "vue-i18n";
 import { StatusError } from "@/api/utils";
 import { authMethod } from "@/utils/constants";
 import { logout } from "@/utils/auth";
+import { ownAccountChangeError } from "@/utils/errors";
 
 const error = ref<StatusError>();
 const originalUser = ref<IUser>();
@@ -184,6 +185,7 @@ const send = async (currentPassword: string) => {
   if (!user.value) {
     return false;
   }
+  const self = !isNew.value && user.value.id === authStore.user?.id;
 
   try {
     if (isNew.value) {
@@ -211,7 +213,12 @@ const send = async (currentPassword: string) => {
       $showSuccess(t("settings.userUpdated"));
     }
   } catch (e: any) {
-    $showError(e);
+    if (!self) {
+      $showError(e);
+      return;
+    }
+    const shown = ownAccountChangeError(t, e, authStore.user !== null);
+    if (shown !== null) $showError(shown);
   }
 };
 </script>

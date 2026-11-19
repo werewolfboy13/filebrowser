@@ -326,5 +326,75 @@ describe(
       expect(useAuthStore().user).toBeNull();
       expect(router.currentRoute.value.path).toBe("/login");
     });
+
+    // The file at that path may have changed since the logout: someone saved
+    // it, or a scope change (one cause of the forced logout) made the path
+    // name another file. Restore, then Save, would replace that content.
+    const SAME =
+      "You were logged out before saving your changes to this file. Restore them in the editor (not saved until you save), or discard them?";
+    const question = () =>
+      document.querySelector(".card-content")?.textContent?.trim();
+
+    it("says when the file changed since the logout, and the default focus leaves both alone", async () => {
+      await setup();
+      await saveAnswered401(await openFile("/files/notes.md", "draft v1"));
+      parseToken(token(1, "alice"));
+      const reopened = await openFile("/files/notes.md", "v2: bob's work");
+      await waitFor(() =>
+        expect(promptNames()).toEqual(["restoreEditorChanges"])
+      );
+      console.log("question:", question());
+      expect(question()).not.toBe(SAME);
+      expect(question()).toMatch(/changed since you were logged out/);
+      expect(question()).toMatch(/replaces? its current content/);
+      // neither Restore nor Discard has the default focus
+      expect(document.activeElement?.textContent?.trim()).toBe("Cancel");
+      (document.activeElement as HTMLElement).click();
+      await waitFor(() => expect(promptNames()).toEqual([]));
+      expect(reopened.getValue()).toBe("v2: bob's work");
+      expect(reopened.session.getUndoManager().isClean()).toBe(true);
+      expect(storedText()).toBe(true);
+    });
+
+    it("the user's own save before the logout is not a change", async () => {
+      await setup();
+      const editor = await openFile("/files/notes.md", "draft v1");
+      putStatus = 200;
+      editor.setValue("draft v1, saved");
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true })
+      );
+      await waitFor(() =>
+        expect(editor.session.getUndoManager().isClean()).toBe(true)
+      );
+      putStatus = 401;
+      await saveAnswered401(editor);
+      parseToken(token(1, "alice"));
+      await openFile("/files/notes.md", "draft v1, saved");
+      await waitFor(() =>
+        expect(promptNames()).toEqual(["restoreEditorChanges"])
+      );
+      expect(question()).toBe(SAME);
+      expect(document.activeElement?.textContent?.trim()).toBe("Restore");
+    });
+
+    it("a kept text that does not say what it was written over counts as changed", async () => {
+      await setup();
+      sessionStorage.setItem(
+        "editor-unsaved",
+        JSON.stringify({
+          user: 1,
+          username: "alice",
+          path: "/files/notes.md",
+          content: UNSAVED,
+        })
+      );
+      await openFile("/files/notes.md", "draft v1");
+      await waitFor(() =>
+        expect(promptNames()).toEqual(["restoreEditorChanges"])
+      );
+      expect(question()).toMatch(/changed since you were logged out/);
+      expect(document.activeElement?.textContent?.trim()).toBe("Cancel");
+    });
   }
 );

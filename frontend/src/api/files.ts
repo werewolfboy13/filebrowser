@@ -4,6 +4,7 @@ import { baseURL } from "@/utils/constants";
 import { upload as postTus, UploadError, useTus } from "./tus";
 import { createURL, fetchURL, removePrefix, StatusError } from "./utils";
 import { isEncodableResponse, makeRawResource } from "@/utils/encodings";
+import { logout } from "@/utils/auth";
 
 export async function fetch(url: string, signal?: AbortSignal) {
   const encoding = isEncodableResponse(url);
@@ -170,6 +171,8 @@ async function postResources(
   }
 
   const authStore = useAuthStore();
+  // the token this request is sent with (see fetchURL)
+  const sentJwt = authStore.jwt;
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open(
@@ -177,7 +180,7 @@ async function postResources(
       `${baseURL}/api/resources${url}?override=${overwrite}`,
       true
     );
-    request.setRequestHeader("X-Auth", authStore.jwt);
+    request.setRequestHeader("X-Auth", sentJwt);
 
     if (typeof onupload === "function") {
       request.upload.onprogress = onupload;
@@ -187,6 +190,13 @@ async function postResources(
       if (request.status === 200) {
         resolve(request.responseText);
       } else {
+        // The session is over (e.g. revoked elsewhere): back to the login
+        // page, as for other API calls and tus. That aborts the uploads,
+        // and the upload store shows no error for them. Not for a token
+        // replaced since the request went out.
+        if (request.status === 401 && sentJwt && authStore.jwt === sentJwt) {
+          logout(undefined, sentJwt);
+        }
         // with the status, like a failed tus upload: a 409 (the file
         // exists) lets the upload store offer to replace it
         reject(

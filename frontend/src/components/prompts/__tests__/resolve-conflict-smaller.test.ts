@@ -86,4 +86,51 @@ describe("the conflict dialog's option for smaller files", () => {
       ["b.txt", ["dest"]],
     ]);
   });
+
+  it("skips a folder conflict and says so", async () => {
+    i18n.global.locale.value = "en";
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const confirm = vi.fn();
+    const conflict = [
+      // what checkConflict reports for folders (copy/move)
+      {
+        index: 0,
+        name: "photos",
+        origin: { size: 20480 },
+        dest: { size: 4096 },
+        isSmallerOnServer: false,
+      },
+      {
+        index: 1,
+        name: "a.txt",
+        origin: { size: 9 },
+        dest: { size: 5 },
+        isSmallerOnServer: true,
+      },
+    ].map((c) => ({ ...c, checked: ["origin"] }));
+    useLayoutStore().showHover({
+      prompt: "resolve-conflict",
+      props: { conflict },
+      confirm,
+    });
+    const wrapper = mount(ResolveConflict, {
+      global: { plugins: [pinia, i18n] },
+    });
+    const button = wrapper
+      .findAll("button")
+      .find((b) => b.find("i").text() === "replay")!;
+    expect(button.text()).toMatch(
+      /conflict that involves a folder, yours or the one in the destination, is skipped/i
+    );
+    await button.trigger("click");
+    const result = confirm.mock.calls[0][1].map((c: any) => [
+      c.name,
+      c.checked,
+    ]);
+    expect(result).toEqual([
+      ["photos", ["dest"]],
+      ["a.txt", ["origin"]],
+    ]);
+  });
 });
