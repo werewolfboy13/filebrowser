@@ -125,7 +125,7 @@ What decides the version:
 
 The links in a new section of the changelog, to commits, comparisons and issues, go to the fork whatever the remotes of the clone are called and wherever they point: [`.versionrc`](.versionrc) sets them. (A clone without a remote called `origin` gets no links to commits, only their hashes.) A `#123` in a commit message becomes a link to issue 123 of the fork, and so does `filebrowser/filebrowser#123`. To refer to an issue of the original project, write its address in full.
 
-The release job only takes a tag that is a version: `v`, three numbers without leading zeros, and for a prerelease a hyphen and its name, such as `v3.0.0` or `v3.0.0-rc.1`. For a prerelease it pushes the image under that one tag and marks the GitHub release as a prerelease. For a full release it also moves the image tags `v3` and `latest`.
+The release job only takes a tag that is a version: `v`, three numbers without leading zeros, and for a prerelease a hyphen and its name, in which a number has no leading zero either, such as `v3.0.0` or `v3.0.0-rc.1`. For a prerelease it pushes the image under that one tag and marks the GitHub release as a prerelease. For a full release it also moves the image tags `v3` and `latest`.
 
 ## Translations
 
