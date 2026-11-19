@@ -30,6 +30,14 @@ export const useAuthStore = defineStore("auth", {
       this.user = user;
     },
     updateUser(user: Partial<IUser>) {
+      // an answer for a session that has ended since (logout, another
+      // user on the tab) is not about this one
+      if (
+        this.user === null ||
+        (user.id !== undefined && user.id !== this.user.id)
+      ) {
+        return;
+      }
       if (user.locale) {
         setLocale(user.locale);
       }
