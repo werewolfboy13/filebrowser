@@ -17,7 +17,7 @@ git clone https://github.com/werewolfboy13/filebrowser
 
 The Go module is `github.com/werewolfboy13/filebrowser/v3`.
 
-`go install github.com/werewolfboy13/filebrowser/v3@latest` is not a way to install File Browser. It builds the server only: the web client is not in the repository, it is built from [`frontend`](frontend) and embedded in the binary by `task build` and by the Dockerfile. A binary from `go install` answers every page with `404 Not Found`, serves only the API, and calls itself `v(untracked)/(unknown)`. The command works at all only once this fork has a v3 tag: `@latest` is then the newest release, or the newest release candidate for as long as there is no release. Until then it fails, because the tags that came with the fork, up to `v2.63.23`, are the original project's and belong to its module path.
+`go install github.com/werewolfboy13/filebrowser/v3@latest` is not a way to install File Browser. It builds the server only: the web client is not in the repository, it is built from [`frontend`](frontend) and embedded in the binary by `task build` and by the Dockerfile. A binary from `go install` answers every page with `404 Not Found`, serves only the API, and calls itself `v(untracked)/(unknown)`. `@latest` is the newest release, or the newest release candidate for as long as there is no release. Before the fork's first v3 tag it is the tip of the default branch: the tags that came with the fork, up to `v2.63.23`, are the original project's and belong to its module path.
 
 We use [Taskfile](https://taskfile.dev/) to manage the different processes (building, releasing, etc) automatically.
 
