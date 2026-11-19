@@ -7,7 +7,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
+	"slices"
+
+	"github.com/spf13/viper"
 )
 
 const (
@@ -36,8 +38,8 @@ const (
 // as JSON it stops every start, and the image has no shell to remove it with.
 //
 // The template is only copied to a file of its own format, which the
-// extension names: as anything else it could not be read, and it would stop
-// every later start.
+// extension names, and only when that is a format the settings are read in:
+// as anything else it could not be read, and it would stop every later start.
 func seedConfigFile(path, template string) error {
 	if path == "" || template == "" {
 		return nil
@@ -53,9 +55,10 @@ func seedConfigFile(path, template string) error {
 	}
 	empty := err == nil
 
-	if configFormat(path) != configFormat(template) {
+	format, readable := configFormat(path)
+	if templateFormat, _ := configFormat(template); !readable || format != templateFormat {
 		log.Printf("WARNING: %s does not get the settings in %s: going by their extensions,", path, template)
-		log.Printf("WARNING: the two are not in the same format.")
+		log.Printf("WARNING: the two are not in the same format, or not in one that File Browser reads.")
 		return nil
 	}
 
@@ -79,13 +82,23 @@ func seedConfigFile(path, template string) error {
 }
 
 // configFormat returns the format of a configuration file as its name tells
-// it: the extension, in lower case, and the same for both spellings of YAML.
-func configFormat(path string) string {
-	ext := strings.ToLower(filepath.Ext(path))
-	if ext == ".yml" {
-		return ".yaml"
+// it, and whether the settings can be read from a file of that name.
+//
+// It goes by the extension exactly as the reader of the settings does (Viper,
+// in initViper): as it is written, so ".JSON" is not ".json" and names no
+// format at all. The template was copied to a file named settings.JSON, which
+// then stopped that start and every later one as an unsupported type. The two
+// spellings of YAML are one format.
+func configFormat(path string) (format string, readable bool) {
+	format = filepath.Ext(path)
+	if format != "" {
+		format = format[1:]
 	}
-	return ext
+	readable = slices.Contains(viper.SupportedExts, format)
+	if format == "yml" {
+		format = "yaml"
+	}
+	return format, readable
 }
 
 // createConfigFile creates the file at path with the content, in one step:

@@ -250,10 +250,9 @@ func TestSeedConfigFile(t *testing.T) {
 		}
 	})
 
-	t.Run("takes the extension in any case, and both spellings of YAML", func(t *testing.T) {
+	t.Run("takes both spellings of YAML for one format", func(t *testing.T) {
 		dir := t.TempDir()
 		for config, templateName := range map[string]string{
-			"upper.JSON":    "a.json",
 			"settings.yaml": "b.yml",
 			"settings.yml":  "c.yaml",
 		} {
@@ -267,6 +266,30 @@ func TestSeedConfigFile(t *testing.T) {
 			if got := readTestFile(t, configPath); got != template {
 				t.Errorf("%s = %q, want the content of %s", config, got, templateName)
 			}
+		}
+	})
+
+	// The settings are read by the extension as it is written. The template
+	// was copied to settings.JSON, which is no format to the reader: the
+	// file stopped that start, and every later one.
+	t.Run("does not copy the template to a file whose extension the reader does not know", func(t *testing.T) {
+		dir := t.TempDir()
+		for config, templateName := range map[string]string{
+			"upper.JSON":    "a.json",
+			"same.JSON":     "b.JSON",
+			"mixed.Json":    "c.json",
+			"upper.YAML":    "d.yml",
+			"settings.conf": "e.conf",
+			"settings":      "f",
+		} {
+			templatePath := filepath.Join(dir, templateName)
+			configPath := filepath.Join(dir, config)
+			writeTestFile(t, templatePath, template)
+
+			if err := seedConfigFile(configPath, templatePath); err != nil {
+				t.Fatal(err)
+			}
+			assertNoFile(t, configPath)
 		}
 	})
 
@@ -486,6 +509,41 @@ func TestInitViperConfigFromEnv(t *testing.T) {
 		_, err := initViper(newServerTestCmd(t))
 		assertErrorNames(t, err, configPath, envConfig)
 		assertNoFile(t, configPath)
+	})
+
+	// What the reader makes of a name decides: it takes ".JSON" for no
+	// format, so a file of that name is not created either.
+	t.Run("a missing FB_CONFIG file whose extension is not in lower case is an error, and is not created", func(t *testing.T) {
+		dir := t.TempDir()
+		templatePath := filepath.Join(dir, "template.json")
+		configPath := filepath.Join(dir, "settings.JSON")
+		writeTestFile(t, templatePath, `{"port": 4321}`)
+		t.Setenv(envConfig, configPath)
+		t.Setenv(envConfigTemplate, templatePath)
+
+		_, err := initViper(newServerTestCmd(t))
+		assertErrorNames(t, err, configPath, envConfig)
+		assertNoFile(t, configPath)
+	})
+
+	// Every format that is seeded is one that is read.
+	t.Run("a file that is created from the template is read", func(t *testing.T) {
+		for _, name := range []string{"settings.json", "settings.yaml", "settings.yml"} {
+			dir := t.TempDir()
+			templatePath := filepath.Join(dir, "template"+filepath.Ext(name))
+			configPath := filepath.Join(dir, name)
+			writeTestFile(t, templatePath, `{"port": 4321}`)
+			t.Setenv(envConfig, configPath)
+			t.Setenv(envConfigTemplate, templatePath)
+
+			v, err := initViper(newServerTestCmd(t))
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if got := v.GetString("port"); got != "4321" {
+				t.Errorf("%s: port = %q, want 4321", name, got)
+			}
+		}
 	})
 
 	t.Run("a config file of a type that cannot be read is an error", func(t *testing.T) {
