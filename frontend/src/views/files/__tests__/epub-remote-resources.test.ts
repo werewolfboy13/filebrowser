@@ -25,7 +25,11 @@ vi.hoisted(() => {
   };
 });
 
-const h = vi.hoisted(() => ({ register: vi.fn(), order: [] as string[] }));
+const h = vi.hoisted(() => ({
+  register: vi.fn(),
+  serialize: vi.fn(),
+  order: [] as string[],
+}));
 
 vi.mock("@/utils/auth", () => ({ renew: vi.fn(), logout: vi.fn() }));
 vi.mock("@/api", () => ({
@@ -63,6 +67,7 @@ vi.mock("vue-reader", async () => {
                       h.register(fn);
                     },
                   },
+                  serialize: { register: h.serialize },
                 },
               },
             },
@@ -146,12 +151,15 @@ describe("EPUB preview and remote resources", () => {
     wrapper?.unmount();
     wrapper = null;
     h.register.mockClear();
+    h.serialize.mockClear();
     h.order.length = 0;
   });
 
   it("cleans each chapter before the first one is displayed", async () => {
     await cleanerFromPreview();
     expect(h.order).toEqual(["register", "display"]);
+    // and the policy is put first in each serialized chapter (utils/epub)
+    expect(h.serialize).toHaveBeenCalledTimes(1);
   });
 
   it("removes what would load from another origin, and only that", async () => {
