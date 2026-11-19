@@ -63,7 +63,10 @@ user is replaced or deleted.`,
 			return err
 		}
 
-		for _, user := range list {
+		for i, user := range list {
+			if user == nil {
+				return fmt.Errorf("can't import the users: entry %d of the file is null, not a user", i+1)
+			}
 			err = user.Clean("", false)
 			if err != nil {
 				return err

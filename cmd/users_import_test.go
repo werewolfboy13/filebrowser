@@ -400,3 +400,31 @@ func TestUsersImportReplaceRefusesWithAnAdministrator(t *testing.T) {
 		}
 	}
 }
+
+// A null in the list of the file is not a user. It was checked like one,
+// which ended the command in a panic.
+func TestUsersImportRefusesANullInTheFile(t *testing.T) {
+	for _, file := range []struct{ content, null string }{
+		{`[null]`, "entry 1 "},
+		{`[{"username":"carol","password":"hash-of-carol","scope":"/carol"},null]`, "entry 2 "},
+	} {
+		for _, flags := range [][]string{nil, {"--overwrite"}, {"--replace"}} {
+			// Without an administrator, so that --replace is not refused
+			// for that.
+			dbPath := newImportDB(t, "alice", "bob")
+
+			err := runUsersImport(t, dbPath, file.content, flags...)
+			if err == nil {
+				t.Errorf("%s, %v: a file with a null in it was imported", file.content, flags)
+			} else if !strings.Contains(err.Error(), file.null) {
+				t.Errorf("%s, %v: the error does not say which entry is null: %v", file.content, flags, err)
+			}
+
+			assertUsers(t, dbPath, "1:alice:/alice:1000", "2:bob:/bob:2000")
+
+			if _, err := os.Stat("users.backup.json"); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("%s, %v: an import that was refused left a backup behind: %v", file.content, flags, err)
+			}
+		}
+	}
+}
