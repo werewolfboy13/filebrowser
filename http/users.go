@@ -437,9 +437,10 @@ func userPut(w http.ResponseWriter, r *http.Request, d *data, tokenExpireTime ti
 	//
 	// A change of other named fields, which nobody else decides on, is
 	// stored as it is.
+	var updated *users.User
 	if revoke || all {
 		// With no fields, the whole user is stored.
-		_, err = d.store.Users.UpdateIfMark(req.Data, stored.TokensNotBefore, revoke, fields...)
+		updated, err = d.store.Users.UpdateIfMark(req.Data, stored.TokensNotBefore, revoke, fields...)
 	} else {
 		err = d.store.Users.Update(req.Data, fields...)
 	}
@@ -454,13 +455,12 @@ func userPut(w http.ResponseWriter, r *http.Request, d *data, tokenExpireTime ti
 	}
 
 	// The session that made the change was revoked with the others. It is
-	// handed a new token with this answer, issued for the account as it is
-	// stored now.
+	// handed a new token with this answer, always: issued from the record
+	// this change left behind, as the store read it back before anyone else
+	// could change it again. Read here instead, it could be the record of a
+	// revocation that came after this one, and the token would carry that
+	// one's mark and outlive it.
 	if revoke && req.Data.ID == d.user.ID {
-		updated, err := d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.user.ID)
-		if err != nil {
-			return http.StatusInternalServerError, err
-		}
 		if err := replaceSessionToken(w, d, updated, tokenExpireTime); err != nil {
 			return http.StatusInternalServerError, err
 		}

@@ -294,6 +294,44 @@ func TestOwnChangeLetInBeforeAnAdminResetIsRefused(t *testing.T) {
 	assertResetStands(t, e, map[string]string{"the token handed out with bob's change": h.Get("X-Auth-Token"), "bob's token": bobTok})
 }
 
+// Bob's change is stored first, and the administrator's reset right after
+// it, before bob's request has made the token it answers with. That token
+// was issued from the account as it was read again after the change: with
+// the reset in it. It carried the mark of the reset, and outlived it.
+//
+// The token is now issued from the record bob's change left, as the store
+// read it back under its lock. The answer still carries one, as every
+// answer to such a change does; it is over as soon as it is made.
+func TestTokenOfAnOwnChangeDoesNotOutliveARevocationThatFollows(t *testing.T) {
+	e := newFullEnv(t)
+	w := e.watchUsers()
+	bobTok := e.login("bob", fullEnvUserPassword)
+	adminTok := e.login("admin", fullEnvAdminPassword)
+
+	var fired atomic.Bool
+	reset := onceWhen(&fired, func() {
+		if code := e.adminReset(adminTok); code != http.StatusOK {
+			t.Errorf("the administrator's reset = %d", code)
+		}
+	})
+	after := func(u *users.User, _ []string) { reset(u.ID == 2) }
+	w.afterWrite.Store(&after)
+
+	code, h := e.ownChange(bobTok)
+	if !fired.Load() {
+		t.Fatal("the reset was not stored during bob's change")
+	}
+	// Bob's change was stored, before the reset: that is a success.
+	if code != http.StatusOK {
+		t.Errorf("bob's own change = %d, want 200", code)
+	}
+	replacement := h.Get("X-Auth-Token")
+	if strings.Count(replacement, ".") != 2 {
+		t.Errorf("the answer to a change of the own password carries no token (X-Auth-Token %q)", replacement)
+	}
+	assertResetStands(t, e, map[string]string{"the token handed out with bob's change": replacement, "bob's token": bobTok})
+}
+
 // hookAcceptingBob is a hook that accepts bob with one password, and says
 // that his locale is French: something to store at every login.
 func hookAcceptingBob(password string) string {
