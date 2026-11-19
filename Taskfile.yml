@@ -1,5 +1,10 @@
 version: '3'
 
+vars:
+  # Whether a release is signed, its commit and its tag: -s for signed, '' for unsigned. This is
+  # the one place that decides it.
+  SIGN: -s
+
 tasks:
   build:frontend:
     desc: Build frontend assets
@@ -47,7 +52,13 @@ tasks:
   # it. They push nothing. CONTRIBUTING.md describes the whole procedure.
   release:
     desc: "Tag a release, such as v3.0.0: the version follows from the commits since the last release"
+    preconditions:
+      # The fork's first tag is a candidate. From the original project's last tag, this task would
+      # tag v3.0.0 at once, a full release.
+      - sh: 'case "$(git describe --tags --abbrev=0 --match "v*" 2> /dev/null)" in v2.*) false ;; esac'
+        msg: "The last version tag is the original project's, a v2: this fork has no release candidate yet, and its first tag is one. Tag it first: task release:rc VERSION=3.0.0"
     cmds:
+      - task: release:check
       - task: release:docs
       - task: release:dry-run
       - task: release:make
@@ -66,6 +77,7 @@ tasks:
       - sh: '[ -n "{{.VERSION}}" ] || git describe --tags --abbrev=0 --match "v*" | grep -q -e "-rc\.[0-9][0-9]*$"'
         msg: "The last version tag is not a release candidate. Name the version of the first one: task release:rc VERSION=3.0.0"
     cmds:
+      - task: release:check
       - task: release:docs
       - task: release:dry-run
         vars:
@@ -73,6 +85,21 @@ tasks:
       - task: release:make
         vars:
           FLAGS: '{{.FLAGS}}'
+
+  # What a release needs is checked before anything is written or deleted. A run that fails at its
+  # commit leaves the new section in CHANGELOG.md, written and staged, and the next run would put
+  # the section there a second time, in the commit that is tagged. The commit fails most often
+  # because it cannot be signed, so one is signed here as a trial: an object that no branch or tag
+  # leads to, which changes neither the index nor a file.
+  release:check:
+    internal: true
+    preconditions:
+      - sh: 'command -v go > /dev/null && command -v pnpm > /dev/null'
+        msg: "A release needs Go and pnpm on the PATH."
+      - sh: 'git diff --quiet HEAD -- CHANGELOG.md'
+        msg: "CHANGELOG.md has changes that are not committed, which a failed run leaves behind. Undo them first: git restore --staged --worktree CHANGELOG.md"
+      - sh: '[ -z "{{.SIGN}}" ] || git commit-tree -S -m "signing check" "HEAD^{tree}" < /dev/null > /dev/null 2>&1'
+        msg: "Git cannot sign a commit here, and a release is signed. It needs a signing key in the Git configuration, which CONTRIBUTING.md describes under Release. This shows Git's error and changes nothing: git commit-tree -S -m test 'HEAD^{tree}'"
 
   release:docs:
     internal: true
@@ -95,9 +122,13 @@ tasks:
     internal: true
     prompt: Do you wish to proceed?
     cmds:
-      - pnpm dlx commit-and-tag-version@13.3.0 -s {{.FLAGS}}
+      - pnpm dlx commit-and-tag-version@13.3.0 {{.SIGN}} {{.FLAGS}}
 
   docs:cli:generate:
+    # Before the reference is deleted, not after.
+    preconditions:
+      - sh: 'command -v go > /dev/null'
+        msg: "The command line reference is generated with Go, which is not on the PATH."
     cmds:
       - rm -rf docs/cli
       - mkdir -p docs/cli

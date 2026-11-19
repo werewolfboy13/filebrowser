@@ -6,8 +6,19 @@ import (
 	"strings"
 	"testing"
 
+	homedir "github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
 )
+
+// The home directory is looked up once in a process and then remembered, by
+// the package that looks it up. That is right for the server and wrong for
+// the tests, which each set a HOME of their own: only the first test to ask
+// would get its own, a directory that is gone when that test ends, and every
+// later test and every further round (go test -count=2) would get that one
+// too. So the tests look it up every time.
+func init() {
+	homedir.DisableCache = true
+}
 
 // newServerTestCmd returns a command with the root command's flags, parsed
 // from args. Each test gets its own, so no flag state is shared through the

@@ -74,7 +74,8 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: "1.27.x"
-      - run: go test --race ./...
+      # The longest package takes most of the ten minutes that a package gets by default.
+      - run: go test --race -timeout 20m ./...
 
   build:
     name: Build
@@ -182,10 +183,12 @@ jobs:
           # that starts with a v, such as vnext or v3, would be released as a version, and move
           # `latest`. The tag also becomes the tag of the image, which takes at most 128
           # characters and no plus sign, so build metadata, as in v3.0.0+build, is not taken.
+          # A part of a prerelease's name that is all digits is a number as well, without a
+          # leading zero: GoReleaser refuses v3.0.0-rc.01, and it runs after the image is pushed.
           number='(0|[1-9][0-9]*)'
-          word='[0-9A-Za-z-]+'
+          word="($number|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
           if [[ ! "$GITHUB_REF_NAME" =~ ^v$number\.$number\.$number(-$word(\.$word)*)?$ ]] || [ "${#GITHUB_REF_NAME}" -gt 128 ]; then
-            echo "::error::The tag has to be a version, such as v3.0.0, or v3.0.0-rc.1 for a prerelease: v, three numbers without leading zeros, and for a prerelease a hyphen and its name. It becomes the tag of the image."
+            echo "::error::The tag has to be a version, such as v3.0.0, or v3.0.0-rc.1 for a prerelease: v, three numbers without leading zeros, and for a prerelease a hyphen and its name, in which a number has no leading zero either. It becomes the tag of the image."
             exit 1
           fi
 
