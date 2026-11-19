@@ -229,12 +229,7 @@ user created with the credentials from options "username" and "password".`,
 
 		switch {
 		case server.Socket != "":
-			listener, err = net.Listen("unix", server.Socket)
-			if err != nil {
-				return err
-			}
-			socketPerm := v.GetUint32("socketPerm")
-			err = os.Chmod(server.Socket, os.FileMode(socketPerm))
+			listener, err = listenOnSocket(server.Socket, os.FileMode(v.GetUint32("socketPerm")))
 			if err != nil {
 				return err
 			}
