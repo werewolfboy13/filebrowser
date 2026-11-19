@@ -96,9 +96,16 @@ func randomRules(rng *rand.Rand, n int) []Rule {
 func TestSetDecidesAsTheRulesDoOneByOne(t *testing.T) {
 	t.Parallel()
 
+	// See reducedRun.
+	rounds := 3000
+	if reducedRun() {
+		rounds = 300
+	}
+	t.Logf("%d sets of random rules are checked (reduced run: %v)", rounds, reducedRun())
+
 	rng := rand.New(rand.NewSource(20261118))
 	failures := 0
-	for round := 0; round < 3000 && failures < 10; round++ {
+	for round := 0; round < rounds && failures < 10; round++ {
 		global, byUser := randomRules(rng, rng.Intn(4)), randomRules(rng, rng.Intn(8))
 		for _, fold := range []bool{false, true} {
 			set := NewSet(fold, global, byUser)
