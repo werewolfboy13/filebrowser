@@ -6,7 +6,34 @@ import (
 	"testing"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
+
+// reducedRun reports whether the tests that go through every code point, or
+// through many thousands of names drawn at random, do a part of that work
+// only: under the race detector and with -short.
+//
+// Those tests compare what one function returns for a great many inputs, in
+// one goroutine, and the race detector has nothing to find in them. It makes
+// them some twenty times slower all the same, in a package that is tested at
+// the same time as the ones the detector is there for, on the same
+// processors. A run without it does all of the work.
+func reducedRun() bool {
+	return raceDetector || testing.Short()
+}
+
+// inReducedRun reports whether a reduced run looks at r, a code point
+// without a case: the ones the canonical form does something with (those
+// that decompose, and the marks that are put in order), every one up to the
+// CJK scripts, and one in 61 of the rest.
+func inReducedRun(r rune) bool {
+	if r < 0x3000 || r%61 == 0 {
+		return true
+	}
+	p := norm.NFKD.PropertiesString(string(r))
+	return p.Decomposition() != nil || p.CCC() != 0
+}
 
 // Names a filesystem that ignores case opens as one file, in both spellings.
 // They are the pairs a review found APFS to take for the same name, and the
@@ -123,17 +150,26 @@ func TestCanonicalNameIsIdempotent(t *testing.T) {
 		}
 	}
 
-	// Every code point, alone and next to letters it could combine with.
+	// Every code point, alone and next to letters it could combine with. A
+	// reduced run leaves out most of those the form has nothing to do with:
+	// see inReducedRun.
+	reduced := reducedRun()
 	var cased []rune
+	codePoints := 0
 	for r := rune(0); r <= unicode.MaxRune; r++ {
 		if !utf8.ValidRune(r) {
 			continue
 		}
-		check(string(r))
-		check("a" + string(r) + "B")
-		if unicode.ToUpper(r) != r || unicode.ToLower(r) != r || unicode.SimpleFold(r) != r {
+		hasCase := unicode.ToUpper(r) != r || unicode.ToLower(r) != r || unicode.SimpleFold(r) != r
+		if hasCase {
 			cased = append(cased, r)
 		}
+		if reduced && !hasCase && !inReducedRun(r) {
+			continue
+		}
+		codePoints++
+		check(string(r))
+		check("a" + string(r) + "B")
 	}
 
 	// Random names, drawn mostly from where the trouble is: letters that
@@ -146,8 +182,19 @@ func TestCanonicalNameIsIdempotent(t *testing.T) {
 		0xff0f, 0x1100, 0x1161, 0xac00, 0x200c, 0x200d, 0x200e, 0x202a, 0x206a, 0xfeff, 0xfdfa, 0x2160, 0x24b6,
 		0x1d400, 0x1e900, 0x1e922, 0x10400, 0x10428,
 	}
+	for _, r := range special {
+		check(string(r))
+		check("a" + string(r) + "B")
+	}
+
+	names := 200000
+	if reduced {
+		names = 10000
+	}
+	t.Logf("%d code points and %d random names are checked (reduced run: %v)", codePoints, names, reduced)
+
 	rng := rand.New(rand.NewSource(20261118))
-	for i := 0; i < 200000; i++ {
+	for i := 0; i < names; i++ {
 		var b strings.Builder
 		for n := 1 + rng.Intn(12); n > 0; n-- {
 			switch rng.Intn(10) {

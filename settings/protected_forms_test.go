@@ -36,9 +36,25 @@ func isProtectedAsBefore(s *Server, path string) bool {
 	return false
 }
 
+// reducedRun reports whether the test below, which compares two functions
+// for many thousands of paths in one goroutine, does a part of that work
+// only: under the race detector, which has nothing to find in it and makes
+// it some twenty times slower while the packages it is there for are tested
+// on the same processors, and with -short. A run without it does all of the
+// work.
+func reducedRun() bool {
+	return raceDetector || testing.Short()
+}
+
 // IsProtected decides as it did, for paths put together at random from the
 // names that are registered, in several spellings, and from others.
 func TestIsProtectedDecidesAsItDidBeforeItsFormsWereKept(t *testing.T) {
+	paths := 40000
+	if reducedRun() {
+		paths = 4000
+	}
+	t.Logf("%d random paths are checked, with and without case folded (reduced run: %v)", paths, reducedRun())
+
 	root := filepath.FromSlash("/srv")
 	registered := []string{
 		"/srv/filebrowser.db",
@@ -75,7 +91,7 @@ func TestIsProtectedDecidesAsItDidBeforeItsFormsWereKept(t *testing.T) {
 		}
 
 		protected, failures := 0, 0
-		for i := 0; i < 40000 && failures < 10; i++ {
+		for i := 0; i < paths && failures < 10; i++ {
 			elements := make([]string, 1+rng.Intn(4))
 			for j := range elements {
 				elements[j] = parts[rng.Intn(len(parts))]
@@ -95,7 +111,7 @@ func TestIsProtectedDecidesAsItDidBeforeItsFormsWereKept(t *testing.T) {
 			}
 		}
 		// Guard the test: it has to meet both answers often.
-		if protected < 1000 {
+		if protected < paths/40 {
 			t.Errorf("fold %v: only %d of the random paths are protected", fold, protected)
 		}
 	}

@@ -262,6 +262,11 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 			// and the rest waits its turn: see workGate. A login whose turn
 			// does not come is turned away without having been looked at,
 			// which says nothing about its password.
+			//
+			// A turn is held for as long as the auther takes. The authers
+			// bound that themselves: a hook, and a captcha service, are
+			// given a time to answer, and are given up when the request
+			// ends (see auth.HookAuth.RunCommand, auth.ReCaptcha.Ok).
 			if leave = d.limits.loginWork.enter(r.Context(), addr); leave == nil {
 				done(attemptAborted)
 				return tooManyAttempts(w, time.Second)

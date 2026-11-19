@@ -232,6 +232,11 @@ var userPostHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *
 	// A new account has no sessions to revoke, whatever the request says.
 	req.Data.TokensNotBefore = 0
 
+	// And it gets the next ID of the store, whatever the request says: under
+	// an ID of the request's choosing it would be written over the account
+	// that has the ID, or take up the sessions of one that had it.
+	req.Data.ID = 0
+
 	userHome, err := d.settings.MakeUserDir(req.Data.Username, req.Data.Scope, d.server.Root)
 	if err != nil {
 		log.Printf("create user: failed to mkdir user home dir: [%s]", userHome)

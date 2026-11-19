@@ -212,6 +212,27 @@ func (e *fullEnv) login(user, password string) string {
 	return tok
 }
 
+// session returns a session token of the named user: the token a login with
+// the password hands out, signed from the stored record, without the login.
+// It is for tests that are not about logging in. Checking a password is what
+// takes long in them, most of all under the race detector.
+func (e *fullEnv) session(name string) string {
+	e.t.Helper()
+	user, err := e.st.Users.Get(e.root, false, name)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	set, err := e.st.Settings.Get()
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	token, err := signSessionToken(&data{settings: set}, user, DefaultTokenExpirationTime, true)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return token
+}
+
 // setBob replaces bob's stored record fields through the store, bypassing the
 // HTTP API, so a test can shape the account without depending on the handler
 // under test.

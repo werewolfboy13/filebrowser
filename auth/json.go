@@ -1,11 +1,13 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/werewolfboy13/filebrowser/v3/settings"
 	"github.com/werewolfboy13/filebrowser/v3/users"
@@ -49,7 +51,7 @@ func (a JSONAuth) Auth(r *http.Request, usr users.Store, _ *settings.Settings, s
 
 	// If ReCaptcha is enabled, check the code.
 	if a.ReCaptcha != nil && a.ReCaptcha.Secret != "" {
-		ok, err := a.ReCaptcha.Ok(cred.ReCaptcha)
+		ok, err := a.ReCaptcha.Ok(r.Context(), cred.ReCaptcha)
 
 		if err != nil {
 			return nil, err
@@ -92,19 +94,27 @@ type ReCaptcha struct {
 	Secret string `json:"secret"`
 }
 
-// Ok checks if a reCaptcha responde is correct.
-func (r *ReCaptcha) Ok(response string) (bool, error) {
+// reCaptchaTimeout is how long the captcha service gets to answer. A login
+// waits for it, and holds one of the turns of its client address for as
+// long: see hookTimeout. It is a variable so that tests can shorten it.
+var reCaptchaTimeout = 10 * time.Second
+
+// Ok checks if a reCaptcha responde is correct. The service is asked for as
+// long as ctx lasts, and no longer than reCaptchaTimeout.
+func (r *ReCaptcha) Ok(ctx context.Context, response string) (bool, error) {
 	body := url.Values{}
 	body.Set("secret", r.Secret)
 	body.Add("response", response)
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: reCaptchaTimeout}
 
-	resp, err := client.Post(
-		r.Host+reCaptchaAPI,
-		"application/x-www-form-urlencoded",
-		strings.NewReader(body.Encode()),
-	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.Host+reCaptchaAPI, strings.NewReader(body.Encode()))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return false, err
 	}

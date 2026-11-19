@@ -97,6 +97,10 @@ func (st usersBackend) Update(user *users.User, fields ...string) error {
 		}
 		val := userField.Interface()
 		if err := tx.UpdateField(user, field, val); err != nil {
+			if errors.Is(err, storm.ErrNotFound) {
+				// Deleted since the caller read it.
+				return fberrors.ErrNotExist
+			}
 			return err
 		}
 	}

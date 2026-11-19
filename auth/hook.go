@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	fberrors "github.com/werewolfboy13/filebrowser/v3/errors"
 	"github.com/werewolfboy13/filebrowser/v3/files"
@@ -35,8 +37,27 @@ type hookCred struct {
 // either: a hook that fails for a reason of its own answers the same way.
 //
 // A hook that could not be run at all is not reported with it: nothing was
-// tested.
+// tested. Neither is one that was stopped before it answered (see
+// RunCommand): it said nothing about the password.
 var ErrHookRefused = errors.New("the authentication hook did not accept the login")
+
+// hookTimeout is how long the hook command gets to answer, unless
+// HookAuth.Timeout says otherwise.
+//
+// A login waits for its hook, and holds one of the few turns its client
+// address has for as long (see the login handler). A hook that never answers
+// (its directory server took the connection and went silent) used to hold
+// that turn for as long as it hung, and a handful of them kept the address
+// out of the login. Real hooks answer in a second or two.
+const hookTimeout = 30 * time.Second
+
+// hookWaitDelay is how long the output of the hook is waited for once the
+// hook itself has ended, by itself or because it was stopped. Only the
+// command that was started is stopped, not what it started in turn, and a
+// process that is left behind with the output of the hook still open would
+// otherwise be waited for as if it were the hook. It is a variable so that
+// tests can shorten it.
+var hookWaitDelay = 5 * time.Second
 
 // HookAuth is a hook implementation of an Auther.
 type HookAuth struct {
@@ -46,6 +67,10 @@ type HookAuth struct {
 	Cred     hookCred           `json:"-"`
 	Fields   hookFields         `json:"-"`
 	Command  string             `json:"command"`
+
+	// Timeout is how long the command gets to answer. Zero stands for
+	// hookTimeout. It is not part of the stored configuration.
+	Timeout time.Duration `json:"-" yaml:"-"`
 }
 
 // Auth authenticates the user via a json in content body.
@@ -66,7 +91,7 @@ func (a *HookAuth) Auth(r *http.Request, usr users.Store, stg *settings.Settings
 	a.Server = srv
 	a.Cred = cred
 
-	action, err := a.RunCommand()
+	action, err := a.RunCommand(r.Context())
 	if err != nil {
 		// An exit error is the hook's own doing: it ran, with the
 		// credentials, and ended with an error status.
@@ -102,15 +127,36 @@ func (a *HookAuth) LoginPage() bool {
 	return true
 }
 
-// RunCommand starts the hook command and returns the action
-func (a *HookAuth) RunCommand() (string, error) {
+// RunCommand starts the hook command and returns the action.
+//
+// The command is stopped when ctx ends (the request it runs for is over: its
+// client went away) or when it has not answered within the time it is given
+// (see hookTimeout), whichever comes first. The error it then returns is not
+// an *exec.ExitError, although that is what running a command that was
+// stopped gives: the hook did not end with an error status of its own, and
+// its login is not one the hook refused.
+func (a *HookAuth) RunCommand(ctx context.Context) (string, error) {
 	command := strings.Split(a.Command, " ")
 
-	cmd := exec.Command(command[0], command[1:]...)
+	timeout := a.Timeout
+	if timeout <= 0 {
+		timeout = hookTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	cmd.WaitDelay = hookWaitDelay
 	cmd.Env = append(os.Environ(), fmt.Sprintf("USERNAME=%s", a.Cred.Username))
 	cmd.Env = append(cmd.Env, fmt.Sprintf("PASSWORD=%s", a.Cred.Password))
 	out, err := cmd.Output()
-	if err != nil {
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return "", fmt.Errorf("the authentication hook was stopped before it answered: %w", ctx.Err())
+	case errors.Is(err, exec.ErrWaitDelay):
+		// The hook answered and ended, and something it started still has
+		// its output open: what the hook itself printed is its answer.
+	case err != nil:
 		return "", err
 	}
 
