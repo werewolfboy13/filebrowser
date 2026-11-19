@@ -2,13 +2,18 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/asdine/storm/v3"
 
+	fberrors "github.com/werewolfboy13/filebrowser/v3/errors"
 	"github.com/werewolfboy13/filebrowser/v3/settings"
 	"github.com/werewolfboy13/filebrowser/v3/storage/bolt"
 	"github.com/werewolfboy13/filebrowser/v3/users"
@@ -108,5 +113,236 @@ func TestUsersImportReplaceBacksUpTheOldUsers(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].Username != "newcarol" {
 		t.Errorf("users after the import: %d, want only newcarol", len(list))
+	}
+}
+
+// newImportDB makes a database in a directory of its own, which becomes the
+// working directory, with the named users in it: they get the IDs 1, 2 and
+// so on, in the order given. It returns the path of the database.
+func newImportDB(t *testing.T, names ...string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("HOME", dir)
+	t.Setenv(envConfig, "")
+
+	dbPath := filepath.Join(dir, "filebrowser.db")
+	db, err := storm.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := bolt.NewStorage(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Settings.Save(&settings.Settings{Key: []byte("key")}); err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range names {
+		// Each has a revocation mark of its own: sessions from before it
+		// are no longer taken.
+		user := &users.User{Username: name, Password: "hash-of-" + name, Scope: "/" + name, TokensNotBefore: int64(1000 * (i + 1))}
+		if err := st.Users.Save(user); err != nil {
+			t.Fatal(err)
+		}
+		if user.ID != uint(i+1) {
+			t.Fatalf("%s got the ID %d, want %d", name, user.ID, i+1)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	return dbPath
+}
+
+// runUsersImport runs "users import" on a file with the given content.
+func runUsersImport(t *testing.T, dbPath, content string, flags ...string) error {
+	t.Helper()
+
+	importFile := filepath.Join(t.TempDir(), "import.json")
+	if err := os.WriteFile(importFile, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reset := func() {
+		_ = usersImportCmd.Flags().Set("replace", "false")
+		_ = usersImportCmd.Flags().Set("overwrite", "false")
+		_ = rootCmd.PersistentFlags().Set("database", "./filebrowser.db")
+		rootCmd.SetArgs(nil)
+	}
+	t.Cleanup(reset)
+	reset()
+
+	rootCmd.SetArgs(append([]string{"users", "import", importFile, "--database", dbPath}, flags...))
+	return rootCmd.Execute()
+}
+
+// importedUsers returns the users of the database as "id:username:scope:mark",
+// in the order of their IDs.
+func importedUsers(t *testing.T, dbPath string) []string {
+	t.Helper()
+
+	db, err := storm.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	st, err := bolt.NewStorage(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := st.Users.Gets("", false)
+	if err != nil && !errors.Is(err, fberrors.ErrNotExist) {
+		t.Fatal(err)
+	}
+
+	got := []string{}
+	for _, u := range list {
+		got = append(got, fmt.Sprintf("%d:%s:%s:%d", u.ID, u.Username, u.Scope, u.TokensNotBefore))
+	}
+	slices.Sort(got)
+	return got
+}
+
+func assertUsers(t *testing.T, dbPath string, want ...string) {
+	t.Helper()
+
+	if got := importedUsers(t, dbPath); !slices.Equal(got, want) {
+		t.Errorf("users in the database:\n got %v\nwant %v", got, want)
+	}
+}
+
+// An ID means something in the installation that gave it out, and nothing in
+// another one. With --overwrite, a user of the file was stored under its ID
+// whoever had that ID here: the registered user was gone, and the imported
+// one had its ID, and with the ID its revocation mark and whatever else goes
+// by the ID.
+func TestUsersImportOverwriteRefusesAnIDOfAnotherUser(t *testing.T) {
+	dbPath := newImportDB(t, "alice", "bob")
+
+	// The first user of the file is one that can be overwritten: nothing of
+	// a file that is refused is imported.
+	err := runUsersImport(t, dbPath, `[
+		{"id":2,"username":"bob","password":"new-hash-of-bob","scope":"/elsewhere"},
+		{"id":1,"username":"mallory","password":"hash-of-mallory","scope":"/mallory"}
+	]`, "--overwrite")
+	if err == nil {
+		t.Error("a user with the ID of another registered user was imported")
+	} else if msg := err.Error(); !strings.Contains(msg, "mallory") || !strings.Contains(msg, "alice") {
+		t.Errorf("the error names neither user: %v", err)
+	}
+
+	assertUsers(t, dbPath, "1:alice:/alice:1000", "2:bob:/bob:2000")
+}
+
+// What --overwrite is for: the same user, by ID and by username, is replaced
+// by the one in the file. Its revocation mark stays.
+func TestUsersImportOverwriteReplacesTheSameUser(t *testing.T) {
+	dbPath := newImportDB(t, "alice", "bob")
+
+	err := runUsersImport(t, dbPath, `[
+		{"id":2,"username":"bob","password":"new-hash-of-bob","scope":"/elsewhere"},
+		{"username":"carol","password":"hash-of-carol","scope":"/carol"}
+	]`, "--overwrite")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertUsers(t, dbPath, "1:alice:/alice:1000", "2:bob:/elsewhere:2000", "3:carol:/carol:0")
+}
+
+// A user of the file that is not registered by its ID is a new one, and its
+// username may not be taken: with or without --overwrite, and whether the
+// file gives it an ID or not.
+func TestUsersImportRefusesAUsernameThatIsTaken(t *testing.T) {
+	for _, flags := range [][]string{nil, {"--overwrite"}} {
+		for _, id := range []string{"", `"id":0,`, `"id":7,`} {
+			dbPath := newImportDB(t, "alice", "bob")
+
+			err := runUsersImport(t, dbPath, `[
+				{"username":"carol","password":"hash-of-carol","scope":"/carol"},
+				{`+id+`"username":"bob","password":"new-hash-of-bob","scope":"/elsewhere"}
+			]`, flags...)
+			if err == nil {
+				t.Errorf("%v, %q: a user with a username that is taken was imported", flags, id)
+			} else if !strings.Contains(err.Error(), "bob") {
+				t.Errorf("%v, %q: the error does not name the user: %v", flags, id, err)
+			}
+
+			assertUsers(t, dbPath, "1:alice:/alice:1000", "2:bob:/bob:2000")
+		}
+	}
+}
+
+// Without a flag, the users of the file are new ones, and the IDs they have
+// in the file, from wherever the file comes, are not used: that an ID is
+// taken here says nothing about the user.
+func TestUsersImportWithoutAFlagDoesNotUseIDs(t *testing.T) {
+	dbPath := newImportDB(t, "alice", "bob")
+
+	err := runUsersImport(t, dbPath, `[
+		{"id":1,"username":"erin","password":"hash-of-erin","scope":"/erin","tokensNotBefore":5},
+		{"id":40,"username":"frank","password":"hash-of-frank","scope":"/frank"}
+	]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertUsers(t, dbPath, "1:alice:/alice:1000", "2:bob:/bob:2000", "3:erin:/erin:5", "4:frank:/frank:0")
+}
+
+// The IDs of new users are given out by the database, counting on from the
+// last one. A user that was imported a moment ago was taken for a registered
+// one when a later user of the file had the ID it had just got: without a
+// flag the import stopped halfway, and with --overwrite the later user
+// replaced the earlier one, which was gone without a word.
+func TestUsersImportDoesNotTakeAnImportedUserForARegisteredOne(t *testing.T) {
+	file := `[
+		{"id":4,"username":"carol","password":"hash-of-carol","scope":"/carol"},
+		{"id":3,"username":"dave","password":"hash-of-dave","scope":"/dave"}
+	]`
+
+	for _, flags := range [][]string{nil, {"--overwrite"}} {
+		dbPath := newImportDB(t, "alice", "bob")
+
+		if err := runUsersImport(t, dbPath, file, flags...); err != nil {
+			t.Errorf("%v: %v", flags, err)
+		}
+
+		assertUsers(t, dbPath, "1:alice:/alice:1000", "2:bob:/bob:2000", "3:carol:/carol:0", "4:dave:/dave:0")
+	}
+
+	t.Run("replace", func(t *testing.T) {
+		dbPath := newImportDB(t, "alice", "bob")
+
+		if err := runUsersImport(t, dbPath, file, "--replace"); err != nil {
+			t.Error(err)
+		}
+
+		assertUsers(t, dbPath, "3:carol:/carol:0", "4:dave:/dave:0")
+	})
+}
+
+// A file that names a user twice is refused as a whole, before --replace
+// has deleted anyone.
+func TestUsersImportRefusesAUsernameTwiceInTheFile(t *testing.T) {
+	file := `[
+		{"username":"carol","password":"hash-of-carol","scope":"/carol"},
+		{"username":"carol","password":"other-hash","scope":"/other"}
+	]`
+
+	for _, flags := range [][]string{nil, {"--overwrite"}, {"--replace"}} {
+		dbPath := newImportDB(t, "alice", "bob")
+
+		err := runUsersImport(t, dbPath, file, flags...)
+		if err == nil {
+			t.Errorf("%v: a file with a username twice was imported", flags)
+		} else if !strings.Contains(err.Error(), "carol") {
+			t.Errorf("%v: the error does not name the user: %v", flags, err)
+		}
+
+		assertUsers(t, dbPath, "1:alice:/alice:1000", "2:bob:/bob:2000")
 	}
 }
