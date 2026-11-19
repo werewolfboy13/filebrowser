@@ -107,5 +107,20 @@ describe("the EPUB chapter policy", () => {
         "p { color: red }"
       );
     }
+    // @import with a string, and the book's own url() left alone
+    const { doc } = await rendered(
+      html(
+        `<head><style>@import "https://t.example/b.css"; ` +
+          `p { background: url(../img/p.png) }</style></head>` +
+          `<body><p style="background:url('//t.example/q.png')">x</p></body>`
+      ),
+      true
+    );
+    const css = doc.querySelector("style")!.textContent!;
+    expect(css).not.toContain("t.example");
+    expect(css).toContain("url(../img/p.png)");
+    expect(doc.querySelector("p")!.getAttribute("style")).toBe(
+      "background:none"
+    );
   });
 });
