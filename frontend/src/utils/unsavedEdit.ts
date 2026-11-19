@@ -12,7 +12,11 @@ const KEY = "editor-unsaved";
 // it was lost before this existed).
 export const MAX_KEPT_LENGTH = 1_000_000;
 
-type UnsavedEdit = { path: string; content: string };
+// base: the fingerprint of the file's content as the editor last loaded or
+// saved it, i.e. what the unsaved text was written over. If the file no
+// longer has that content when it is opened again (someone saved it, or a
+// scope change made the path name another file), the user is told so.
+type UnsavedEdit = { path: string; content: string; base: string };
 type Source = () => UnsavedEdit | null;
 interface Kept extends UnsavedEdit {
   user: number;
@@ -45,6 +49,7 @@ export function keepUnsaved(user: IUser | null) {
       username: user.username,
       path: edit.path,
       content: edit.content,
+      base: edit.base,
     };
     sessionStorage.setItem(KEY, JSON.stringify(kept));
   } catch (e) {
@@ -60,7 +65,8 @@ function read(): Kept | null {
       typeof kept?.user !== "number" ||
       typeof kept.username !== "string" ||
       typeof kept.path !== "string" ||
-      typeof kept.content !== "string"
+      typeof kept.content !== "string" ||
+      (kept.base !== undefined && typeof kept.base !== "string")
     ) {
       return null;
     }
@@ -89,9 +95,26 @@ export function dropUnsavedOfOthers(user: IUser | null) {
   if (kept && !isFor(kept, user)) dropUnsaved();
 }
 
-// The kept text of this file, for this user, if any.
-export function unsavedFor(user: IUser | null, path: string): string | null {
+// The kept text of this file, for this user, if any; base: see UnsavedEdit
+// (missing in a text kept by an older version).
+export function unsavedFor(
+  user: IUser | null,
+  path: string
+): { content: string; base?: string } | null {
   dropUnsavedOfOthers(user);
   const kept = read();
-  return kept && kept.path === path ? kept.content : null;
+  return kept && kept.path === path
+    ? { content: kept.content, base: kept.base }
+    : null;
+}
+
+// A short fingerprint of a text (its length and a 32-bit FNV-1a hash), to
+// tell whether a file still has the content it had, without keeping it.
+export function fingerprint(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${text.length}:${(hash >>> 0).toString(16)}`;
 }

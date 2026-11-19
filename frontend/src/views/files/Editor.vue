@@ -103,6 +103,7 @@ import { read, copy } from "@/utils/clipboard";
 import {
   clearUnsavedSource,
   dropUnsaved,
+  fingerprint,
   setUnsavedSource,
   unsavedFor,
 } from "@/utils/unsavedEdit";
@@ -161,10 +162,17 @@ const executeEditorCommand = (name: string) => {
   editor.value?.execCommand(name);
 };
 
+// The file's content as this editor last loaded or saved it.
+let baseContent = "";
+
 // What a forced logout keeps of this editor (see utils/unsavedEdit).
 const unsavedSource = () =>
   editor.value && !editor.value.session.getUndoManager().isClean()
-    ? { path: route.path, content: editor.value.getValue() }
+    ? {
+        path: route.path,
+        content: editor.value.getValue(),
+        base: fingerprint(baseContent),
+      }
     : null;
 
 onMounted(() => {
@@ -231,6 +239,7 @@ onBeforeRouteUpdate((to, from, next) => {
 });
 
 const initEditor = (fileContent: string) => {
+  baseContent = fileContent;
   editor.value = ace.edit("editor", {
     value: fileContent,
     showPrintMargin: false,
@@ -257,20 +266,23 @@ const initEditor = (fileContent: string) => {
 // Unsaved changes to this file kept by a forced logout: ask whether to put
 // them back in the editor. Never without asking: the file may have changed
 // since. Closing the question without an answer keeps them for next time.
+// changed: the file no longer has the content they were written over (or
+// that is not known); the question says so.
 const offerUnsaved = (fileContent: string) => {
   const path = route.path;
   const kept = unsavedFor(authStore.user, path);
   if (kept === null) return;
-  if (kept === fileContent) {
+  if (kept.content === fileContent) {
     dropUnsaved(path);
     return;
   }
   layoutStore.showHover({
     prompt: "restoreEditorChanges",
+    props: { changed: kept.base !== fingerprint(fileContent) },
     // Restore: the kept text replaces the editor's, as unsaved changes
     // (Undo brings back the file's content; nothing is saved yet)
     confirm: () => {
-      editor.value?.setValue(kept, -1);
+      editor.value?.setValue(kept.content, -1);
       dropUnsaved(path);
       layoutStore.closeHovers();
     },
@@ -313,7 +325,9 @@ const save = async (throwError?: boolean) => {
   buttons.loading("save");
 
   try {
-    await api.put(route.path, editor.value?.getValue());
+    const content = editor.value?.getValue();
+    await api.put(route.path, content);
+    baseContent = content ?? "";
     editor.value?.session.getUndoManager().markClean();
     dropUnsaved(route.path);
     buttons.success(button);

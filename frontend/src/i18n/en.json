@@ -180,6 +180,7 @@
     "resolution": "Resolution",
     "discardEditorChanges": "Are you sure you wish to discard the changes you've made?",
     "restoreEditorChanges": "You were logged out before saving your changes to this file. Restore them in the editor (not saved until you save), or discard them?",
+    "restoreEditorChangesFileChanged": "You were logged out before saving your changes, and this file has changed since you were logged out (someone saved it, or another file is now at this path). If you restore your changes in the editor and then save, they replace its current content. Restore them, or discard them?",
     "replaceOrSkip": "Replace or skip files",
     "resolveConflict": "Which files do you want to keep?",
     "singleConflictResolve": "If you select both versions, a number will be added to the name of the copied file.",
