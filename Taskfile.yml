@@ -42,28 +42,60 @@ tasks:
       - task: build:frontend
       - task: build:backend
 
-  release:make:
-    internal: true
-    prompt: Do you wish to proceed?
-    cmds:
-      - pnpm dlx commit-and-tag-version -s
-
-  release:dry-run:
-    internal: true
-    cmds:
-      - pnpm dlx commit-and-tag-version --dry-run --skip
-
+  # A version is released by its tag: pushing the tag starts the release job of
+  # .github/workflows/ci.yaml. The tasks below make the tag, with the section of CHANGELOG.md for
+  # it. They push nothing. CONTRIBUTING.md describes the whole procedure.
   release:
-    desc: Create a new release
+    desc: "Tag a release, such as v3.0.0: the version follows from the commits since the last release"
+    cmds:
+      - task: release:docs
+      - task: release:dry-run
+      - task: release:make
+
+  release:rc:
+    desc: "Tag a release candidate: with VERSION=3.0.0 the first one of that version, v3.0.0-rc.1, and without it the next one"
+    vars:
+      # The first candidate of a version is asked for by name. The tool would count from 0
+      # otherwise, and take the version from the commits, as `task release` does.
+      FLAGS: '{{if .VERSION}}--release-as {{.VERSION}}-rc.1{{else}}--prerelease rc{{end}}'
+    preconditions:
+      - sh: '[ -z "{{.VERSION}}" ] || printf "%s" "{{.VERSION}}" | grep -Eq "^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"'
+        msg: "VERSION is the version without a v and without a suffix, such as 3.0.0."
+      - sh: '[ -z "{{.VERSION}}" ] || ! git rev-parse -q --verify "refs/tags/v{{.VERSION}}-rc.1" > /dev/null'
+        msg: "v{{.VERSION}}-rc.1 exists. Run `task release:rc` without VERSION for the next candidate."
+      - sh: '[ -n "{{.VERSION}}" ] || git describe --tags --abbrev=0 --match "v*" | grep -q -e "-rc\.[0-9][0-9]*$"'
+        msg: "The last version tag is not a release candidate. Name the version of the first one: task release:rc VERSION=3.0.0"
+    cmds:
+      - task: release:docs
+      - task: release:dry-run
+        vars:
+          FLAGS: '{{.FLAGS}}'
+      - task: release:make
+        vars:
+          FLAGS: '{{.FLAGS}}'
+
+  release:docs:
+    internal: true
     cmds:
       - task: docs:cli:generate
       - git add docs/cli
       - |
-        if [[ `git status docs/cli --porcelain` ]]; then
+        if [ -n "$(git status docs/cli --porcelain)" ]; then
           git commit -m 'chore(docs): update CLI documentation'
         fi
-      - task: release:dry-run
-      - task: release:make
+
+  # The tool is pinned to one version, like everything else that a release runs. Where the links
+  # in the changelog go is set in .versionrc, so it does not depend on the clone's remotes.
+  release:dry-run:
+    internal: true
+    cmds:
+      - pnpm dlx commit-and-tag-version@13.3.0 --dry-run {{.FLAGS}}
+
+  release:make:
+    internal: true
+    prompt: Do you wish to proceed?
+    cmds:
+      - pnpm dlx commit-and-tag-version@13.3.0 -s {{.FLAGS}}
 
   docs:cli:generate:
     cmds:

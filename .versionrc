@@ -1,4 +1,8 @@
 {
+  "commitUrlFormat": "https://github.com/werewolfboy13/filebrowser/commit/{{hash}}",
+  "compareUrlFormat": "https://github.com/werewolfboy13/filebrowser/compare/{{previousTag}}...{{currentTag}}",
+  "issueUrlFormat": "https://github.com/werewolfboy13/filebrowser/issues/{{id}}",
+  "userUrlFormat": "https://github.com/{{user}}",
   "types": [
     { "type": "feat", "section": "Features" },
     { "type": "fix", "section": "Bug Fixes" },
