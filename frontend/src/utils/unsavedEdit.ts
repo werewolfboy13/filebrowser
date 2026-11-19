@@ -41,12 +41,17 @@ export function clearUnsavedSource(previous: Source) {
 
 // Called by logout() when the session ended without the user asking, while
 // the user is still known. Never throws: the logout must go on.
+// When the latest text of a file cannot be kept, an older one kept for it
+// is dropped: it is not the user's latest changes.
 export function keepUnsaved(user: IUser | null) {
+  let path: string | undefined;
   try {
     const edit = source?.();
     if (!edit || !user) return;
+    path = edit.path;
     if (edit.content.length > MAX_KEPT_LENGTH) {
       console.warn("the unsaved text is too long to be kept");
+      dropUnsaved(path);
       return;
     }
     const kept = read();
@@ -61,6 +66,7 @@ export function keepUnsaved(user: IUser | null) {
     sessionStorage.setItem(KEY, JSON.stringify(next));
   } catch (e) {
     console.warn("could not keep the unsaved text", e);
+    if (path !== undefined) dropUnsaved(path);
   }
 }
 

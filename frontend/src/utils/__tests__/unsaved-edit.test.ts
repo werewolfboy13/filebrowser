@@ -6,7 +6,7 @@
 // logout with another file's changes unsaved. Now a text is kept per file,
 // all within the same total size (the oldest dropped first), still for one
 // user only.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   dropUnsaved,
   dropUnsavedOfOthers,
@@ -86,6 +86,35 @@ describe("kept unsaved text", () => {
     forcedLogout(alice, "/files/a.md", "a");
     dropUnsavedOfOthers(bob);
     expect(sessionStorage.length).toBe(0);
+  });
+
+  // The older text of a file is not the user's latest changes to it: when
+  // the newer one cannot be kept, the older one is not offered as them.
+  it("a newer text too long to keep drops the older one of that file only", () => {
+    forcedLogout(alice, "/files/a.md", "older edit");
+    forcedLogout(alice, "/files/b.md", "b");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    forcedLogout(alice, "/files/a.md", "n".repeat(MAX_KEPT_LENGTH + 1));
+    warn.mockRestore();
+    expect(text(alice, "/files/a.md")).toBeNull();
+    expect(text(alice, "/files/b.md")).toBe("b");
+  });
+
+  it("a newer text the full storage refuses drops the older one of that file only", () => {
+    forcedLogout(alice, "/files/a.md", "older edit");
+    forcedLogout(alice, "/files/b.md", "b");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // the longer list is refused; a shorter one still fits
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementationOnce(() => {
+        throw new DOMException("full", "QuotaExceededError");
+      });
+    forcedLogout(alice, "/files/a.md", "newer edit");
+    setItem.mockRestore();
+    warn.mockRestore();
+    expect(text(alice, "/files/a.md")).toBeNull();
+    expect(text(alice, "/files/b.md")).toBe("b");
   });
 
   it("a text kept by the previous version (one file) is still offered", () => {
