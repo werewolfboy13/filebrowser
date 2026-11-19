@@ -2,6 +2,7 @@ package rules
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/text/cases"
@@ -23,6 +24,8 @@ import (
 // With foldCase, case is ignored too, in full: "STRASSE" for "straße" and
 // "files" for "ﬁles", as a filesystem that ignores case does it, not only "A"
 // for "a". So are the code points HFS+ skips when it compares names.
+//
+// The form of a form is the form itself: taking it again changes nothing.
 //
 // The form errs on the side of taking two names for one. A filesystem keeps
 // more names apart than this does: which names it folds depends on the
@@ -49,6 +52,24 @@ func CanonicalName(name string, foldCase bool) string {
 	fold := cases.Fold()
 	name = fold.String(norm.NFD.String(skipIgnorable(name)))
 	name = fold.String(norm.NFKD.String(name))
+
+	// One more pass, letter by letter, that the folds above cannot undo.
+	//
+	// Folding is not lower-casing: the Cherokee letters fold to their
+	// capitals, and cases.Fold gives each of them in the other case,
+	// whichever it is given. Folding twice gave them back as they were, so
+	// that the two cases of a Cherokee name stayed apart. Lower-casing
+	// brings them together, and changes no other letter that was folded.
+	//
+	// The dotless i has no folding of its own. A filesystem that compares
+	// names in upper case (NTFS, and what is shared from it) takes it for
+	// an "i": the capital of both is "I".
+	name = strings.Map(func(r rune) rune {
+		if r == '\u0131' {
+			return 'i'
+		}
+		return unicode.ToLower(r)
+	}, name)
 	return norm.NFKD.String(name)
 }
 
