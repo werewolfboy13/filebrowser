@@ -74,6 +74,11 @@ func (r *Rule) Matches(path string, fold bool) bool {
 		return true
 	}
 
+	// An allow rule matches exactly, by design, and stops here. The price is
+	// that an exception carved out of a denied directory ("/Café/public"
+	// under a denied "/Café") only opens the spelling it was written in:
+	// where the names on disk are composed otherwise, the deny rule covers
+	// them and the allow rule does not, so write it as the names are.
 	if r.Allow {
 		return false
 	}
