@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	fberrors "github.com/werewolfboy13/filebrowser/v3/errors"
@@ -146,12 +147,23 @@ func (a *HookAuth) RunCommand(ctx context.Context) (string, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	// Whether the end of ctx stopped the hook. A hook that ended by itself,
+	// and only then had ctx end (its client went away while a process it
+	// left behind still held its output), answered: its refusal counts.
+	var stopped atomic.Bool
+	cmd.Cancel = func() error {
+		err := cmd.Process.Kill()
+		if err == nil {
+			stopped.Store(true)
+		}
+		return err
+	}
 	cmd.WaitDelay = hookWaitDelay
 	cmd.Env = append(os.Environ(), fmt.Sprintf("USERNAME=%s", a.Cred.Username))
 	cmd.Env = append(cmd.Env, fmt.Sprintf("PASSWORD=%s", a.Cred.Password))
 	out, err := cmd.Output()
 	switch {
-	case err != nil && ctx.Err() != nil:
+	case err != nil && stopped.Load():
 		return "", fmt.Errorf("the authentication hook was stopped before it answered: %w", ctx.Err())
 	case errors.Is(err, exec.ErrWaitDelay):
 		// The hook answered and ended, and something it started still has
