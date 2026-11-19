@@ -131,6 +131,7 @@
     "submit": "Login",
     "username": "Username",
     "usernameTaken": "Username already taken",
+    "accountChangedConcurrently": "Your account was changed by someone else at the same time, so you were not logged in. Please try again.",
     "wrongCredentials": "Wrong credentials",
     "passwordTooShort": "Password must be at least {min} characters",
     "logout_reasons": {

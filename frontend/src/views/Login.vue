@@ -129,9 +129,14 @@ const submit = async (event: Event) => {
     }
   }
 
+  // a 409 from signup: the name is taken; from login (hook auth): the
+  // account changed while the login stored it, nothing was stored
+  let signingUp = false;
   try {
     if (createMode.value) {
+      signingUp = true;
       await auth.signup(username.value, password.value);
+      signingUp = false;
     }
 
     await auth.login(username.value, password.value, captcha);
@@ -141,7 +146,9 @@ const submit = async (event: Event) => {
     // console.error(e);
     if (e instanceof StatusError) {
       if (e.status === 409) {
-        error.value = t("login.usernameTaken");
+        error.value = signingUp
+          ? t("login.usernameTaken")
+          : t("login.accountChangedConcurrently");
       } else if (e.status === 403) {
         error.value = t("login.wrongCredentials");
       } else if (e.status === 429) {
