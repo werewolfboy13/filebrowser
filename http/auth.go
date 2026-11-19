@@ -233,6 +233,7 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 		// address. Only methods that check a password are concerned: a proxy
 		// vouches for its users itself.
 		done := func(attemptOutcome) {}
+		leave := func() {}
 		if d.limits != nil && checksPassword(d.settings.AuthMethod) {
 			// Read the way the authers read the body: the first JSON value
 			// in it, with a user name and a password that are strings.
@@ -255,9 +256,22 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 				return tooManyAttempts(w, retryAfter)
 			}
 			done = attempt
+
+			// Checking a password is work: a hash to compute, or a hook to
+			// run. Only so much of it is done at a time for one address,
+			// and the rest waits its turn: see workGate. A login whose turn
+			// does not come is turned away without having been looked at,
+			// which says nothing about its password.
+			if leave = d.limits.loginWork.enter(r.Context(), addr); leave == nil {
+				done(attemptAborted)
+				return tooManyAttempts(w, time.Second)
+			}
 		}
 
-		user, err := auther.Auth(r, d.store.Users, d.settings, d.server)
+		user, err := func() (*users.User, error) {
+			defer leave()
+			return auther.Auth(r, d.store.Users, d.settings, d.server)
+		}()
 		switch {
 		case errors.Is(err, fbAuth.ErrNoAttempt):
 			// Refused before a password was looked at, for a reason the
@@ -276,6 +290,13 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 			// slowed down.
 			done(attemptFailed)
 			return http.StatusInternalServerError, err
+		case errors.Is(err, fberrors.ErrUserChanged):
+			// The account was changed, more than once, while the login was
+			// storing what the hook said about it, and the login gave up:
+			// see HookAuth.SaveUser. Nothing was stored. That says nothing
+			// about the password, and trying again is all there is to do.
+			done(attemptAborted)
+			return http.StatusConflict, err
 		case err != nil:
 			done(attemptAborted)
 			return http.StatusInternalServerError, err

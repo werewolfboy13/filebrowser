@@ -216,7 +216,7 @@ func errToStatus(err error) int {
 		return http.StatusForbidden
 	case os.IsNotExist(err), errors.Is(err, libErrors.ErrNotExist):
 		return http.StatusNotFound
-	case os.IsExist(err), errors.Is(err, libErrors.ErrExist):
+	case os.IsExist(err), errors.Is(err, libErrors.ErrExist), errors.Is(err, libErrors.ErrUserChanged):
 		return http.StatusConflict
 	case errors.Is(err, libErrors.ErrPermissionDenied):
 		return http.StatusForbidden

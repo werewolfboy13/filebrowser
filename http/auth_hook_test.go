@@ -138,6 +138,111 @@ fi
 	}
 }
 
+// A hook that accepts more than one password for a user (an app password
+// next to the account's, the password with a one-time code after it) sees a
+// password that is not the stored one at almost every login. Each of them
+// ended every other session of the user: two devices logged each other out,
+// and with one-time codes only one session could exist at a time.
+//
+// That is still what happens when the hook says nothing, because a password
+// that changed at the source looks the same and must end the sessions. A
+// hook that knows better says hook.keepSessions=true with the login.
+func TestHookThatAcceptsSeveralPasswordsCanKeepSessions(t *testing.T) {
+	const app = "app-specific-password-42"
+	// Accepts the account password and the app password. keep is what it
+	// says about the sessions, for each of the two.
+	hook := func(keepAccount, keepApp string) string {
+		return `if [ "$USERNAME" != bob ]; then
+  echo hook.action=block
+elif [ "$PASSWORD" = '` + fullEnvUserPassword + `' ]; then
+  echo hook.action=auth
+  ` + keepAccount + `
+elif [ "$PASSWORD" = '` + app + `' ]; then
+  echo hook.action=auth
+  ` + keepApp + `
+else
+  echo hook.action=block
+fi
+`
+	}
+
+	t.Run("the hook says so for both", func(t *testing.T) {
+		e := newFullEnv(t)
+		e.useHookAuth(hook("echo hook.keepSessions=true", "echo hook.keepSessions=true"))
+
+		laptop := e.login("bob", fullEnvUserPassword)
+		phone := e.login("bob", app)
+		if !e.works(laptop) || !e.works(phone) {
+			t.Fatalf("after the phone logged in with the app password: laptop works %v, phone works %v", e.works(laptop), e.works(phone))
+		}
+		laptopAgain := e.login("bob", fullEnvUserPassword)
+		for name, token := range map[string]string{"the laptop's first session": laptop, "the phone's session": phone, "the laptop's second session": laptopAgain} {
+			if !e.works(token) {
+				t.Errorf("%s was ended by a login with the other accepted password", name)
+			}
+		}
+		// The password that was accepted last is the one that is stored.
+		if !users.CheckPwd(fullEnvUserPassword, e.user(2).Password) {
+			t.Error("the accepted password was not stored")
+		}
+	})
+
+	t.Run("the hook says so for the app password only", func(t *testing.T) {
+		e := newFullEnv(t)
+		e.useHookAuth(hook("", "echo hook.keepSessions=true"))
+
+		laptop := e.login("bob", fullEnvUserPassword)
+		phone := e.login("bob", app)
+		if !e.works(laptop) || !e.works(phone) {
+			t.Fatalf("after the phone logged in with the app password: laptop works %v, phone works %v", e.works(laptop), e.works(phone))
+		}
+		// The account password, coming after the app password, is not the
+		// stored one, and the hook does not vouch for it: as far as the
+		// server can tell, it has changed.
+		laptopAgain := e.login("bob", fullEnvUserPassword)
+		if !e.works(laptopAgain) {
+			t.Error("the session of the login does not work")
+		}
+		if e.works(laptop) || e.works(phone) {
+			t.Errorf("a login the hook did not vouch for left the older sessions: laptop works %v, phone works %v", e.works(laptop), e.works(phone))
+		}
+	})
+
+	t.Run("the hook says nothing", func(t *testing.T) {
+		e := newFullEnv(t)
+		e.useHookAuth(hook("", ""))
+
+		laptop := e.login("bob", fullEnvUserPassword)
+		phone := e.login("bob", app)
+		if e.works(laptop) || !e.works(phone) {
+			t.Errorf("by default a password that is not the stored one ends the older sessions: laptop works %v, phone works %v", e.works(laptop), e.works(phone))
+		}
+	})
+
+	t.Run("one-time codes", func(t *testing.T) {
+		e := newFullEnv(t)
+		e.useHookAuth(`case "$PASSWORD" in
+  '` + fullEnvUserPassword + `'[0-9][0-9][0-9][0-9][0-9][0-9])
+    if [ "$USERNAME" = bob ]; then
+      echo hook.action=auth
+      echo hook.keepSessions=true
+      exit 0
+    fi ;;
+esac
+echo hook.action=block
+`)
+
+		first := e.login("bob", fullEnvUserPassword+"123456")
+		second := e.login("bob", fullEnvUserPassword+"654321")
+		third := e.login("bob", fullEnvUserPassword+"111111")
+		for name, token := range map[string]string{"the first": first, "the second": second, "the third": third} {
+			if !e.works(token) {
+				t.Errorf("%s session was ended by a login with a fresh one-time code", name)
+			}
+		}
+	})
+}
+
 // A hook can turn a login down without printing an action: by ending with an
 // error status, or by printing nothing. Either way it was given the
 // credentials and did not accept them, which is a failed guess at the

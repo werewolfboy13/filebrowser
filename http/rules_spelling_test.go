@@ -44,6 +44,14 @@ func TestRulesDenyEverySpellingOfADeniedName(t *testing.T) {
 		{"/stra\u00dfe", []string{"/STRASSE", "/strasse", "/STRA\u1e9eE"}},
 		{"/\ufb01les", []string{"/files", "/FILES", "/Files"}},
 		{"/plain", []string{"/PLAIN", "/Plain"}},
+		// Cherokee has both cases, and folding gave each letter in the
+		// other one: with something else in the name to undo (here how the
+		// "é" is composed), the small letters got past a rule written with
+		// the capitals. APFS opens the same directory under both.
+		{"/\u13a0\u00e9", []string{"/\uab70e\u0301", "/\uab70\u00e9", "/\u13a0e\u0301"}},
+		// The capital of a dotless i is "I": one name, to a filesystem that
+		// compares in upper case (NTFS).
+		{"/priv\u00e9", []string{"/pr\u0131ve\u0301", "/PR\u0131V\u00c9"}},
 	}
 
 	var list []rules.Rule

@@ -158,6 +158,22 @@ user.hideDotfiles=false
 user.scope=/
 ```
 
+#### Passwords and Sessions
+
+FileBrowser keeps a hash of the password the hook accepted last. When the hook accepts a login with a **different** password, FileBrowser takes it that the password was changed at the source: it stores the new one and **ends every other session of that user**, exactly as a password change inside FileBrowser does. This is the default, and it is the only way a password change in your directory reaches sessions that were opened with the old password (for example the session of someone who had stolen it).
+
+If your hook legitimately accepts more than one password for the same user, such as an app-specific password next to the account password, or a password followed by a one-time code, this default logs the user's other devices out at almost every login. For those logins the hook can add:
+
+```
+hook.keepSessions=true
+```
+
+| Key | Description |
+|-----|-------------|
+| hook.keepSessions=true | The password of this login is one of several the hook accepts for the user, not a changed one: do not end the user's other sessions. Any other value, or leaving the key out, keeps the default. |
+
+The key applies to the login it is printed for, so a hook can print it only for the logins it knows to be of that kind (an app password, a one-time code) and leave it out for the account password. Keep in mind what you give up where you print it: a password that really was changed at the source no longer ends the sessions that were opened with the old one. They last until their token expires and is no longer renewed, or until an administrator changes the user's password, permissions or scope in FileBrowser.
+
 ## No Authentication
 
 We also provide a no authentication mechanism for users that want to use File Browser privately such in a home network. By setting this authentication method, the user with **id 1** will be used as the default users. Creating more users won't have any effect.

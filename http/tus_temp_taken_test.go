@@ -88,6 +88,22 @@ func TestTusRefusesWhenItsTemporaryPathIsTaken(t *testing.T) {
 				t.Skip(err)
 			}
 		},
+		// The scoped filesystem does not even say what such a link is: it
+		// refuses to look at it. That used to be taken for "nothing there".
+		"a link to a file outside the scope": func(t *testing.T, e *fullEnv, temp string) {
+			outside := filepath.Join(e.root, "outside.txt")
+			if err := os.WriteFile(outside, []byte("not bob's"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, temp); err != nil {
+				t.Skip(err)
+			}
+		},
+		"a link to nothing outside the scope": func(t *testing.T, e *fullEnv, temp string) {
+			if err := os.Symlink(filepath.Join(e.root, "outside-not-there.txt"), temp); err != nil {
+				t.Skip(err)
+			}
+		},
 	}
 
 	for name, occupy := range occupants {
@@ -131,8 +147,13 @@ func TestTusRefusesWhenItsTemporaryPathIsTaken(t *testing.T) {
 						t.Errorf("the file the temporary name links to holds %q", data)
 					}
 				}
-				if pathExists(filepath.Join(e.bobDir, "not-there.txt")) {
+				if pathExists(filepath.Join(e.bobDir, "not-there.txt")) || pathExists(filepath.Join(e.root, "outside-not-there.txt")) {
 					t.Error("the upload created a file through the link")
+				}
+				if outside := filepath.Join(e.root, "outside.txt"); pathExists(outside) {
+					if data, _ := os.ReadFile(outside); string(data) != "not bob's" {
+						t.Errorf("the file outside the scope holds %q", data)
+					}
 				}
 				if code, _, _ := e.do(http.MethodHead, "/api/tus/report.txt", tok, nil, nil); code != http.StatusNotFound {
 					t.Errorf("HEAD of the refused upload = %d, want 404", code)

@@ -17,6 +17,109 @@ type protectedPath struct {
 	// log marks the log file, whose rotated copies, written next to it, are
 	// protected as well.
 	log bool
+
+	// The forms the path is compared in, worked out when it is registered:
+	// every path that is served is compared with every registered one, and
+	// working them out for each comparison made a listing several times
+	// slower.
+	forms spelling
+
+	// For the log file: its directory, and the two parts of its name that
+	// the stamp of a rotated copy goes between.
+	dir, prefix, ext spelling
+}
+
+// spelling is a path, or a part of one, in the forms it is compared in: as
+// written, in lower case, and canonical (see rules.CanonicalName) without
+// and with case folded. Which of the last two is used depends on
+// Server.CaseInsensitiveFs, which is found out after the paths were
+// registered; both are kept.
+type spelling struct {
+	raw, lower string
+	canonical  [2]string
+	ascii      bool
+}
+
+func newSpelling(raw string) spelling {
+	return spelling{
+		raw:       raw,
+		lower:     strings.ToLower(raw),
+		canonical: [2]string{rules.CanonicalName(raw, false), rules.CanonicalName(raw, true)},
+		ascii:     isASCII(raw),
+	}
+}
+
+// canon returns the canonical form for a filesystem that folds case, or one
+// that does not.
+func (s *spelling) canon(fold bool) string {
+	if fold {
+		return s.canonical[1]
+	}
+	return s.canonical[0]
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+// checkedPath is a path that is compared with the registered ones. Its
+// forms are worked out when the first comparison needs them, once for all
+// of the registered paths.
+type checkedPath struct {
+	raw   string
+	fold  bool
+	ascii bool
+
+	lower, canonical       string
+	hasLower, hasCanonical bool
+}
+
+func newCheckedPath(raw string, fold bool) *checkedPath {
+	return &checkedPath{raw: raw, fold: fold, ascii: isASCII(raw)}
+}
+
+func (c *checkedPath) inLower() string {
+	if !c.hasLower {
+		c.lower, c.hasLower = strings.ToLower(c.raw), true
+	}
+	return c.lower
+}
+
+func (c *checkedPath) inCanonical() string {
+	if !c.hasCanonical {
+		c.canonical, c.hasCanonical = rules.CanonicalName(c.raw, c.fold), true
+	}
+	return c.canonical
+}
+
+// same is samePath for a registered path.
+func (c *checkedPath) same(p *spelling) bool {
+	if c.raw == p.raw || (c.fold && strings.EqualFold(c.raw, p.raw)) {
+		return true
+	}
+	// Two names that are all ASCII have just been compared in their
+	// canonical forms: these are the names themselves, or the names in
+	// lower case.
+	if c.ascii && p.ascii {
+		return false
+	}
+	return c.inCanonical() == p.canon(c.fold)
+}
+
+// inside is strictlyInside for a registered directory.
+func (c *checkedPath) inside(p *spelling) bool {
+	if below(c.raw, p.raw) || (c.fold && below(c.inLower(), p.lower)) {
+		return true
+	}
+	if c.ascii && p.ascii {
+		return false
+	}
+	return below(c.inCanonical(), p.canon(c.fold))
 }
 
 // rotatedLogStamp is what the log rotation inserts between the name of the log
@@ -93,7 +196,15 @@ func (s *Server) addProtected(path string, log bool) {
 			return
 		}
 	}
-	s.protected = append(s.protected, protectedPath{path: path, log: log})
+
+	p := protectedPath{path: path, log: log, forms: newSpelling(path)}
+	if log {
+		ext := filepath.Ext(path)
+		p.dir = newSpelling(filepath.Dir(path))
+		p.prefix = newSpelling(strings.TrimSuffix(filepath.Base(path), ext))
+		p.ext = newSpelling(ext)
+	}
+	s.protected = append(s.protected, p)
 }
 
 // HasProtectedPaths reports whether any path was registered with Protect.
@@ -112,14 +223,29 @@ func (s *Server) ProtectedPaths() []string {
 
 // IsProtected reports whether path, an absolute path on disk, is one of the
 // registered paths, lies inside one, or is a rotated copy of the log file.
+//
+// Names are compared as samePath and strictlyInside compare them.
 func (s *Server) IsProtected(path string) bool {
-	path = filepath.Clean(path)
+	if len(s.protected) == 0 {
+		return false
+	}
 
-	for _, p := range s.protected {
-		if samePath(path, p.path, s.CaseInsensitiveFs) || strictlyInside(path, p.path, s.CaseInsensitiveFs) {
+	checked := newCheckedPath(filepath.Clean(path), s.CaseInsensitiveFs)
+	var name, dir *checkedPath // of the path, for the log: when one is registered
+
+	for i := range s.protected {
+		p := &s.protected[i]
+		if checked.same(&p.forms) || checked.inside(&p.forms) {
 			return true
 		}
-		if p.log && isRotatedLog(path, p.path, s.CaseInsensitiveFs) {
+		if !p.log {
+			continue
+		}
+		if name == nil {
+			name = newCheckedPath(filepath.Base(checked.raw), s.CaseInsensitiveFs)
+			dir = newCheckedPath(filepath.Dir(checked.raw), s.CaseInsensitiveFs)
+		}
+		if isRotatedLog(name, dir, p) {
 			return true
 		}
 	}
@@ -127,25 +253,24 @@ func (s *Server) IsProtected(path string) bool {
 	return false
 }
 
-// isRotatedLog reports whether name is a rotated copy of the log file: a file
-// in the same directory named like it, with a timestamp before the extension
-// and possibly compressed.
-func isRotatedLog(name, logFile string, fold bool) bool {
-	if !samePath(filepath.Dir(name), filepath.Dir(logFile), fold) {
-		return false
+// isRotatedLog reports whether a file, given by its name and its directory,
+// is a rotated copy of the log file: a file in the same directory named like
+// it, with a timestamp before the extension and possibly compressed.
+//
+// The name is looked at first: next to none of the names that are checked
+// look like a rotated log, and the directory need not be compared for those.
+func isRotatedLog(name, dir *checkedPath, log *protectedPath) bool {
+	fold := name.fold
+
+	named := rotatedCopy(name.raw, log.prefix.raw, log.ext.raw) ||
+		(fold && rotatedCopy(name.inLower(), log.prefix.lower, log.ext.lower))
+	// The canonical forms of names that are all ASCII are the ones that
+	// were just compared.
+	if !named && (!name.ascii || !log.prefix.ascii || !log.ext.ascii) {
+		named = rotatedCopy(name.inCanonical(), log.prefix.canon(fold), log.ext.canon(fold))
 	}
 
-	ext := filepath.Ext(logFile)
-	prefix := strings.TrimSuffix(filepath.Base(logFile), ext)
-	base := filepath.Base(name)
-
-	if rotatedCopy(base, prefix, ext) {
-		return true
-	}
-	if fold && rotatedCopy(strings.ToLower(base), strings.ToLower(prefix), strings.ToLower(ext)) {
-		return true
-	}
-	return rotatedCopy(rules.CanonicalName(base, fold), rules.CanonicalName(prefix, fold), rules.CanonicalName(ext, fold))
+	return named && dir.same(&log.dir)
 }
 
 // rotatedCopy reports whether base is prefix and ext with the stamp of a

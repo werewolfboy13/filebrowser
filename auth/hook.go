@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"reflect"
 	"slices"
 	"strings"
-	"time"
 
 	fberrors "github.com/werewolfboy13/filebrowser/v2/errors"
 	"github.com/werewolfboy13/filebrowser/v2/files"
@@ -146,8 +146,60 @@ func (a *HookAuth) GetValues(s string) {
 	a.Fields.Values = m
 }
 
-// SaveUser updates the existing user or creates a new one when not found
+// hookSaveAttempts is how often a login tries to store what the hook said
+// about a user whose record keeps being changed under it. See SaveUser.
+const hookSaveAttempts = 3
+
+// SaveUser updates the existing user or creates a new one when not found.
+//
+// The record is read, the password is compared with it (which takes a
+// while), and what the hook changed is stored. When the account was changed
+// in between in a way that ends its sessions (an administrator took a
+// permission away, or reset the password), nothing is stored: the login
+// would be storing what it made of a record that is no longer the account.
+// It starts over instead, from the record as it is now, without running the
+// hook again. That it has to more than once in a row takes someone changing
+// the account without pause; the login then gives up with
+// fberrors.ErrUserChanged.
 func (a *HookAuth) SaveUser() (*users.User, error) {
+	for attempt := 1; ; attempt++ {
+		u, err := a.saveUser()
+		if !errors.Is(err, fberrors.ErrUserChanged) || attempt >= hookSaveAttempts {
+			return u, err
+		}
+	}
+}
+
+// hookUserFields are the fields of a user that GetUser can change, by their
+// Go names.
+var hookUserFields = []string{
+	"Scope",
+	"Locale",
+	"ViewMode",
+	"SingleClick",
+	"RedirectAfterCopyMove",
+	"Sorting",
+	"Commands",
+	"DateFormat",
+	"HideDotfiles",
+	"Perm",
+	"LockPassword",
+}
+
+// changedHookFields names the fields in which the user the hook made differs
+// from the record it was made from.
+func changedHookFields(read, made *users.User) []string {
+	var fields []string
+	rv, mv := reflect.ValueOf(read).Elem(), reflect.ValueOf(made).Elem()
+	for _, field := range hookUserFields {
+		if !reflect.DeepEqual(rv.FieldByName(field).Interface(), mv.FieldByName(field).Interface()) {
+			fields = append(fields, field)
+		}
+	}
+	return fields
+}
+
+func (a *HookAuth) saveUser() (*users.User, error) {
 	u, err := a.Users.Get(a.Server.Root, a.Server.FollowExternalSymlinks, a.Cred.Username)
 	if err != nil && !errors.Is(err, fberrors.ErrNotExist) {
 		return nil, err
@@ -189,27 +241,52 @@ func (a *HookAuth) SaveUser() (*users.User, error) {
 			return nil, err
 		}
 	} else if p := !users.CheckPwd(a.Cred.Password, u.Password); len(a.Fields.Values) > 1 || p {
-		u = a.GetUser(u)
+		read := u
+		u = a.GetUser(read)
+
+		// Only what the hook changed is stored, and not the record as it
+		// was read with those changes in it: what an administrator stored
+		// in the meantime in a field the hook says nothing about (a rule
+		// that denies a directory, the commands the user may run) stays as
+		// the administrator left it. The whole record used to be written
+		// back, and a login that was under way undid such a change.
+		fields := changedHookFields(read, u)
 
 		// update the password when it doesn't match the current
+		revoke := false
 		if p {
 			pass, err := users.ValidateAndHashPwd(a.Cred.Password, a.Settings.MinimumPasswordLength)
 			if err != nil {
 				return nil, err
 			}
 			u.Password = pass
+			fields = append(fields, "Password")
 
 			// The password changed where the hook asks: the sessions that
 			// were opened with the old one end here, as they do when a
 			// password is changed through the API.
-			u.RevokeTokens(time.Now())
+			//
+			// Unless the hook says that this is not what happened. A hook
+			// that accepts more than one password for a user (an app
+			// password next to the account's, a password with a one-time
+			// code) sees a password that is not the stored one at almost
+			// every login, with nothing having changed, and each login
+			// would end the sessions of the user's other devices. Such a
+			// hook answers hook.keepSessions=true, for the logins it knows
+			// to be of that kind.
+			revoke = !a.Fields.GetBoolean(hookKeepSessions, false)
 		}
 
-		// update user with provided fields
-		err := a.Users.Update(u)
-		if err != nil {
-			return nil, err
+		if len(fields) == 0 {
+			// The hook said nothing new.
+			return read, nil
 		}
+
+		// Stored only if the account is still the one that was read: see
+		// SaveUser. The user that is returned is the record as it is
+		// stored with this login's changes in it, and the token of the
+		// login is issued from it.
+		return a.Users.UpdateIfMark(u, read.TokensNotBefore, revoke, fields...)
 	}
 
 	return u, nil
@@ -260,6 +337,12 @@ func (a *HookAuth) GetUser(d *users.User) *users.User {
 	return &user
 }
 
+// hookKeepSessions is the field a hook sets to "true" to say that the
+// password of this login, when it is not the one that is stored, is one of
+// several it accepts for the user and not a password that was changed: the
+// login must not end the other sessions of the user. See saveUser.
+const hookKeepSessions = "hook.keepSessions"
+
 // hookFields is used to access fields from the hook
 type hookFields struct {
 	Values map[string]string
@@ -268,6 +351,7 @@ type hookFields struct {
 // validHookFields contains names of the fields that can be used
 var validHookFields = []string{
 	"hook.action",
+	hookKeepSessions,
 	"user.scope",
 	"user.locale",
 	"user.viewMode",

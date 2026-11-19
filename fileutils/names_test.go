@@ -1,8 +1,11 @@
 package fileutils
 
 import (
+	"math/rand"
 	"strings"
 	"testing"
+
+	"github.com/werewolfboy13/filebrowser/v2/rules"
 )
 
 // The temporary file of an upload is refused by name. On a filesystem that
@@ -55,5 +58,52 @@ func TestOnlyTheExactNameIsOurs(t *testing.T) {
 		if IsOwnTempName(other) {
 			t.Errorf("%+q is taken for a name this package gave", other)
 		}
+	}
+}
+
+// isTempNameAsBefore is IsTempName without its shortcut for names that are
+// all ASCII.
+func isTempNameAsBefore(name string) bool {
+	return tempName.MatchString(name) || ownTempName.MatchString(rules.CanonicalName(name, true))
+}
+
+// The shortcut for ASCII names answers as the long way does: for names
+// made at random from the letters of a temporary name in both cases, at
+// the lengths around the ones that count, and for every such name with one
+// character changed, removed or added.
+func TestIsTempNameShortcutForASCIINames(t *testing.T) {
+	rng := rand.New(rand.NewSource(20261118))
+	check := func(name string) {
+		t.Helper()
+		if got, want := IsTempName(name), isTempNameAsBefore(name); got != want {
+			t.Errorf("IsTempName(%q) = %v, the long way says %v", name, got, want)
+		}
+	}
+
+	taken := 0
+	const hex = "0123456789abcdefABCDEF"
+	for i := 0; i < 20000; i++ {
+		var b strings.Builder
+		b.WriteString([]string{".fbtmp-", ".FBTMP-", ".FbTmP-", ".fbtmp", "fbtmp-", ".fbtmq-"}[rng.Intn(6)])
+		if rng.Intn(2) == 0 {
+			b.WriteString([]string{"tus-", "TUS-", "tus", "tux-"}[rng.Intn(4)])
+		}
+		for n := 30 + rng.Intn(5); n > 0; n-- {
+			b.WriteByte(hex[rng.Intn(len(hex))])
+		}
+		name := b.String()
+		check(name)
+		if IsTempName(name) {
+			taken++
+		}
+
+		at := rng.Intn(len(name))
+		check(name[:at] + name[at+1:])
+		check(name[:at] + "g" + name[at+1:])
+		check(name[:at] + "0" + name[at:])
+		check(name[:at] + "\x00" + name[at+1:])
+	}
+	if taken < 500 {
+		t.Errorf("only %d of the random names are temporary names: the test does not meet both answers", taken)
 	}
 }
