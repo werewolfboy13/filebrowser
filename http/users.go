@@ -370,6 +370,17 @@ func userPut(w http.ResponseWriter, r *http.Request, d *data, tokenExpireTime ti
 		return http.StatusInternalServerError, err
 	}
 
+	// A user's change of their own account was let in by the record that
+	// was read when the request came in: the token was good for it, and the
+	// current password was compared with its hash. When the account was
+	// revoked since (an administrator has reset the password, say), that
+	// record is not the account any more, and neither is the request the
+	// user's to make: it is refused, like every other request of a session
+	// that has ended.
+	if stored.ID == d.user.ID && stored.TokensNotBefore != d.user.TokensNotBefore {
+		return http.StatusConflict, fberrors.ErrUserChanged
+	}
+
 	// A change of the password, the permissions or the scope ends the
 	// sessions of the account: whoever holds a token from before must not
 	// keep it past the change.
@@ -411,16 +422,34 @@ func userPut(w http.ResponseWriter, r *http.Request, d *data, tokenExpireTime ti
 
 	// The mark is the server's to set, whatever the request carries.
 	req.Data.TokensNotBefore = stored.TokensNotBefore
-	if revoke {
-		req.Data.RevokeTokens(time.Now())
-		if !all {
-			fields = append(fields, "TokensNotBefore")
-		}
-	}
 
-	// With no fields, Update stores the whole user.
-	err = d.store.Users.Update(req.Data, fields...)
-	if err != nil {
+	// A change that ends the sessions, and one that stores the whole record
+	// (which carries the password hash that was read above), was decided on
+	// the record as it was read. It is only stored if that is still the
+	// record: see users.Storage.UpdateIfMark. When the account was changed
+	// in a way that ends its sessions while this request was at work (it
+	// hashes a password in between, which takes a while), nothing is stored
+	// and the answer is 409 Conflict. The other change stands, with its
+	// revocation: an administrator's reset is not undone by a change of the
+	// user's own that was under way, and no two revocations get the same
+	// mark. The client can send the request again; a user whose session was
+	// ended by the other change is asked to log in first.
+	//
+	// A change of other named fields, which nobody else decides on, is
+	// stored as it is.
+	if revoke || all {
+		// With no fields, the whole user is stored.
+		_, err = d.store.Users.UpdateIfMark(req.Data, stored.TokensNotBefore, revoke, fields...)
+	} else {
+		err = d.store.Users.Update(req.Data, fields...)
+	}
+	switch {
+	case errors.Is(err, fberrors.ErrUserChanged):
+		return http.StatusConflict, err
+	case errors.Is(err, fberrors.ErrNotExist):
+		// Deleted in the meantime.
+		return http.StatusNotFound, err
+	case err != nil:
 		return http.StatusInternalServerError, err
 	}
 

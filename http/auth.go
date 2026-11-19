@@ -276,6 +276,13 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 			// slowed down.
 			done(attemptFailed)
 			return http.StatusInternalServerError, err
+		case errors.Is(err, fberrors.ErrUserChanged):
+			// The account was changed, more than once, while the login was
+			// storing what the hook said about it, and the login gave up:
+			// see HookAuth.SaveUser. Nothing was stored. That says nothing
+			// about the password, and trying again is all there is to do.
+			done(attemptAborted)
+			return http.StatusConflict, err
 		case err != nil:
 			done(attemptAborted)
 			return http.StatusInternalServerError, err

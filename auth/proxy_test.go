@@ -34,6 +34,9 @@ func (m *mockUserStore) GetByScope(scope string) (*users.User, error) {
 
 func (m *mockUserStore) Gets(_ string, _ bool) ([]*users.User, error) { return nil, nil }
 func (m *mockUserStore) Update(_ *users.User, _ ...string) error      { return nil }
+func (m *mockUserStore) UpdateIfMark(user *users.User, _ int64, _ bool, _ ...string) (*users.User, error) {
+	return user, nil
+}
 func (m *mockUserStore) Save(user *users.User) error {
 	m.users[user.Username] = user
 	return nil

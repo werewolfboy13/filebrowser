@@ -10,22 +10,66 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	fberrors "github.com/werewolfboy13/filebrowser/v2/errors"
 	"github.com/werewolfboy13/filebrowser/v2/settings"
 	"github.com/werewolfboy13/filebrowser/v2/users"
 )
 
-// updatingStore is mockUserStore with an Update that stores the user, like
-// the real one does when it is given no field names.
+// updatingStore is mockUserStore with updates that store the user as the real
+// store does: the fields that are named, or the whole record, and only when
+// the stored record still has the mark the caller read.
 type updatingStore struct {
 	*mockUserStore
 	updates int
+
+	// fields is what the last update named.
+	fields []string
+
+	// before, when set, is called before each compare-and-swap, with the
+	// number of the attempt.
+	before   func(attempt int)
+	attempts int
 }
 
 func (s *updatingStore) Update(user *users.User, _ ...string) error {
 	s.updates++
 	s.users[user.Username] = user
 	return nil
+}
+
+func (s *updatingStore) UpdateIfMark(user *users.User, mark int64, revoke bool, fields ...string) (*users.User, error) {
+	s.attempts++
+	if s.before != nil {
+		s.before(s.attempts)
+	}
+
+	stored, ok := s.users[user.Username]
+	if !ok {
+		return nil, fberrors.ErrNotExist
+	}
+	if stored.TokensNotBefore != mark {
+		return nil, fberrors.ErrUserChanged
+	}
+
+	next := *stored
+	if len(fields) == 0 {
+		next = *user
+	}
+	for _, field := range fields {
+		reflect.ValueOf(&next).Elem().FieldByName(field).Set(reflect.ValueOf(user).Elem().FieldByName(field))
+	}
+	next.TokensNotBefore = stored.TokensNotBefore
+	if revoke {
+		next.RevokeTokens(time.Now())
+	}
+	user.TokensNotBefore = next.TokensNotBefore
+
+	s.updates++
+	s.fields = fields
+	s.users[user.Username] = &next
+	return &next, nil
 }
 
 // fillValue gives every field that can be set a value that is not its zero
@@ -110,6 +154,11 @@ func TestHookLoginKeepsWhatTheHookDoesNotSupply(t *testing.T) {
 	}
 	if got != store.users["bob"] {
 		t.Fatal("the user that was returned is not the one that was stored")
+	}
+	// Only what the hook changed is written: a field it says nothing about
+	// is not stored back as it was read, over what was stored since.
+	if !reflect.DeepEqual(store.fields, []string{"Locale"}) {
+		t.Errorf("the login stored the fields %v, want only the locale", store.fields)
 	}
 
 	if len(got.Rules) != 1 {
@@ -222,5 +271,102 @@ func TestHookThatDoesNotVouchIsReported(t *testing.T) {
 	}
 	if err := auth(filepath.Join(t.TempDir(), "no-such-hook")); err == nil || errors.Is(err, ErrHookRefused) || errors.Is(err, os.ErrPermission) {
 		t.Errorf("a hook that cannot be run: error %v, want an error that is neither a refusal nor a wrong password", err)
+	}
+}
+
+// A login that only brings what is stored already stores nothing.
+func TestHookLoginThatChangesNothingStoresNothing(t *testing.T) {
+	const password = "a-strong-password"
+	stored := storedHookUser(t, password)
+
+	store := &updatingStore{mockUserStore: &mockUserStore{users: map[string]*users.User{"bob": stored}}}
+	a := newHookAuth(store.mockUserStore, &settings.Settings{}, &settings.Server{Root: t.TempDir()}, "bob", map[string]string{
+		"user.locale":       stored.Locale,
+		"user.perm.delete":  "true",
+		"user.hideDotfiles": "true",
+	})
+	a.Users = store
+
+	got, err := a.SaveUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.updates != 0 || got != stored {
+		t.Errorf("the record was stored %d times (fields %v)", store.updates, store.fields)
+	}
+}
+
+// The account is changed, in a way that ends its sessions, between the
+// login's reading of it and its storing what the hook said: an administrator
+// takes a permission away. The login must not store what it made of the
+// record it read, which has the permission. It starts over from the record
+// as it is now, and its own changes go on top of the administrator's.
+func TestHookLoginStartsOverWhenTheAccountWasRevokedMeanwhile(t *testing.T) {
+	const password = "a-strong-password"
+	stored := storedHookUser(t, password)
+	stored.Perm.Admin = false
+	stored.TokensNotBefore = 100
+
+	store := &updatingStore{mockUserStore: &mockUserStore{users: map[string]*users.User{"bob": stored}}}
+	store.before = func(attempt int) {
+		if attempt != 1 {
+			return
+		}
+		changed := *store.users["bob"]
+		changed.Perm.Delete = false
+		changed.Rules = nil
+		changed.TokensNotBefore = 200
+		store.users["bob"] = &changed
+	}
+	a := newHookAuth(store.mockUserStore, &settings.Settings{}, &settings.Server{Root: t.TempDir()}, "bob", map[string]string{
+		"user.locale": "from-the-hook",
+	})
+	a.Users = store
+
+	got, err := a.SaveUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.attempts != 2 || store.updates != 1 {
+		t.Fatalf("%d attempts, %d of them stored; want 2 and 1", store.attempts, store.updates)
+	}
+	if got.Perm.Delete || got.Rules != nil {
+		t.Errorf("the login brought back what the administrator had taken away: %+v, rules %+v", got.Perm, got.Rules)
+	}
+	if got.Locale != "from-the-hook" {
+		t.Errorf("the locale the hook supplied was not stored: %q", got.Locale)
+	}
+	if got.TokensNotBefore != 200 {
+		t.Errorf("the user that is returned has mark %d, want that of the record as it is stored, 200", got.TokensNotBefore)
+	}
+}
+
+// When that happens every time, the login gives up: it does not go on for
+// ever, and it stores nothing.
+func TestHookLoginGivesUpWhenTheAccountKeepsChanging(t *testing.T) {
+	const password = "a-strong-password"
+	stored := storedHookUser(t, password)
+	stored.TokensNotBefore = 100
+
+	store := &updatingStore{mockUserStore: &mockUserStore{users: map[string]*users.User{"bob": stored}}}
+	store.before = func(int) {
+		changed := *store.users["bob"]
+		changed.TokensNotBefore++
+		store.users["bob"] = &changed
+	}
+	a := newHookAuth(store.mockUserStore, &settings.Settings{}, &settings.Server{Root: t.TempDir()}, "bob", map[string]string{
+		"user.locale": "from-the-hook",
+	})
+	a.Users = store
+
+	got, err := a.SaveUser()
+	if !errors.Is(err, fberrors.ErrUserChanged) || got != nil {
+		t.Fatalf("user %v, error %v; want ErrUserChanged", got, err)
+	}
+	if store.attempts != hookSaveAttempts || store.updates != 0 {
+		t.Errorf("%d attempts, %d of them stored; want %d and none", store.attempts, store.updates, hookSaveAttempts)
+	}
+	if store.users["bob"].Locale == "from-the-hook" {
+		t.Error("the login that gave up stored its change")
 	}
 }
