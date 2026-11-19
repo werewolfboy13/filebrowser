@@ -41,7 +41,31 @@ var (
 // is known to fold names, so that nothing depends on that being found out
 // right.
 func IsTempName(name string) bool {
+	// Every element of every path that is checked comes through here, so
+	// the names that cannot be one are told first. The canonical form of a
+	// name that is all ASCII is the name in lower case, which the first
+	// expression covers, and such a name is as long as the ones this
+	// package gives or it is not one.
+	if isASCII(name) {
+		return (len(name) == tempNameLength || len(name) == tusTempNameLength) && tempName.MatchString(name)
+	}
 	return tempName.MatchString(name) || ownTempName.MatchString(rules.CanonicalName(name, true))
+}
+
+// The lengths of the names this package gives: the prefix, 32 hexadecimal
+// digits, and "tus-" between them for a resumable upload.
+const (
+	tempNameLength    = len(TempPrefix) + 32
+	tusTempNameLength = tempNameLength + len("tus-")
+)
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }
 
 // IsOwnTempName reports whether name is exactly a name this package gives

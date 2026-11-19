@@ -48,7 +48,7 @@ var fullEnvHashes = sync.OnceValues(func() (hashes [2]string, err error) {
 // It holds two accounts: "admin" (ID 1, scope "/") and "bob" (ID 2, scope
 // "/users/bob", every permission except admin).
 type fullEnv struct {
-	t      *testing.T
+	t      testing.TB
 	root   string
 	bobDir string
 	st     *storage.Storage
@@ -58,14 +58,14 @@ type fullEnv struct {
 	cache  *memoryUploadCache
 }
 
-func newFullEnv(t *testing.T) *fullEnv {
+func newFullEnv(t testing.TB) *fullEnv {
 	t.Helper()
 	return newFullEnvWith(t, nil)
 }
 
 // newFullEnvWith is newFullEnv with a hook that can adjust the server settings
 // (and prepare the root directory) before the handler is built.
-func newFullEnvWith(t *testing.T, configure func(root string, server *settings.Server)) *fullEnv {
+func newFullEnvWith(t testing.TB, configure func(root string, server *settings.Server)) *fullEnv {
 	t.Helper()
 	return newFullEnvOpts(t, fullEnvOptions{configure: configure})
 }
@@ -83,7 +83,7 @@ type fullEnvOptions struct {
 	assets fstest.MapFS
 }
 
-func newFullEnvOpts(t *testing.T, opts fullEnvOptions) *fullEnv {
+func newFullEnvOpts(t testing.TB, opts fullEnvOptions) *fullEnv {
 	t.Helper()
 
 	// Resolve symlinks in the temporary directory itself (macOS keeps it under

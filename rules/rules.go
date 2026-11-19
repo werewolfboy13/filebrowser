@@ -74,6 +74,9 @@ func (r *Rule) Matches(path string, fold bool) bool {
 		return true
 	}
 
+	// Many paths against many rules: see Set, which does the same and
+	// works out each form once.
+
 	// An allow rule matches exactly, by design, and stops here. The price is
 	// that an exception carved out of a denied directory ("/Café/public"
 	// under a denied "/Café") only opens the spelling it was written in:
@@ -86,7 +89,142 @@ func (r *Rule) Matches(path string, fold bool) bool {
 	// In addition to the comparison above, never instead of it: the two do
 	// not fold every letter alike, and a deny rule must not match less than
 	// it did.
+	//
+	// Not for two names that are all ASCII: their canonical forms are what
+	// was just compared (the names themselves, or lower-cased with fold).
+	if isASCII(path) && isASCII(r.Path) {
+		return false
+	}
 	return isAtOrBelow(CanonicalName(path, fold), CanonicalName(r.Path, fold))
+}
+
+// Set is a list of rules made ready for deciding on many paths: what
+// Rule.Matches works out from a rule for every path it is given (its path
+// in lower case, its canonical form) is worked out once, when the set is
+// made, and what it works out from the path for every rule is worked out
+// once for each path.
+//
+// Listing a directory decides on every entry in it, and each decision
+// compares the path with every rule. Done rule by rule, a directory of a
+// few thousand names that are not ASCII under a few dozen deny rules took
+// several times as long to list as before deny rules were compared on
+// canonical forms.
+//
+// A set is made from rules as they are at that moment, and keeps pointing
+// at them: it is for rules that do not change while it is used, and is
+// meant to live for one request, which reads its rules once.
+type Set struct {
+	fold  bool
+	rules []preparedRule
+}
+
+// preparedRule is a rule with the forms of its path that paths are compared
+// with.
+type preparedRule struct {
+	rule *Rule
+
+	// path is the path of the rule as Matches compares it first: in lower
+	// case with fold, as written without.
+	path string
+
+	// canonical is the canonical form of the path, for a rule that denies.
+	canonical string
+
+	// ascii tells that the path is all ASCII.
+	ascii bool
+}
+
+// NewSet makes a set of the rules of the lists, in their order: the rules
+// of a later list come after those of an earlier one. fold is as for
+// Rule.Matches.
+func NewSet(fold bool, lists ...[]Rule) *Set {
+	n := 0
+	for _, list := range lists {
+		n += len(list)
+	}
+
+	s := &Set{fold: fold, rules: make([]preparedRule, 0, n)}
+	for _, list := range lists {
+		for i := range list {
+			rule := &list[i]
+			p := preparedRule{rule: rule}
+			if !rule.Regex {
+				p.path = rule.Path
+				if fold {
+					p.path = strings.ToLower(rule.Path)
+				}
+				p.ascii = isASCII(rule.Path)
+				if !rule.Allow {
+					p.canonical = CanonicalName(rule.Path, fold)
+				}
+			}
+			s.rules = append(s.rules, p)
+		}
+	}
+	return s
+}
+
+// Allows reports what the rules decide for path: what the last rule that
+// matches it says, and that it is allowed when none does. It is the same as
+// asking Rule.Matches of every rule in turn.
+func (s *Set) Allows(path string) bool {
+	if len(s.rules) == 0 {
+		return true
+	}
+
+	var (
+		// The forms of the path, each worked out when the first rule needs
+		// it.
+		lower, canonical       string
+		hasLower, hasCanonical bool
+		ascii                  = isASCII(path)
+	)
+
+	// From the last rule to the first: the first that matches decides.
+	for i := len(s.rules) - 1; i >= 0; i-- {
+		p := &s.rules[i]
+		rule := p.rule
+
+		if rule.Regex {
+			re, err := rule.Regexp.compile()
+			if err != nil {
+				// Fails closed: see Rule.Matches.
+				if !rule.Allow {
+					return false
+				}
+				continue
+			}
+			if re.MatchString(path) {
+				return rule.Allow
+			}
+			continue
+		}
+
+		compared := path
+		if s.fold {
+			if !hasLower {
+				lower, hasLower = strings.ToLower(path), true
+			}
+			compared = lower
+		}
+		if isAtOrBelow(compared, p.path) {
+			return rule.Allow
+		}
+
+		// The canonical forms, for a rule that denies, unless both names
+		// are ASCII: see Rule.Matches.
+		if rule.Allow || (ascii && p.ascii) {
+			continue
+		}
+		if !hasCanonical {
+			canonical, hasCanonical = CanonicalName(path, s.fold), true
+		}
+		if isAtOrBelow(canonical, p.canonical) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // isAtOrBelow reports whether path is rulePath or lies below it.

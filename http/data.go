@@ -61,6 +61,28 @@ type data struct {
 	// protectedInfo caches the identities of the server's own files. See
 	// protectedFiles.
 	protectedInfo []os.FileInfo
+
+	// ruleSet is the global and user rules made ready for deciding on many
+	// paths, and ruleSetOf what it was made from. See rulesAllow.
+	ruleSet   *rules.Set
+	ruleSetOf ruleSetSource
+}
+
+// ruleSetSource is what a rules.Set of a request was made from.
+type ruleSetSource struct {
+	user           *users.User
+	global, byUser *rules.Rule
+	globals, users int
+	fold           bool
+}
+
+// firstRule returns the address of the first rule of a list, which tells one
+// list from another of the same length.
+func firstRule(list []rules.Rule) *rules.Rule {
+	if len(list) == 0 {
+		return nil
+	}
+	return &list[0]
 }
 
 // Check implements rules.Checker.
@@ -202,22 +224,28 @@ func (d *data) protectedFiles() []os.FileInfo {
 }
 
 // rulesAllow evaluates the global and user rules against a path that is
-// already in the form the rules are written in.
+// already in the form the rules are written in: the last rule that matches
+// decides, the user's after the global ones.
+//
+// The rules are made ready once for the request (see rules.Set): they are
+// read from the database when it comes in, settings and user alike, and
+// nothing changes them while it is served. Should a handler put another
+// user or other lists in their place, the set is made again.
 func (d *data) rulesAllow(path string) bool {
-	allow := true
-	for _, rule := range d.settings.Rules {
-		if rule.Matches(path, d.server.CaseInsensitiveFs) {
-			allow = rule.Allow
-		}
+	of := ruleSetSource{
+		user:    d.user,
+		global:  firstRule(d.settings.Rules),
+		byUser:  firstRule(d.user.Rules),
+		globals: len(d.settings.Rules),
+		users:   len(d.user.Rules),
+		fold:    d.server.CaseInsensitiveFs,
+	}
+	if d.ruleSet == nil || d.ruleSetOf != of {
+		d.ruleSet = rules.NewSet(of.fold, d.settings.Rules, d.user.Rules)
+		d.ruleSetOf = of
 	}
 
-	for _, rule := range d.user.Rules {
-		if rule.Matches(path, d.server.CaseInsensitiveFs) {
-			allow = rule.Allow
-		}
-	}
-
-	return allow
+	return d.ruleSet.Allows(path)
 }
 
 // resolvedRulePath returns the path, in the form the rules are written in,
