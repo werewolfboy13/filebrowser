@@ -62,19 +62,18 @@ Documentation on how to install, configure, and build this project lives in [`do
 
 [CONTRIBUTING.md](CONTRIBUTING.md) documents how to build and develop it.
 
-## Publishing Checklist
+## Maintainer Notes: Releasing
 
-The repository `github.com/werewolfboy13/filebrowser` does not exist yet, and the files here are already written for it. This is what is left to do by hand, in this order:
+The repository is public, with its issue tracker and private vulnerability reporting open, and it has the tags of the original project up to `v2.63.23`, which came with the fork. No version of the fork has been released from it yet. This is what a release still takes by hand, in the repository's settings on GitHub:
 
-1. **Create the repository** on GitHub, public, under the name `filebrowser`. Under another name, the addresses in the README, [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md), the templates in [`.github`](.github) and the notice that the server logs at its start have to follow.
-2. **Push the tags of the original project without starting its workflow.** Every tag up to `v2.63.23` carries the original project's workflow, which releases on any pushed `v*` tag, with nothing that checks where it runs. GitHub runs the workflow of the commit that a tag points to, and Actions is enabled in a new repository from the start. So either disable Actions in the repository's settings until the tags are there, or push all the tags in one push: according to GitHub's documentation, nothing is started when more than three tags are pushed at once. Pushed one by one with Actions enabled, each tag would start that workflow. It should stop early there, for lack of the `GH_PAT` secret it uses. None of this was tried.
-3. **Set the repository variable `IMAGE_NAME`** (Settings, Secrets and variables, Actions, Variables) to `ghcr.io/werewolfboy13/filebrowser`. An image on GitHub's registry is pushed with the release job's own token, so no credential for pushing to Docker Hub is needed. Without the variable, a tag releases nothing.
-4. **Set the secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`**, of any Docker account. The base images come from `dhi.io`, which takes a login to pull from. Without them, the image is not built on pushes and pull requests, and the release job fails at its login.
-5. **Enable private vulnerability reporting** in the repository's security settings. [SECURITY.md](SECURITY.md) and the issue templates send reports there.
-6. **Choose the fork's first version.** Until there is a tag of its own, a build calls itself by the original project's last tag and what came after it, such as `2.63.23-162-g1dbcd934`. Make the first tag a prerelease, such as `v3.0.0-rc.1`: the release job has never run, and a prerelease moves neither `latest` nor the major tag of the image. After the first push, check that the image's package is public.
-7. **Check the branch that CI runs on.** Pushes are built on `master` and `modernize`. Another default branch has to be added to [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml), in `on.push.branches` and in the condition of the `docker` job.
-8. **Replace the contact in [CODE-OF-CONDUCT.md](CODE-OF-CONDUCT.md)**, which is still the e-mail address of the original project's author.
-9. **After the first release, remove what it makes untrue:** the sentences that say there is no release yet, here under [Docker](#docker) and twice in [`docs/installation.md`](docs/installation.md), and this checklist.
+1. **Set the repository variable `IMAGE_NAME`** (Settings, Secrets and variables, Actions, Variables) to `ghcr.io/werewolfboy13/filebrowser`. An image on GitHub's registry is pushed with the release job's own token, so no credential for pushing is needed. Without the variable, a tag releases nothing.
+2. **Add the secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`**, of any Docker account. The base images come from `dhi.io`, which takes a login to pull from. Without them, the image is not built on pushes and pull requests, which the job says in a notice, and the release job fails at its login, before it has pushed anything.
+3. **Tag `v3.0.0-rc.1` first**, with `task release:rc VERSION=3.0.0`: [CONTRIBUTING.md](CONTRIBUTING.md#release) has the procedure. The release job has never run, and for a prerelease it moves neither `latest` nor the major tag of the image. Until there is a tag of the fork's own, a build calls itself by the original project's last tag and what came after it, such as `2.63.23-214-g57dab95d`.
+4. **Check the visibility of the image's package after the first push** (the repository's Packages, Package settings). A package that is not public cannot be pulled without a login.
+5. **Consider protecting the released branch and the version tags** (Settings, Rules). The repository has no rule yet, so everyone who may push to it may push a `v` tag, and a tag is what releases.
+6. **After the first release, remove what it makes untrue:** the sentences that say there is no release yet, here under [Docker](#docker), twice in [`docs/installation.md`](docs/installation.md) and under the table in [SECURITY.md](SECURITY.md).
+
+Pushes are built and tested on the branches `master` and `modernize`, and every pull request is. Another branch to build on has to be added to [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml), in `on.push.branches` and in the condition of the `docker` job.
 
 ## License
 
