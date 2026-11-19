@@ -118,6 +118,9 @@ const { t } = useI18n();
 
 const route = useRoute();
 const router = useRouter();
+// The file this editor was opened for: what it saves and keeps, whatever
+// the route says by then.
+const filePath = route.path;
 
 const editor = ref<Ace.Editor | null>(null);
 const fontSize = ref(parseInt(localStorage.getItem("editorFontSize") || "14"));
@@ -172,7 +175,7 @@ let keptPending = false;
 const unsavedSource = () =>
   editor.value && !editor.value.session.getUndoManager().isClean()
     ? {
-        path: route.path,
+        path: filePath,
         content: editor.value.getValue(),
         base: fingerprint(baseContent),
       }
@@ -272,7 +275,7 @@ const initEditor = (fileContent: string) => {
 // changed: the file no longer has the content they were written over (or
 // that is not known); the question says so.
 const offerUnsaved = (fileContent: string) => {
-  const path = route.path;
+  const path = filePath;
   const kept = unsavedFor(authStore.user, path);
   if (kept === null) return;
   if (kept.content === fileContent) {
@@ -332,10 +335,10 @@ const save = async (throwError?: boolean) => {
 
   try {
     const content = editor.value?.getValue();
-    await api.put(route.path, content);
+    await api.put(filePath, content);
     baseContent = content ?? "";
     editor.value?.session.getUndoManager().markClean();
-    if (!keptPending) dropUnsaved(route.path);
+    if (!keptPending) dropUnsaved(filePath);
     buttons.success(button);
   } catch (e: any) {
     buttons.done(button);

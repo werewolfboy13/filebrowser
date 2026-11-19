@@ -8,7 +8,11 @@
 
     <breadcrumbs base="/files" />
     <errors v-if="error" :errorCode="error.status" />
-    <component v-else-if="currentView" :is="currentView"></component>
+    <component
+      v-else-if="currentView"
+      :is="currentView"
+      :key="viewKey"
+    ></component>
     <div v-else>
       <h2 class="message delayed">
         <div class="spinner">
@@ -84,6 +88,19 @@ const currentView = computed(() => {
     return Preview;
   }
 });
+
+// A text file opened straight from another one (a jump in the history)
+// gets an Editor of its own: the one shown holds the other file's text.
+// A CSV file gets a preview of its own too: the preview reads the table
+// when the route changes, before the new file has arrived. Images, audio
+// and video keep theirs across prev/next.
+const viewKey = computed(() =>
+  currentView.value === Editor ||
+  (currentView.value === Preview &&
+    fileStore.req?.extension.toLowerCase() === ".csv")
+    ? fileStore.req?.path
+    : undefined
+);
 
 // Define hooks
 onMounted(() => {
