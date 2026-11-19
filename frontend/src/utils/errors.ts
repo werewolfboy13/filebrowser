@@ -75,3 +75,22 @@ export function errorToast(
     isReport: canReport,
   };
 }
+
+// What the error toast shows for an error answering a change of the user's
+// own account (profile, password, or an admin editing their own user), or
+// null for none:
+// - 409: an administrator changed the same account at the same moment, and
+//   this change was not made;
+// - 401 once the session has ended (fetchURL logged out: the token was
+//   revoked, e.g. by an earlier password change whose answer brought no
+//   new token): the login page says enough.
+export function ownAccountChangeError(
+  t: Translate,
+  error: unknown,
+  loggedIn: boolean
+): Error | string | null {
+  const status = (error as { status?: number } | null)?.status;
+  if (status === 409) return t("errors.accountChangedConcurrently");
+  if (status === 401 && !loggedIn) return null;
+  return error instanceof Error ? error : String(error);
+}
