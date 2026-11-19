@@ -51,9 +51,12 @@ func (e *fullEnv) deleteBob(adminToken string) {
 
 func TestUserCreatedWithTheIDOfADeletedUserDoesNotGetItsSessions(t *testing.T) {
 	e := newFullEnv(t)
-	admin := e.login("admin", fullEnvAdminPassword)
-	bob := e.login("bob", fullEnvUserPassword)
+	admin := e.session("admin")
+	bob := e.session("bob")
 
+	if !e.works(bob) {
+		t.Fatal("bob's token does not work to begin with")
+	}
 	e.deleteBob(admin)
 	if e.works(bob) {
 		t.Fatal("bob's token works after bob was deleted")
@@ -70,8 +73,8 @@ func TestUserCreatedWithTheIDOfADeletedUserDoesNotGetItsSessions(t *testing.T) {
 
 func TestUserCreatedWithAnExistingIDDoesNotReplaceThatAccount(t *testing.T) {
 	e := newFullEnv(t)
-	admin := e.login("admin", fullEnvAdminPassword)
-	bob := e.login("bob", fullEnvUserPassword)
+	admin := e.session("admin")
+	bob := e.session("bob")
 
 	carol := e.createUser(admin, 2, "carol")
 	if carol.ID == 2 {
@@ -91,7 +94,7 @@ func TestUserCreatedWithAnExistingIDDoesNotReplaceThatAccount(t *testing.T) {
 
 func TestUserCreatedWithAnIDAheadOfTheCounterIsNotOverwritten(t *testing.T) {
 	e := newFullEnv(t)
-	admin := e.login("admin", fullEnvAdminPassword)
+	admin := e.session("admin")
 
 	// The counter stands at 2: 3 is the ID it gives next. Stored under 3
 	// because the request said so, dave left the counter where it was.
@@ -116,8 +119,8 @@ func TestUserCreatedWithAnIDAheadOfTheCounterIsNotOverwritten(t *testing.T) {
 // that was deleted, and the deleted user's token stays dead.
 func TestUserCreatedTheOrdinaryWayDoesNotReuseAnID(t *testing.T) {
 	e := newFullEnv(t)
-	admin := e.login("admin", fullEnvAdminPassword)
-	bob := e.login("bob", fullEnvUserPassword)
+	admin := e.session("admin")
+	bob := e.session("bob")
 
 	e.deleteBob(admin)
 	again := e.createUser(admin, 0, "bob")

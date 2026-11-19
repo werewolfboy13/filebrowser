@@ -693,7 +693,7 @@ func TestPreferenceUpdateOfAUserDeletedMeanwhileIsNotFound(t *testing.T) {
 	e := newFullEnv(t)
 	w := e.watchUsers()
 	inner := w.Store
-	adminTok := e.login("admin", fullEnvAdminPassword)
+	adminTok := e.session("admin")
 
 	var fired atomic.Bool
 	del := onceWhen(&fired, func() {
