@@ -102,6 +102,8 @@ task release:rc
 task release
 ```
 
+An exported `VERSION` or `FLAGS` environment variable is picked up by these tasks as if it had been given to them, `VERSION` by `task release:rc` and `FLAGS` by `task release`, so unset them first.
+
 Each of these:
 
 1. generates the command line reference in [`docs/cli`](docs/cli) again, and commits it if it changed;
@@ -111,7 +113,7 @@ Each of these:
 
 The tag and its commit are signed, so Git has to be able to sign where the task runs: with a GPG key, which takes `gpg` and a key for the committer's address or the one named in `user.signingkey`, or with an SSH key, which takes `gpg.format` set to `ssh` and `user.signingkey` set to the public key's file. To release unsigned instead, set `SIGN` to `''` at the top of [`Taskfile.yml`](Taskfile.yml), the one place that decides it. The task checks for Go, pnpm and a working signature before it writes anything, and it does not run while `CHANGELOG.md` has changes that are not committed, which a run that failed at its commit leaves behind: `git restore --staged --worktree CHANGELOG.md` undoes them.
 
-Nothing is pushed. To publish, push the branch and the tag to the fork, for example `git push --follow-tags origin master` where `origin` is the fork.
+Nothing is pushed. To publish, push the branch and the tag to the fork, for example `git push --follow-tags origin master` where `origin` is the fork. In a checkout where `origin` is the archived original project, name the fork's remote instead, as in `git push --follow-tags fork master`: the command that the tool prints at its end always says `origin`.
 
 What decides the version:
 
