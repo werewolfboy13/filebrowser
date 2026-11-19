@@ -90,7 +90,9 @@ tasks:
   # commit leaves the new section in CHANGELOG.md, written and staged, and the next run would put
   # the section there a second time, in the commit that is tagged. The commit fails most often
   # because it cannot be signed, so one is signed here as a trial: an object that no branch or tag
-  # leads to, which changes neither the index nor a file.
+  # leads to, which changes neither the index nor a file. A run that fails at its tag leaves the
+  # release commit without one, and the next run would make a second release commit, with the same
+  # section a second time.
   release:check:
     internal: true
     preconditions:
@@ -98,6 +100,8 @@ tasks:
         msg: "A release needs Go and pnpm on the PATH."
       - sh: 'git diff --quiet HEAD -- CHANGELOG.md'
         msg: "CHANGELOG.md has changes that are not committed, which a failed run leaves behind. Undo them first: git restore --staged --worktree CHANGELOG.md"
+      - sh: '! git log -1 --format=%s | grep -q "^chore(release): " || git describe --exact-match --tags HEAD > /dev/null 2>&1'
+        msg: "The last commit is a release commit without a tag, which a run that failed at its tag leaves behind: another run would put its section in CHANGELOG.md a second time. Tag that commit by hand, with the version in its subject, such as: git tag -a{{if .SIGN}} {{.SIGN}}{{end}} v3.0.0-rc.1 -m 'chore(release): 3.0.0-rc.1'. Or take the commit back and run the task again: git reset --keep HEAD^"
       - sh: '[ -z "{{.SIGN}}" ] || git commit-tree -S -m "signing check" "HEAD^{tree}" < /dev/null > /dev/null 2>&1'
         msg: "Git cannot sign a commit here, and a release is signed. It needs a signing key in the Git configuration, which CONTRIBUTING.md describes under Release. This shows Git's error and changes nothing: git commit-tree -S -m test 'HEAD^{tree}'"
 
