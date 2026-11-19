@@ -37,13 +37,15 @@ const (
 )
 
 // How the addresses of a host name and of this machine's interfaces are
-// looked up. They are variables so that the tests can do without the network
-// and without the interfaces of the machine they run on.
+// looked up, and the start time of a process. They are variables so that the
+// tests can do without the network and without the interfaces of the machine
+// they run on, and can be a system that does not tell when a process started.
 var (
 	lookupHostIPs = func(ctx context.Context, host string) ([]net.IP, error) {
 		return net.DefaultResolver.LookupIP(ctx, "ip", host)
 	}
-	interfaceAddrs = net.InterfaceAddrs
+	interfaceAddrs   = net.InterfaceAddrs
+	processStartTime = procStartTime
 )
 
 // listenRecord is what the running server writes down for the health
@@ -332,11 +334,12 @@ func isLocalIP(ip net.IP) bool {
 	return false
 }
 
-// processStartTime returns the time at which the process started, as the
+// procStartTime returns the time at which the process started, as the
 // kernel counts it, or "" where that cannot be read: it comes from /proc,
 // which only Linux has in this form. With the process number, it tells one
-// process from every other one since the machine started.
-func processStartTime(pid int) string {
+// process from every other one since the machine started. It is called as
+// processStartTime.
+func procStartTime(pid int) string {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
 		return ""

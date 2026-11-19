@@ -405,6 +405,51 @@ func TestRecordListenAddress(t *testing.T) {
 		}
 	})
 
+	// Where the start time of a process cannot be read, nothing tells a
+	// server that runs from one that was killed. A record that is left there
+	// is replaced, or the record of a killed server would stay for good, and
+	// with it the place where the health command looks.
+	t.Run("replaces the record of another process where no start time can be read", func(t *testing.T) {
+		readable := processStartTime
+		processStartTime = func(int) string { return "" }
+		t.Cleanup(func() { processStartTime = readable })
+
+		path := filepath.Join(t.TempDir(), "health.json")
+		t.Setenv(envHealthFile, path)
+		other := listenRecord{PID: os.Getppid(), Address: "127.0.0.1", Port: "1"}
+		writeRecordFile(t, path, other)
+		// The health command goes by this record, as it has nothing better:
+		// it is not one that is passed over anyway.
+		if _, ok := readListenRecord(path); !ok {
+			t.Fatal("the record of another process is not read where no start time can be read")
+		}
+
+		recordListenAddress(&settings.Server{Address: "127.0.0.1", Port: "0"}, listener)
+
+		if got := readRecordFile(t, path); got.PID != os.Getpid() || got.Port != actualPort {
+			t.Errorf("record = %+v, want this server's", got)
+		}
+	})
+
+	// Two containers that share the file: the server is process 1 in each
+	// of them, and only the start time tells the two apart.
+	t.Run("does not remove the record of another process with the same number", func(t *testing.T) {
+		path, remove := recordFor(t, &settings.Server{Port: "0"}, listener)
+
+		other := readRecordFile(t, path)
+		if other.PID != os.Getpid() {
+			t.Fatalf("the record names process %d, want this one", other.PID)
+		}
+		other.StartTime += "1"
+		writeRecordFile(t, path, other)
+
+		remove()
+
+		if got := readRecordFile(t, path); got != other {
+			t.Errorf("record after the stop = %+v, want the other server's: %+v", got, other)
+		}
+	})
+
 	// The record is another server's by the time this one stops: this one
 	// was killed and started again, or the file was replaced by hand.
 	t.Run("does not remove a record that is no longer its own", func(t *testing.T) {
