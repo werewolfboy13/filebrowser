@@ -139,6 +139,10 @@ RUN [ "/bin/filebrowser", "version" ]
 
 VOLUME /srv /config /database
 
+# The licence of File Browser, the program this image is built to run. What the base image brings
+# with it keeps its own terms.
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
 # The commit the image was built from, which CI passes in, so the image can say which build it is.
 # It is set last, so a new commit does not change any earlier layer of this stage.
 ARG GIT_SHA
