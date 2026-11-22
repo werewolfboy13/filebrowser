@@ -171,6 +171,8 @@ let baseContent = "";
 // or closed with Cancel or Escape): a save of the file keeps it.
 let keptPending = false;
 
+let unmounted = false;
+
 // No editor yet (the file still loading): nothing typed, nothing to save.
 const isClean = () =>
   editor.value === null || editor.value.session.getUndoManager().isClean();
@@ -213,7 +215,10 @@ onMounted(() => {
       // Initialize editor when layout is loaded
       if (!layoutStore.loading) {
         setTimeout(() => {
-          initEditor(fileContent);
+          // the content just fetched, not the copy the store held when this
+          // editor was mounted (e.g. the preview's, for "Edit as Text");
+          // never once unmounted (ace.edit would take the next editor's form)
+          if (!unmounted) initEditor(fileStore.req?.content || "");
           unwatch();
         }, 50);
       }
@@ -222,6 +227,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  unmounted = true;
   window.removeEventListener("keydown", keyEvent);
   window.removeEventListener("beforeunload", handlePageChange);
   clearUnsavedSource(unsavedSource);

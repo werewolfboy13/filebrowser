@@ -79,6 +79,7 @@ import Prompts from "@/components/prompts/Prompts.vue";
 import buttons from "@/utils/buttons";
 import { parseToken } from "@/utils/auth";
 import { useLayoutStore } from "@/stores/layout";
+import { fingerprint } from "@/utils/unsavedEdit";
 
 const b64 = (o: object) =>
   btoa(JSON.stringify(o))
@@ -379,5 +380,52 @@ describe("Save, Close and Back in the editor", { timeout: 60_000 }, () => {
     // still unsaved: Close asks again
     escape();
     expect(promptNames()).toEqual(["discardEditorChanges"]);
+  });
+  // In the browser the Editor's code is loaded by then, and it is mounted
+  // before the answer comes; here its first render takes a few microtasks,
+  // so the answer is held until it is mounted.
+  it("'Edit as Text' shows the content fetched for it, not the preview's older copy", async () => {
+    reset();
+    // edits of a.csv a forced logout kept, written over the file's new
+    // content
+    sessionStorage.setItem(
+      "editor-unsaved",
+      JSON.stringify({
+        user: 1,
+        username: "alice",
+        edits: [
+          {
+            path: "/files/a.csv",
+            content: "kept for a",
+            base: fingerprint("a1,a2\nsaved,elsewhere"),
+          },
+        ],
+      })
+    );
+    await open("/files/a.csv");
+    await waitFor(() =>
+      expect(document.getElementById("preview")).not.toBe(null)
+    );
+    // someone else saves a.csv meanwhile
+    RESOURCES["/api/resources/a.csv"] = file("a.csv", "a1,a2\nsaved,elsewhere");
+    hold.path = "/api/resources/a.csv";
+    const going = router.push("/files/a.csv?edit=true");
+    await waitFor(() => {
+      expect(useLayoutStore().loading).toBe(true);
+      expect(editorMounted()).toBe(true);
+    });
+    hold.path = "";
+    hold.release();
+    await going;
+    await waitFor(() => {
+      expect(useLayoutStore().loading).toBe(false);
+      expect(isAce()).toBe(true);
+    });
+    expect(ace.edit(editorEl()!).getValue()).toBe("a1,a2\nsaved,elsewhere");
+    // the restore question judges the kept edits against that content
+    await waitFor(() =>
+      expect(promptNames()).toEqual(["restoreEditorChanges"])
+    );
+    expect(useLayoutStore().prompts[0].props).toEqual({ changed: false });
   });
 });
