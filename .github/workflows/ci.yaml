@@ -201,10 +201,10 @@ jobs:
     needs: ["lint-frontend", "test-frontend", "lint-backend", "test", "build"]
     # Only for a version tag, and only in a repository that says where its images go: the
     # repository variable IMAGE_NAME (Settings, Secrets and variables, Actions, Variables), in lower
-    # case. For this fork that is ghcr.io/werewolfboy13/filebrowser, which is pushed with this
-    # job's own token. A name without a registry, such as owner/filebrowser, is one on Docker Hub.
-    # Without the variable nothing is released, so a tag pushed to a fork that was not set up
-    # publishes nothing.
+    # case. It is the name of an image on Docker Hub, which for this fork is
+    # werewolfboy13/filebrowser. Images go to Docker Hub and to no other registry, so that anyone
+    # can pull them without a login. Without the variable nothing is released, so a tag pushed to
+    # a fork that was not set up publishes nothing.
     if: >-
       vars.BUILD_RUNNER != '' &&
       (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) &&
@@ -212,10 +212,9 @@ jobs:
     runs-on: [self-hosted, "${{ vars.BUILD_RUNNER || 'no-runner-configured' }}"]
     timeout-minutes: 90
     permissions:
-      # GoReleaser creates the GitHub release.
+      # GoReleaser creates the GitHub release. The image is pushed with the Docker Hub secrets, not
+      # with this job's token.
       contents: write
-      # The image is pushed with this job's token when IMAGE_NAME is on ghcr.io.
-      packages: write
     steps:
       # The name is checked before anything is built. File Browser's own images and those of
       # this build are different things, so only the organization that owns them may publish
@@ -229,12 +228,13 @@ jobs:
           # pushes the image takes its tags as a list, which it splits at line breaks and commas
           # and trims: with a space before it, or a comma or a line break in it, what is checked
           # below would not be what is pushed. The name is [registry[:port]/]path, in lower case
-          # and without a tag. The whole value is matched, line breaks included.
+          # and without a tag: which registry is looked at further down. The whole value is
+          # matched, line breaks included.
           LC_ALL=C
           host='[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?'
           part='[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*'
           if [[ ! "$IMAGE_NAME" =~ ^($host/)?$part(/$part)*$ ]]; then
-            echo "::error::IMAGE_NAME has to be the name of an image, in lower case, with no tag and nothing around it, such as ghcr.io/werewolfboy13/filebrowser."
+            echo "::error::IMAGE_NAME has to be the name of an image on Docker Hub, in lower case, with no tag and nothing around it, such as werewolfboy13/filebrowser."
             exit 1
           fi
           # The Git tag has to be a version: v, three numbers without leading zeros, and for a
@@ -251,30 +251,30 @@ jobs:
             exit 1
           fi
 
-          # One image has many names. The registry can be left out, which means Docker Hub, and
-          # Docker Hub goes by several host names. So the name is brought into one form first:
-          # registry/repository, with docker.io for Docker Hub.
-          registry=${IMAGE_NAME%%/*}
-          case "$IMAGE_NAME" in
-            */*) repository=${IMAGE_NAME#*/} ;;
-            *) registry='' repository=$IMAGE_NAME ;;
-          esac
-          case "$registry" in
-            # As Docker reads it: the part before the first slash is a registry when it has a
-            # dot or a port in it, or is localhost.
-            *.* | *:* | localhost) ;;
-            *) registry=docker.io repository=$IMAGE_NAME ;;
-          esac
-          # Whose registry it is does not depend on the port.
-          host=${registry%%:*}
-          case "$host" in
-            docker.io | index.docker.io | registry-1.docker.io | registry.hub.docker.com)
-              host=docker.io registry=docker.io repository=${repository#library/}
-              ;;
-          esac
+          # Images are published to Docker Hub and to no other registry. A name on Docker Hub is
+          # owner/name, alone or with docker.io/ before it. As Docker reads a name with a slash in
+          # it, the part before the first slash is a registry when it has a dot or a port in it,
+          # or is localhost. With any of those the image would go somewhere else, where this job
+          # has no login and where pulling may take one. Docker Hub's other host names, such as
+          # index.docker.io, are not taken either: one image, one way to write it.
+          repository=${IMAGE_NAME#docker.io/}
+          first=${repository%%/*}
+          if [ "$first" != "$repository" ]; then
+            case "$first" in
+              *.* | *:* | localhost)
+                echo "::error::IMAGE_NAME is $IMAGE_NAME, which names a registry. Images are published to Docker Hub only, where a name is written owner/name or docker.io/owner/name, such as werewolfboy13/filebrowser."
+                exit 1
+                ;;
+            esac
+          fi
+          # On Docker Hub a name has two parts: the account and the repository.
+          if [[ ! "$repository" =~ ^$part/$part$ ]]; then
+            echo "::error::IMAGE_NAME is $IMAGE_NAME, which is not the name of an image on Docker Hub. That is owner/name, such as werewolfboy13/filebrowser."
+            exit 1
+          fi
 
-          case "$host/$repository" in
-            docker.io/filebrowser/* | ghcr.io/filebrowser/*)
+          case "$repository" in
+            filebrowser/*)
               if [ "$GITHUB_REPOSITORY_OWNER" != "filebrowser" ]; then
                 echo "::error::IMAGE_NAME is $IMAGE_NAME, which belongs to the File Browser project. Use a name of your own."
                 exit 1
@@ -286,7 +286,7 @@ jobs:
           # the variable. For the tag v3.1.4, the version is 3.1.4 and the major tag is v3. A
           # tag with a hyphen, which the check above leaves to a prerelease such as v3.0.0-rc.1,
           # gets its own tag only: neither the major tag nor `latest` moves to it.
-          image=$registry/$repository
+          image=docker.io/$repository
           {
             echo "version=${GITHUB_REF_NAME#v}"
             echo "tags<<END_OF_TAGS"
@@ -324,7 +324,8 @@ jobs:
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      # For an image on Docker Hub.
+      # The image is pushed to Docker Hub with these secrets. The token has to be allowed to
+      # write to the repository of the image.
       - name: Login to Docker Hub
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
@@ -338,14 +339,6 @@ jobs:
           registry: dhi.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      # For an image on GitHub's registry, which takes this job's own token.
-      - name: Login to GitHub Container Registry
-        if: startsWith(vars.IMAGE_NAME, 'ghcr.io/')
-        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       # The Dockerfile builds File Browser from source and runs the tests itself, so an image that
       # fails them is never pushed. It comes before GoReleaser, so that a failed image build leaves
       # no release behind, and the job can simply run again.
@@ -367,8 +360,8 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: ${{ steps.image.outputs.tags }}
       # The release is created in this repository, with this job's token. GoReleaser is pinned
-      # to one release, like the actions: this job may write to the repository and to its
-      # packages, and with a range such as "~> v2" it would run whatever was released last.
+      # to one release, like the actions: this job may write to the repository and holds the
+      # Docker Hub token, and with a range such as "~> v2" it would run whatever was released last.
       # .goreleaser.yml is written for version 2.
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
