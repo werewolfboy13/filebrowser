@@ -51,6 +51,22 @@ archives:
     format_overrides:
       - goos: windows
         formats: ["zip"]
+    # A tar archive names the owner and the group of each file, and GoReleaser takes them from the
+    # files on disk: the archives would name the account that the release was built with. Every
+    # file belongs to root instead, the binary and the files that come with it. Those are the ones
+    # GoReleaser adds by itself when none is listed, written out because the owner is set per file.
+    builds_info:
+      owner: root
+      group: root
+    files:
+      - src: LICENSE
+        info: &root
+          owner: root
+          group: root
+      - src: README.md
+        info: *root
+      - src: CHANGELOG.md
+        info: *root
 
 # A tag with a suffix, such as v3.0.0-rc.1, becomes a prerelease on GitHub, which is not shown as
 # the latest release.
