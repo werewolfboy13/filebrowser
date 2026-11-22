@@ -428,4 +428,44 @@ describe("Save, Close and Back in the editor", { timeout: 60_000 }, () => {
     );
     expect(useLayoutStore().prompts[0].props).toEqual({ changed: false });
   });
+  it("text typed while a save is on its way stays unsaved", async () => {
+    reset();
+    await open("/files/a.txt");
+    const editor = await shownEditor("the content of a");
+    editor.setValue("saved text");
+    hold.method = "PUT";
+    hold.path = "/api/resources/a.txt";
+    ctrlS();
+    expect(puts).toEqual([{ url: "/api/resources/a.txt", body: "saved text" }]);
+    // typed before the server answers
+    editor.navigateFileEnd();
+    editor.insert(", typed meanwhile");
+    hold.path = "";
+    hold.release();
+    await waitFor(() => expect(vi.mocked(buttons.success)).toHaveBeenCalled());
+    // not in the file: Close asks
+    escape();
+    expect(promptNames()).toEqual(["discardEditorChanges"]);
+    expect(currentPath()).toBe("/files/a.txt");
+  });
+
+  it("text typed right after a save, in the same burst of typing, stays unsaved", async () => {
+    reset();
+    await open("/files/a.txt");
+    const editor = await shownEditor("the content of a");
+    editor.navigateFileEnd();
+    editor.execCommand("insertstring", "x");
+    editor.execCommand("insertstring", "y");
+    ctrlS();
+    await waitFor(() => expect(vi.mocked(buttons.success)).toHaveBeenCalled());
+    expect(puts).toEqual([
+      { url: "/api/resources/a.txt", body: "the content of axy" },
+    ]);
+    // Ace adds a key typed soon after the last ones to the same undo step
+    editor.execCommand("insertstring", "z");
+    expect(editor.getValue()).toBe("the content of axyz");
+    escape();
+    expect(promptNames()).toEqual(["discardEditorChanges"]);
+    expect(currentPath()).toBe("/files/a.txt");
+  });
 });

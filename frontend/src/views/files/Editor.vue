@@ -354,10 +354,16 @@ const save = async (throwError?: boolean) => {
   buttons.loading("save");
 
   try {
+    // Saved: this text, not what is typed while the PUT is on its way or
+    // right after it (Ace would add a key typed soon after the last ones to
+    // their undo step): that starts a step of its own, and stays unsaved.
+    const undoManager = editor.value.session.getUndoManager();
+    undoManager.startNewGroup();
+    const revision = undoManager.getRevision();
     const content = editor.value.getValue();
     await api.put(filePath, content);
     baseContent = content;
-    editor.value?.session.getUndoManager().markClean();
+    undoManager.markClean(revision);
     if (!keptPending) dropUnsaved(filePath);
     buttons.success(button);
   } catch (e: any) {
