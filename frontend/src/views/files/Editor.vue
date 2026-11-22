@@ -242,7 +242,14 @@ onBeforeRouteUpdate((to, from, next) => {
       next();
     },
     saveAction: async () => {
-      await save();
+      try {
+        await save(true);
+      } catch {
+        // not saved (the error is shown): stay, with the edits
+        layoutStore.closeHovers();
+        next(false);
+        return;
+      }
       next();
     },
   });

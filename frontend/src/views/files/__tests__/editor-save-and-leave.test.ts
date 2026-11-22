@@ -137,6 +137,8 @@ const waitFor = (check: () => void) => vi.waitFor(check, { timeout: 10_000 });
 const promptNames = () => useLayoutStore().prompts.map((p) => p.prompt);
 const editorEl = () => document.getElementById("editor");
 const isAce = () => editorEl()?.classList.contains("ace_editor") === true;
+const kept = () =>
+  JSON.parse(sessionStorage.getItem("editor-unsaved") ?? "null")?.edits ?? null;
 const button = (label: string) =>
   [...document.querySelectorAll("button")].find(
     (b) => b.textContent?.trim() === label
@@ -346,5 +348,36 @@ describe("Save, Close and Back in the editor", { timeout: 60_000 }, () => {
     escape();
     expect(promptNames()).toEqual([]);
     await waitFor(() => expect(currentPath()).toBe("/files/"));
+  });
+  it("a failed 'Save changes' in the leave question stays on the file, with the edits", async () => {
+    reset();
+    await open("/files/b.txt");
+    const editor = await shownEditor("the content of b");
+    editor.setValue("precious edits of b");
+    putStatus = 500;
+    const going = router.push("/files/a.txt");
+    await waitFor(() =>
+      expect(promptNames()).toEqual(["discardEditorChanges"])
+    );
+    await saveChanges();
+    await going;
+    expect(puts).toEqual([
+      { url: "/api/resources/b.txt", body: "precious edits of b" },
+    ]);
+    expect(showError).toHaveBeenCalled();
+    expect({
+      route: currentPath(),
+      shown: isAce() ? ace.edit(editorEl()!).getValue() : null,
+      prompts: promptNames(),
+      kept: kept(),
+    }).toEqual({
+      route: "/files/b.txt",
+      shown: "precious edits of b",
+      prompts: [],
+      kept: null,
+    });
+    // still unsaved: Close asks again
+    escape();
+    expect(promptNames()).toEqual(["discardEditorChanges"]);
   });
 });
