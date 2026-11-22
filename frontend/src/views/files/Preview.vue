@@ -353,6 +353,18 @@ watch(route, () => {
   toggleNavigation();
 });
 
+// The table follows the file the store gets: the route changes first (e.g.
+// Back from "Edit as Text" after a save), and the file arrives after that.
+// Only the table: updatePreview() would turn audio autoplay off.
+watch(
+  () => fileStore.req,
+  (req) => {
+    if (isCsv.value && req) {
+      csvContent.value = req.rawContent ?? req.content ?? "";
+    }
+  }
+);
+
 // Specify hooks
 onMounted(async () => {
   window.addEventListener("keydown", key);

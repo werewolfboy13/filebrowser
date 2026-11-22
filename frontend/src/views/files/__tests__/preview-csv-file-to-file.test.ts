@@ -7,11 +7,13 @@
 // CSV file's rows under the new file's name (or nothing, coming from an
 // image). Now a CSV file gets a preview of its own. Images, audio and video
 // keep theirs across prev/next (its folder listing, its player state).
+// Back from "Edit as Text" to the same CSV file's table showed the rows from
+// before the save: the preview now follows the file the store gets.
 //
-// Real Files.vue, Preview, router (memory history) and api/files.ts; only
-// fetch (the server's answers), the EPUB reader and the table (which shows
-// the text it is given) are mocked.
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Real Files.vue, Preview, Editor, router (memory history) and api/files.ts;
+// only fetch (the server's answers), the EPUB reader, the toolbar animation
+// and the table (which shows the text it is given) are mocked.
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
   (window as any).FileBrowser = {
@@ -51,6 +53,9 @@ vi.mock("@/router", async () => {
   return { default: router, router };
 });
 vi.mock("vue-reader", () => ({ VueReader: { render: () => null } }));
+vi.mock("@/utils/buttons", () => ({
+  default: { loading: vi.fn(), success: vi.fn(), done: vi.fn() },
+}));
 vi.mock("@/components/files/ExtendedImage.vue", async () => {
   const { h } = await import("vue");
   return { default: { render: () => h("img", { id: "image" }) } };
@@ -75,6 +80,7 @@ import { mount, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { h } from "vue";
 import { RouterView } from "vue-router";
+import ace from "ace-builds";
 import router from "@/router";
 import i18n from "@/i18n";
 import { useAuthStore } from "@/stores/auth";
@@ -108,17 +114,31 @@ const RESOURCES: Record<string, object> = {
     items: FILES,
   },
 };
-for (const f of FILES) RESOURCES["/api/resources" + f.path] = f;
+const reset = () => {
+  for (const f of FILES) RESOURCES["/api/resources" + f.path] = f;
+};
+reset();
 
 let wrapper: VueWrapper | null = null;
 // The suite also runs on builders short of CPU: the waits are given up to
 // 10 s (and the tests 60 s).
 const waitFor = (check: () => void) => vi.waitFor(check, { timeout: 10_000 });
 const table = () => document.getElementById("csv")?.textContent;
+const editorEl = () => document.getElementById("editor");
+const isAce = () => editorEl()?.classList.contains("ace_editor") === true;
+
+beforeAll(async () => {
+  // load the editor (and Ace) once, outside the tests' time limits
+  await import("@/views/files/Editor.vue");
+}, 120_000);
 
 async function open(path: string) {
-  globalThis.fetch = vi.fn(async (url: any) => {
+  globalThis.fetch = vi.fn(async (url: any, init?: any) => {
     const path = String(url).split("?")[0];
+    if (init?.method === "PUT") {
+      RESOURCES[path] = { ...RESOURCES[path], content: String(init.body) };
+      return new Response("", { status: 200 });
+    }
     const body = RESOURCES[path];
     return body
       ? new Response(JSON.stringify(body), {
@@ -159,6 +179,7 @@ describe(
     afterEach(async () => {
       wrapper?.unmount();
       wrapper = null;
+      reset();
       await router.push("/login");
     });
 
@@ -200,6 +221,32 @@ describe(
         expect(document.getElementById("image")).not.toBe(null)
       );
       expect(preview()).toBe(first);
+    });
+    it("Back from 'Edit as Text' after a save: the table shows the saved rows", async () => {
+      await open("/files/a.csv");
+      await waitFor(() => expect(table()).toBe("a1,a2"));
+
+      await router.push("/files/a.csv?edit=true");
+      await waitFor(() => {
+        expect(isAce()).toBe(true);
+        expect(ace.edit(editorEl()!).getValue()).toBe("a1,a2");
+      });
+      ace.edit(editorEl()!).setValue("a1,a2\nnew,row");
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true })
+      );
+      await waitFor(() =>
+        expect(
+          (RESOURCES["/api/resources/a.csv"] as { content: string }).content
+        ).toBe("a1,a2\nnew,row")
+      );
+
+      router.back();
+      await waitFor(() =>
+        expect(router.currentRoute.value.fullPath).toBe("/files/a.csv")
+      );
+      await arrived("a.csv");
+      await waitFor(() => expect(table()).toBe("a1,a2\nnew,row"));
     });
   }
 );
