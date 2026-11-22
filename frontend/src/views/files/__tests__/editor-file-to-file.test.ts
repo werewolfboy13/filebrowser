@@ -328,5 +328,41 @@ describe(
       const paths = (kept() ?? []).map((e: any) => e.path);
       expect(paths).not.toContain("/files/a.txt");
     });
+
+    it("a save while the new file loads leaves the new file's kept text alone", async () => {
+      sessionStorage.setItem(
+        "editor-unsaved",
+        JSON.stringify({
+          user: 1,
+          username: "alice",
+          edits: [{ path: "/files/a.txt", content: "kept for a", base: "y" }],
+        })
+      );
+      await open("/files/b.txt");
+      await shownEditor("the content of b");
+
+      hold.path = "/api/resources/a.txt";
+      const going = router.push("/files/a.txt");
+      await waitFor(() => expect(useLayoutStore().loading).toBe(true));
+      // b's save drops what was kept of b, never of a (the route by now)
+      ctrlS();
+      await waitFor(() =>
+        expect(vi.mocked(buttons.success)).toHaveBeenCalled()
+      );
+      expect(puts).toEqual([
+        { url: "/api/resources/b.txt", body: "the content of b" },
+      ]);
+      expect(kept()).toEqual([
+        { path: "/files/a.txt", content: "kept for a", base: "y" },
+      ]);
+
+      hold.path = "";
+      hold.release();
+      await going;
+      // and a's kept text is offered for a
+      await waitFor(() =>
+        expect(promptNames()).toEqual(["restoreEditorChanges"])
+      );
+    });
   }
 );
