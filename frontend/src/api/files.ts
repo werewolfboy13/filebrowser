@@ -63,7 +63,8 @@ async function resourceAction(url: string, method: ApiMethod, content?: any) {
     method,
   };
 
-  if (content) {
+  // "" too: a PUT of an emptied file sends its (empty) text
+  if (content !== undefined) {
     opts.body = content;
   }
 
@@ -76,7 +77,7 @@ export async function remove(url: string) {
   return resourceAction(url, "DELETE");
 }
 
-export async function put(url: string, content = "") {
+export async function put(url: string, content: string) {
   return resourceAction(url, "PUT", content);
 }
 

@@ -17,7 +17,7 @@
       />
 
       <action
-        v-if="authStore.user?.perm.modify"
+        v-if="authStore.user?.perm.modify && editor"
         id="save-button"
         icon="save"
         :label="t('buttons.save')"
@@ -171,6 +171,10 @@ let baseContent = "";
 // or closed with Cancel or Escape): a save of the file keeps it.
 let keptPending = false;
 
+// No editor yet (the file still loading): nothing typed, nothing to save.
+const isClean = () =>
+  editor.value === null || editor.value.session.getUndoManager().isClean();
+
 // What a forced logout keeps of this editor (see utils/unsavedEdit).
 const unsavedSource = () =>
   editor.value && !editor.value.session.getUndoManager().isClean()
@@ -225,7 +229,7 @@ onBeforeUnmount(() => {
 });
 
 onBeforeRouteUpdate((to, from, next) => {
-  if (editor.value?.session.getUndoManager().isClean()) {
+  if (isClean()) {
     next();
 
     return;
@@ -321,7 +325,7 @@ const keyEvent = (event: KeyboardEvent) => {
 };
 
 const handlePageChange = (event: BeforeUnloadEvent) => {
-  if (!editor.value?.session.getUndoManager().isClean()) {
+  if (!isClean()) {
     event.preventDefault();
     // returnValue is now depecrated, though keeping in for legacy browser support
     // https://developer.mozilla.org/en-US/docs/Web/API/BeforeUnloadEvent/returnValue
@@ -330,13 +334,16 @@ const handlePageChange = (event: BeforeUnloadEvent) => {
 };
 
 const save = async (throwError?: boolean) => {
+  // Not before the editor has the file's text (a PUT of nothing would
+  // empty the file). An emptied editor is saved: its text is "".
+  if (editor.value === null) return;
   const button = "save";
   buttons.loading("save");
 
   try {
-    const content = editor.value?.getValue();
+    const content = editor.value.getValue();
     await api.put(filePath, content);
-    baseContent = content ?? "";
+    baseContent = content;
     editor.value?.session.getUndoManager().markClean();
     if (!keptPending) dropUnsaved(filePath);
     buttons.success(button);
@@ -362,7 +369,7 @@ const decreaseFontSize = () => {
 };
 
 const close = () => {
-  if (!editor.value?.session.getUndoManager().isClean()) {
+  if (!isClean()) {
     layoutStore.showHover({
       prompt: "discardEditorChanges",
       confirm: (event: Event) => {
