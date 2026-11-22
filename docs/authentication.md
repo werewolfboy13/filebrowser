@@ -122,7 +122,14 @@ The hook must output one of the following actions:
 
 For most custom authentication flows, auth or block are used.
 
-The command has **30 seconds** to answer. After that, or as soon as the client that is logging in gives up, FileBrowser stops the command and answers the login with an error (`500`). Such a login is not counted as a wrong password. Only the command itself is stopped, not the processes it may have started, so a hook that calls a slow service should set a timeout of its own on that call.
+The command has **30 seconds** to answer. After that, or as soon as the client that is logging in gives up, FileBrowser stops the command and answers the login with an error (`500`). Only the command itself is stopped, not the processes it may have started, so a hook that calls a slow service should set a timeout of its own on that call.
+
+Whether such a login counts as a failed attempt depends on what stopped the command:
+
+- A command that ran out of its 30 seconds is **not** counted. A slow or unreachable service behind the hook locks nobody out.
+- A command that was stopped because the client gave up **is** counted, like a wrong password. Otherwise a client could give up on every login the hook does not accept at once, and guess passwords without ever being slowed down. The price is that someone who closes the login page, or whose reverse proxy gives up, while the hook is still running uses one of the five failed attempts that cost nothing; a login that succeeds forgets them.
+
+A hook should take as long to refuse a login as to accept one. Do not `sleep` after a wrong password: FileBrowser slows repeated failures down itself (after five failed attempts for a user from one address, each further one has to wait, twice as long every time, up to five minutes), and a hook that is slower to refuse tells whoever is watching the clock what the answer will be before it is given.
 
 In a container, run FileBrowser under an init process (`docker run --init`, `init: true` in Compose, or tini as the entrypoint): the processes a stopped command had started are handed to the container's first process, and when that is FileBrowser itself nothing reaps them, so they pile up as zombies until the container's process limit stops every hook from starting, and with it every login.
 

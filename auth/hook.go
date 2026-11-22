@@ -38,8 +38,19 @@ type hookCred struct {
 // either: a hook that fails for a reason of its own answers the same way.
 //
 // A hook that could not be run at all is not reported with it: nothing was
-// tested. Neither is one that was stopped before it answered (see
-// RunCommand): it said nothing about the password.
+// tested. Neither is one that was stopped because its time was over (see
+// RunCommand): a hook that is slow, or that hangs, said nothing about the
+// password.
+//
+// A hook that was stopped because the client of its login went away is
+// reported with it. That hook said nothing either, but the client did: it is
+// the client that chooses which of its logins it gives up on, and one that
+// gives up on every login that is not accepted within the time the hook
+// takes to accept the right password is told what a refusal would have told
+// it. Were these logins not counted, it could guess without ever being
+// slowed down, against any hook that takes longer to refuse than to accept.
+// The price is that a user who leaves the login page while the hook is still
+// running has used one of the failed attempts that cost nothing.
 var ErrHookRefused = errors.New("the authentication hook did not accept the login")
 
 // hookTimeout is how long the hook command gets to answer, unless
@@ -134,8 +145,13 @@ func (a *HookAuth) LoginPage() bool {
 // client went away) or when it has not answered within the time it is given
 // (see hookTimeout), whichever comes first. The error it then returns is not
 // an *exec.ExitError, although that is what running a command that was
-// stopped gives: the hook did not end with an error status of its own, and
-// its login is not one the hook refused.
+// stopped gives: the hook did not end with an error status of its own.
+//
+// Which of the two stopped it decides whether its login is a failed attempt.
+// One that ran out of time is not: the error is not ErrHookRefused. One
+// whose client went away is, and the error is ErrHookRefused: see there for
+// why. A command that was never started, because ctx had ended already, is
+// neither: the error is that of ctx.
 func (a *HookAuth) RunCommand(ctx context.Context) (string, error) {
 	command := strings.Split(a.Command, " ")
 
@@ -163,6 +179,10 @@ func (a *HookAuth) RunCommand(ctx context.Context) (string, error) {
 	cmd.Env = append(cmd.Env, fmt.Sprintf("PASSWORD=%s", a.Cred.Password))
 	out, err := cmd.Output()
 	switch {
+	case err != nil && stopped.Load() && errors.Is(ctx.Err(), context.Canceled):
+		// The request ended first, and not the time of the hook, which ends
+		// ctx with context.DeadlineExceeded: the client gave up on the hook.
+		return "", fmt.Errorf("%w: its client went away before it answered: %w", ErrHookRefused, ctx.Err())
 	case err != nil && stopped.Load():
 		return "", fmt.Errorf("the authentication hook was stopped before it answered: %w", ctx.Err())
 	case errors.Is(err, exec.ErrWaitDelay):
