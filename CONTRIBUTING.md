@@ -85,9 +85,56 @@ Documentation lives in [`docs`](docs) as plain Markdown and is no longer built i
 task docs:cli:generate
 ```
 
+## Continuous Integration
+
+The workflows in [`.github/workflows`](.github/workflows) lint, test and build every push to `master` and `modernize`, and every pull request from a branch of this repository, whose title they check as well. They run on one self-hosted runner, and only for those who may push to the repository.
+
+**A pull request from a fork runs nothing.** It gets no result from the workflows until a maintainer has read it and pushed its branch to this repository, so check it yourself before you open it:
+
+```bash
+# The server, as the Lint Backend and Test jobs do. The linter is golangci-lint v2.15.0.
+golangci-lint run
+go test --race ./...
+
+# The web client, as the Lint Frontend and Test Frontend jobs do.
+cd frontend
+pnpm install --frozen-lockfile
+pnpm run lint
+pnpm run test
+cd ..
+
+# The whole build, as the Build job does.
+task build
+
+# The image, as the Build Docker image job does. It needs Docker and nothing else, and runs
+# the tests of the server and the web client in the build, but neither linter.
+task build:docker
+```
+
+The title of a pull request follows [Conventional Commits](https://www.conventionalcommits.org), as in `fix: keep the session after a rename`.
+
+### The Runner
+
+This part is for maintainers. Every job of both workflows runs on the self-hosted runner whose label is in the repository variable `BUILD_RUNNER`, and on no runner of GitHub. While the variable is not set, every job is skipped. A job also runs only for a push, or for a pull request from a branch of this repository.
+
+**The conditions do not protect the runner by themselves.** They are in the workflow files, and a pull request from a fork runs the workflow files as it has changed them. What keeps such a pull request off the runner is the repository's setting that a maintainer approves the workflow runs of all outside contributors (Settings, Actions, General, "Approval for running fork pull request workflows from contributors": "Require approval for all external contributors"), together with never approving a run of a pull request that changes anything in `.github/`. A runner that is thrown away after each job, or that runs each job in a container or a virtual machine of its own, limits what a wrong approval can do. Read a contributor's changes before pushing their branch to this repository too: there its jobs run on the runner, with the Docker Hub token.
+
+The runner needs:
+
+- **Linux**, and the GitHub Actions runner in a current version: the actions run on Node.js 24, which comes with it. The jobs were written for x86-64. It is registered for this repository, with the label `self-hosted`, which it gets by default, and with the label that `BUILD_RUNNER` names.
+- **`bash`, `git`, `tar`, `gzip` and `find`.**
+- **A C compiler and the headers of the C library**, such as the `gcc` and `libc6-dev` packages: `go test --race` needs them.
+- **Docker, which the runner's account may use**, through the default socket or the one in `DOCKER_HOST`. The jobs keep Docker's settings in a directory of their own, so that no login stays in `~/.docker/config.json`: a Docker context chosen there is not seen, and Buildx has to be installed for every user, as the `docker-buildx-plugin` package does, not only in `~/.docker/cli-plugins`.
+- **Permission to start privileged containers.** Buildx's builder is one. The release job builds the image for `linux/amd64` and `linux/arm64`, and registers the QEMU emulators for the platform that is not the runner's own with the kernel, from another one.
+- **Access to the internet**: GitHub, Docker Hub, `dhi.io`, the Go module proxy, the npm registry, and the places that Go and Node.js are downloaded from.
+
+Go, Node.js, pnpm, Task, golangci-lint and GoReleaser do not have to be installed: the jobs fetch the versions they need.
+
+What an account that may use Docker can do on a machine, a job can do: treat the runner's account as one with root. The jobs leave no login behind, and remove the Buildx builder they start, which is named `filebrowser-ci-` and the number of the run. They do keep what makes the next job faster, in the runner's directories and in the home directory of its account: the versions of Go and Node.js, the Go modules and the build cache, the pnpm store, the linter's cache, and the images of BuildKit and of the emulators. These grow with every new version, so clear them from time to time. The log of every run is public, and shows the name of the runner and the paths of its directories.
+
 ## Release
 
-A version is released by pushing its tag. The release job in [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) then builds the binaries and puts them on the fork's [releases page](https://github.com/werewolfboy13/filebrowser/releases), and builds the Docker image and pushes it to the name in the repository variable `IMAGE_NAME`. Without that variable the job publishes nothing. The [README](README.md#maintainer-notes-releasing) lists what has to be set up in the repository first.
+A version is released by pushing its tag. The release job in [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) then builds the binaries and puts them on the fork's [releases page](https://github.com/werewolfboy13/filebrowser/releases), and builds the Docker image and pushes it to Docker Hub, under the name in the repository variable `IMAGE_NAME`, which is `werewolfboy13/filebrowser`. Without that variable the job publishes nothing, and like every job it runs on the self-hosted runner only: see [The Runner](#the-runner). The [README](README.md#maintainer-notes-releasing) lists what has to be set up in the repository first.
 
 The tag is made with Task, which runs [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) 13.3.0. It needs Go and pnpm. Run it on the branch that is released, with everything committed:
 

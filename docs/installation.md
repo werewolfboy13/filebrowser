@@ -35,7 +35,7 @@ File Browser is now up and running. Read the ["First Boot"](#first-boot) section
 
 The image is built from this repository, with the [Dockerfile](../Dockerfile) at its root. It is not the `filebrowser/filebrowser` image of the original project, and it does not behave the same in every respect: read [Coming From the Original Image](#coming-from-the-original-image) before you replace one with the other.
 
-A released version of this fork has its image at `ghcr.io/werewolfboy13/filebrowser`, which can take the place of `filebrowser:local` in the commands below. There is no release yet. Until there is one, and for anything newer than the last one, build the image.
+A released version of this fork has its image on Docker Hub, as `werewolfboy13/filebrowser`. It is pulled with `docker pull werewolfboy13/filebrowser:<tag>`, without a login, and can take the place of `filebrowser:local` in the commands below. There is no release yet. Until there is one, and for anything newer than the last one, build the image.
 
 ### Building the Image
 
