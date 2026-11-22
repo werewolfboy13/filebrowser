@@ -13,12 +13,47 @@ on:
 permissions:
   contents: read
 
+# One run at a time for a branch or a pull request: a newer run takes the place of the one before
+# it, so the one runner is not kept busy with a commit that has been replaced. The run of a
+# version tag is in a group of its own and is never cancelled, so a release in progress finishes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+# Every script is run by bash, with `-eo pipefail`, and a runner without bash fails at once.
+defaults:
+  run:
+    shell: bash
+
+# Where the jobs run, and for whom. Every job starts with the same lines, and they are the same in
+# lint-pr.yaml:
+#
+#   if:       the repository variable BUILD_RUNNER is set (Settings, Secrets and variables,
+#             Actions, Variables), and the run comes from someone who may push to this repository:
+#             a push, or a pull request from a branch of this repository. A pull request from a
+#             fork runs nothing. Without the variable every job is skipped, so a repository whose
+#             runner is not set up runs nothing either. A job with more conditions has them after
+#             these, joined with `&&`.
+#   runs-on:  the self-hosted runner that carries the label in BUILD_RUNNER. `self-hosted` is the
+#             label that every self-hosted runner has and that none of GitHub's own has, so no
+#             value of the variable sends a job to a runner of GitHub. The label after `||` is one
+#             that no runner has: it only keeps the line valid in a job that is skipped.
+#   timeout-minutes: a job that hangs gives the runner back.
+#
+# The condition is in this file, and a pull request can change this file. What keeps a pull
+# request from a fork off the runner is the repository's setting that a maintainer approves its
+# runs first: see CONTRIBUTING.md.
+#
 # Actions are pinned to a commit, with the version it belongs to after it, so that a tag that is
 # moved later does not change what runs here.
 jobs:
   lint-frontend:
     name: Lint Frontend
-    runs-on: ubuntu-latest
+    if: >-
+      vars.BUILD_RUNNER != '' &&
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, "${{ vars.BUILD_RUNNER || 'no-runner-configured' }}"]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -36,7 +71,11 @@ jobs:
 
   test-frontend:
     name: Test Frontend
-    runs-on: ubuntu-latest
+    if: >-
+      vars.BUILD_RUNNER != '' &&
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, "${{ vars.BUILD_RUNNER || 'no-runner-configured' }}"]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -54,7 +93,11 @@ jobs:
 
   lint-backend:
     name: Lint Backend
-    runs-on: ubuntu-latest
+    if: >-
+      vars.BUILD_RUNNER != '' &&
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, "${{ vars.BUILD_RUNNER || 'no-runner-configured' }}"]
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -68,7 +111,11 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    if: >-
+      vars.BUILD_RUNNER != '' &&
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, "${{ vars.BUILD_RUNNER || 'no-runner-configured' }}"]
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -79,7 +126,11 @@ jobs:
 
   build:
     name: Build
-    runs-on: ubuntu-latest
+    if: >-
+      vars.BUILD_RUNNER != '' &&
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, "${{ vars.BUILD_RUNNER || 'no-runner-configured' }}"]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -105,12 +156,16 @@ jobs:
   docker:
     name: Build Docker image
     # A version tag is built by the release job.
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/modernize'
-    runs-on: ubuntu-latest
+    if: >-
+      vars.BUILD_RUNNER != '' &&
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name == 'pull_request' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/modernize')
+    runs-on: [self-hosted, "${{ vars.BUILD_RUNNER || 'no-runner-configured' }}"]
+    timeout-minutes: 45
     env:
-      # The Dockerfile's base images need a login to dhi.io. The secrets for it are not given to
-      # pull requests from forks, and a repository may not have them at all: the image is then
-      # not built, and the job says so instead of failing.
+      # The Dockerfile's base images need a login to dhi.io. A repository may not have the
+      # secrets for it, and a pull request that Dependabot opens is not given them: the image is
+      # then not built, and the job says so instead of failing.
       DHI_LOGIN: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       - name: No login for Docker Hardened Images
@@ -150,8 +205,12 @@ jobs:
     # job's own token. A name without a registry, such as owner/filebrowser, is one on Docker Hub.
     # Without the variable nothing is released, so a tag pushed to a fork that was not set up
     # publishes nothing.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.IMAGE_NAME != ''
-    runs-on: ubuntu-latest
+    if: >-
+      vars.BUILD_RUNNER != '' &&
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.IMAGE_NAME != ''
+    runs-on: [self-hosted, "${{ vars.BUILD_RUNNER || 'no-runner-configured' }}"]
+    timeout-minutes: 90
     permissions:
       # GoReleaser creates the GitHub release.
       contents: write

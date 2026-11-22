@@ -11,10 +11,24 @@ on:
 permissions:
   pull-requests: write
 
+# One run at a time for a pull request: a newer run takes the place of the one before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# This workflow is the one on the default branch, whatever the pull request holds, and it reads
+# the title of the pull request and nothing else: it checks out no code and runs none of it.
 jobs:
   main:
     name: Validate Title
-    runs-on: ubuntu-latest
+    # The same lines as every job of ci.yaml, which explains them: only with the repository
+    # variable BUILD_RUNNER set, on the self-hosted runner it names, and only for a pull request
+    # from a branch of this repository. A pull request from a fork runs nothing.
+    if: >-
+      vars.BUILD_RUNNER != '' &&
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, "${{ vars.BUILD_RUNNER || 'no-runner-configured' }}"]
+    timeout-minutes: 5
     steps:
       - uses: amannn/action-semantic-pull-request@2252a14e810aa9b85c2d560bd7070c802206ecf6 # v6.1.2
         id: lint_pr_title
