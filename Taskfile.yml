@@ -56,8 +56,9 @@ tasks:
       # The fork's first tag is a candidate. From the original project's last tag, this task would
       # tag v3.0.0 at once, a full release, and in a clone without tags v2.0.0. So it runs only
       # from a version tag of the fork, a v3 or later.
-      - sh: 'case "$(git describe --tags --abbrev=0 --match "v*" 2> /dev/null)" in v[3-9]*|v[1-9][0-9]*) ;; *) false ;; esac'
-        msg: "The last version tag is not one of this fork, a v3 or later. If this clone has no tags, fetch the tags first: git fetch --tags. If the last one is the original project's, a v2, this fork has no release candidate yet, and its first tag is one. Tag it first: task release:rc VERSION=3.0.0"
+      # Only a tag that is a version counts: the tool passes over any other, such as a moving v3.
+      - sh: 'git describe --tags --abbrev=0 --match "v*" 2> /dev/null | grep -Eq "^v([3-9]|[1-9][0-9]+)\.[0-9]+\.[0-9]+(-.+)?$"'
+        msg: "The last version tag is not one of this fork, a v3 or later. If this clone has no tags, run `git fetch --tags` first, or in a shallow clone `git fetch --tags --unshallow`, which also fetches the commits that the tags are on. If the last one is the original project's, a v2, this fork has no release candidate yet, and its first tag is one. Tag it first: task release:rc VERSION=3.0.0"
     cmds:
       - task: release:check
       - task: release:docs
@@ -101,8 +102,8 @@ tasks:
         msg: "A release needs Go and pnpm on the PATH."
       - sh: 'git diff --quiet HEAD -- CHANGELOG.md'
         msg: "CHANGELOG.md has changes that are not committed, which a failed run leaves behind. Undo them first: git restore --staged --worktree CHANGELOG.md"
-      - sh: '! git log -1 --format=%s | grep -q "^chore(release): " || git describe --exact-match --tags HEAD > /dev/null 2>&1'
-        msg: "The last commit is a release commit without a tag, which a run that failed at its tag leaves behind: another run would put its section in CHANGELOG.md a second time. Tag that commit by hand, with the version in its subject, such as: git tag -a{{if .SIGN}} {{.SIGN}}{{end}} v3.0.0-rc.1 -m 'chore(release): 3.0.0-rc.1'. Or take the commit back and run the task again: git reset --keep HEAD^"
+      - sh: 's=$(git log -1 --format=%s); case "$s" in "chore(release): "[0-9]*) git tag --points-at HEAD | grep -qxF "v${s#chore(release): }" ;; esac'
+        msg: "The last commit is a release commit without the tag of its version, which a run that failed at its tag leaves behind: another run would put its section in CHANGELOG.md a second time. Tag that commit by hand, with the version in its subject, as in `git tag -a{{if .SIGN}} {{.SIGN}}{{end}} v3.0.0-rc.1 -m 'chore(release): 3.0.0-rc.1'` for 3.0.0-rc.1. Or take the commit back with `git reset --keep HEAD~1` and run the task again. If Git then says that a file is not up to date, run `git status` and repeat the command"
       - sh: '[ -z "{{.SIGN}}" ] || git commit-tree -S -m "signing check" "HEAD^{tree}" < /dev/null > /dev/null 2>&1'
         msg: "Git cannot sign a commit here, and a release is signed. It needs a signing key in the Git configuration, which CONTRIBUTING.md describes under Release. This shows Git's error and changes nothing: git commit-tree -S -m test 'HEAD^{tree}'"
 

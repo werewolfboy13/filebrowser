@@ -211,6 +211,83 @@ func healthTargetFor(listen listenSettings) healthTarget {
 	return healthTarget{url: scheme + "://" + net.JoinHostPort(host, listen.port) + path}
 }
 
+// dialHealthAddress connects to one of the addresses of a recorded host name
+// (healthTarget.addresses). It is a variable so that the tests can have an
+// address that never answers, which no machine they run on is sure to have.
+var dialHealthAddress = func(ctx context.Context, network, address string) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, network, address)
+}
+
+// dialFirst connects to all of addresses at once, and returns the first
+// connection that is made. It fails when no address takes one, with the
+// errors of all of them, or when ctx ends before that.
+//
+// The server listens on one of the addresses. The others mostly refuse the
+// connection at once, but one can also not answer at all: an address whose
+// packets a firewall drops, or ::1 where IPv6 is set up and does not work.
+// Tried one after the other, such an address used up the time of the whole
+// check, and a server that was up on the next address was reported as
+// unhealthy. So no address waits for another one.
+func dialFirst(
+	ctx context.Context,
+	dial func(ctx context.Context, network, address string) (net.Conn, error),
+	network string,
+	addresses []string,
+) (net.Conn, error) {
+	// Not a connection that is nil without an error.
+	if len(addresses) == 0 {
+		return nil, errors.New("no address to connect to")
+	}
+
+	type attempt struct {
+		index int
+		conn  net.Conn
+		err   error
+	}
+
+	// With room for every attempt, so that none is kept from ending by a
+	// result that is not waited for.
+	attempts := make(chan attempt, len(addresses))
+	ctx, cancel := context.WithCancel(ctx)
+	for i, address := range addresses {
+		go func() {
+			conn, err := dial(ctx, network, address)
+			attempts <- attempt{index: i, conn: conn, err: err}
+		}()
+	}
+
+	// When this returns, the attempts that are still under way are given up,
+	// and a connection that one of them makes all the same is closed.
+	waiting := len(addresses)
+	defer func() {
+		cancel()
+		go func() {
+			for ; waiting > 0; waiting-- {
+				if late := <-attempts; late.conn != nil {
+					late.conn.Close()
+				}
+			}
+		}()
+	}()
+
+	errs := make([]error, len(addresses))
+	for waiting > 0 {
+		select {
+		case result := <-attempts:
+			waiting--
+			if result.err == nil {
+				return result.conn, nil
+			}
+			errs[result.index] = result.err
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		}
+	}
+
+	// In the order of the addresses, whichever failed first.
+	return nil, errors.Join(errs...)
+}
+
 func checkHealth(ctx context.Context, target healthTarget, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -230,20 +307,20 @@ func checkHealth(ctx context.Context, target healthTarget, timeout time.Duration
 			return (&net.Dialer{}).DialContext(ctx, "unix", target.socket)
 		}
 	case target.addresses != "":
-		// One after the other: the server listens on one of them, and the
-		// others refuse the connection at once.
-		transport.DialContext = func(ctx context.Context, network, address string) (conn net.Conn, err error) {
+		// The check's own context, and not the one the transport hands over,
+		// which does not end with the request: the attempts must not outlast
+		// the check.
+		dial := dialHealthAddress
+		transport.DialContext = func(_ context.Context, network, address string) (net.Conn, error) {
 			_, port, err := net.SplitHostPort(address)
 			if err != nil {
 				return nil, err
 			}
-			for _, ip := range strings.Fields(target.addresses) {
-				conn, err = (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(ip, port))
-				if err == nil {
-					return conn, nil
-				}
+			addresses := strings.Fields(target.addresses)
+			for i, ip := range addresses {
+				addresses[i] = net.JoinHostPort(ip, port)
 			}
-			return nil, err
+			return dialFirst(ctx, dial, network, addresses)
 		}
 	}
 
