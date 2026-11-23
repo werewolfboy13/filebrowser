@@ -64,19 +64,43 @@ func hookLogin(ctx context.Context, t *testing.T) *http.Request {
 	return r
 }
 
-// stopped checks the error of a login whose hook was stopped: it is an
-// error, it says why, and it is neither a wrong password nor a refusal by
-// the hook, which the login counts as failed guesses.
-func stopped(t *testing.T, err, cause error) {
+// timedOut checks the error of a login whose hook was stopped because its
+// time was over: it is an error, it says why, and it is neither a wrong
+// password nor a refusal by the hook, which the login counts as failed
+// guesses. A hook that is slow, or that hangs, says nothing about the
+// password.
+func timedOut(t *testing.T, err error) {
 	t.Helper()
 	var exit *exec.ExitError
 	switch {
 	case err == nil:
 		t.Error("a login whose hook was stopped was let in")
 	case errors.Is(err, ErrHookRefused), errors.Is(err, os.ErrPermission), errors.As(err, &exit):
-		t.Errorf("a hook that was stopped is reported as one that refused the login: %v", err)
-	case !errors.Is(err, cause):
-		t.Errorf("the error of a hook that was stopped is %q, want it to say %q", err, cause)
+		t.Errorf("a hook that was stopped when its time was over is reported as one that refused the login: %v", err)
+	case !errors.Is(err, context.DeadlineExceeded):
+		t.Errorf("the error of a hook that was stopped is %q, want it to say %q", err, context.DeadlineExceeded)
+	}
+}
+
+// givenUpOn checks the error of a login whose hook was stopped because its
+// request ended: the client went away. It is an error, it says why, and it
+// is counted like a refusal by the hook (ErrHookRefused), without being
+// reported as a wrong password or as an error status of the hook's own. A
+// client chooses which logins it gives up on, and gives up on those that are
+// not accepted fast enough: were they not counted, it could guess without
+// being slowed down.
+func givenUpOn(t *testing.T, err error) {
+	t.Helper()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		t.Error("a login whose hook was stopped was let in")
+	case !errors.Is(err, ErrHookRefused):
+		t.Errorf("a hook that was stopped when its client went away is not reported as a failed attempt (ErrHookRefused): %v", err)
+	case errors.Is(err, os.ErrPermission), errors.As(err, &exit):
+		t.Errorf("a hook that was stopped is reported as one that said the password is wrong, or that ended by itself: %v", err)
+	case !errors.Is(err, context.Canceled):
+		t.Errorf("the error of a hook that was stopped is %q, want it to say %q", err, context.Canceled)
 	}
 }
 
@@ -90,12 +114,15 @@ echo hook.action=auth
 	took := within(t, 20*time.Second, "the login", func() {
 		_, err = a.Auth(hookLogin(context.Background(), t), &mockUserStore{users: map[string]*users.User{}}, &settings.Settings{}, &settings.Server{Root: t.TempDir()})
 	})
-	stopped(t, err, context.DeadlineExceeded)
+	timedOut(t, err)
 	if took < a.Timeout {
 		t.Errorf("the hook was stopped after %v, before its %v were over", took, a.Timeout)
 	}
 }
 
+// The other way a hook is stopped: by the end of its request. The hook is
+// the same as above, and what differs is who stopped it. This one counts as
+// a failed attempt; the one above, stopped by its own time limit, does not.
 func TestHookOfARequestThatIsOverIsStopped(t *testing.T) {
 	started := filepath.Join(t.TempDir(), "started")
 	script, _ := hungHook(t, `: > '`+started+`'
@@ -124,7 +151,34 @@ echo hook.action=auth
 	if _, statErr := os.Stat(started); statErr != nil {
 		t.Fatal("the hook was not running when the request ended")
 	}
-	stopped(t, err, context.Canceled)
+	givenUpOn(t, err)
+}
+
+// A request that was over before its hook was started does not start it. No
+// password was put to any test, so it is not a failed attempt either: it is
+// the request that failed.
+func TestHookOfARequestThatWasOverBeforeItStartedIsNotRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell script as the hook")
+	}
+	ran := filepath.Join(t.TempDir(), "ran")
+	a := &HookAuth{Command: writeHookScript(t, ": > '"+ran+"'\nexit 1\n")}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the client is gone already
+
+	_, err := a.Auth(hookLogin(ctx, t), &mockUserStore{users: map[string]*users.User{}}, &settings.Settings{}, &settings.Server{Root: t.TempDir()})
+	if _, statErr := os.Stat(ran); statErr == nil {
+		t.Error("the hook of a request that was over was run")
+	}
+	switch {
+	case err == nil:
+		t.Error("a login whose request was over was let in")
+	case errors.Is(err, ErrHookRefused), errors.Is(err, os.ErrPermission):
+		t.Errorf("a hook that was never run is reported as one that refused the login: %v", err)
+	case !errors.Is(err, context.Canceled):
+		t.Errorf("the error of a hook that was never run is %q, want it to say %q", err, context.Canceled)
+	}
 }
 
 // Stopping the hook stops the command that was started, and not what it
@@ -146,7 +200,7 @@ func TestHookIsNotWaitedForLongerThanItsChildren(t *testing.T) {
 
 		var err error
 		within(t, 20*time.Second, "the hook", func() { _, err = a.RunCommand(context.Background()) })
-		stopped(t, err, context.DeadlineExceeded)
+		timedOut(t, err)
 	})
 
 	// The hook has answered and ended by itself: its answer stands.
@@ -187,9 +241,11 @@ func TestHookThatAnswersInTimeIsNotStopped(t *testing.T) {
 // stopped when its request ended before RunCommand returned: the hook has
 // ended with an error status, a process it left behind still has its output,
 // and the client goes away while that output is waited for. The login of a
-// stopped hook is not counted as a failed guess, and the right password was
-// let in all the same, so a client that left at that moment could guess
-// without ever being slowed down.
+// stopped hook was not counted as a failed guess then, and the right
+// password was let in all the same, so a client that left at that moment
+// could guess without ever being slowed down. A hook that has answered is
+// not one that was stopped, whatever its answer: the refusal counts as the
+// refusal it is, and the right password still gets its user.
 func TestRefusalAHookMadeBeforeItsClientWentAwayIsCounted(t *testing.T) {
 	login := func(password string) (*users.User, error) {
 		// The hook decides by its exit status, and notes that it has, just

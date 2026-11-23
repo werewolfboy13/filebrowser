@@ -289,10 +289,12 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 			return http.StatusForbidden, nil
 		case errors.Is(err, fbAuth.ErrHookRefused):
 			// The hook was given the password and did not accept it, without
-			// saying that it is wrong. For the client that is still an error
-			// of the server; for the limiter it is a guess that failed, or
-			// guessing through a hook that answers this way would never be
-			// slowed down.
+			// saying that it is wrong; or it was stopped before it answered
+			// because the client gave up on it. For the client that is still
+			// an error of the server; for the limiter it is a guess that
+			// failed, or guessing through a hook that answers this way, or
+			// that a client gives up on when it does not accept at once,
+			// would never be slowed down.
 			done(attemptFailed)
 			return http.StatusInternalServerError, err
 		case errors.Is(err, fberrors.ErrUserChanged):

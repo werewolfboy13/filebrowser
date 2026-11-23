@@ -201,6 +201,15 @@ func TestLoginWhoseClientWentAwayGivesItsTurnBack(t *testing.T) {
 		}
 	}
 
+	// Each of them is counted as a failed attempt: see
+	// TestHookThatWasStoppedIsCountedOnlyWhenItsClientWentAway. There were
+	// as many as the address has turns, which is fewer than the failures
+	// that cost nothing, so the user who comes back is not kept waiting.
+	e.loginsSettled(addr)
+	if n := e.loginFailures(addr, "bob"); n != loginWorkPerAddress {
+		t.Errorf("the limiter counted %d of the %d logins whose clients went away", n, loginWorkPerAddress)
+	}
+
 	hook.recover()
 	e.limits.loginWork.setWait(300 * time.Millisecond)
 	if code, h := e.loginFrom(addr, "bob", fullEnvUserPassword); code != http.StatusOK {
@@ -208,42 +217,90 @@ func TestLoginWhoseClientWentAwayGivesItsTurnBack(t *testing.T) {
 	}
 }
 
-// A hook that was stopped said nothing about the password. Its login is not
-// a failed guess, and the user does not have to wait, once the hook answers
-// again, for the logins that failed because it did not.
-func TestLoginsWhoseHookWasStoppedAreNotCountedAsWrongPasswords(t *testing.T) {
-	e := newFullEnv(t)
-	hook := e.useHangingHook(100 * time.Millisecond)
-	defer hook.release()
+// hung is the number of hooks that were started and hang.
+func (h *hangingHook) hung() int {
+	running, _ := filepath.Glob(filepath.Join(h.dir, "running-*"))
+	return len(running)
+}
 
-	const addr = "198.51.100.40"
-	for i := 0; i < limiterFreeFailures+2; i++ {
-		answer := make(chan int, 1)
-		go func() {
-			code, _ := e.loginFrom(addr, "bob", fullEnvUserPassword)
-			answer <- code
-		}()
-		select {
-		case code := <-answer:
-			if code != http.StatusInternalServerError {
-				t.Fatalf("login %d with a hook that does not answer = %d, want 500", i+1, code)
+// What a hook that was stopped says about the password depends on what
+// stopped it, and so does whether its login is a failed attempt.
+func TestHookThatWasStoppedIsCountedOnlyWhenItsClientWentAway(t *testing.T) {
+	// Its time was over: the service it asks is slow, or down. That says
+	// nothing about the password, and the user does not have to wait, once
+	// the hook answers again, for the logins that failed because it did
+	// not.
+	t.Run("its time was over", func(t *testing.T) {
+		e := newFullEnv(t)
+		hook := e.useHangingHook(100 * time.Millisecond)
+		defer hook.release()
+
+		const addr = "198.51.100.40"
+		for i := 0; i < limiterFreeFailures+2; i++ {
+			answer := make(chan int, 1)
+			go func() {
+				code, _ := e.loginFrom(addr, "bob", fullEnvUserPassword)
+				answer <- code
+			}()
+			select {
+			case code := <-answer:
+				if code != http.StatusInternalServerError {
+					t.Fatalf("login %d with a hook that does not answer = %d, want 500", i+1, code)
+				}
+			case <-time.After(15 * time.Second):
+				t.Fatalf("login %d is still waiting for a hook that had 100ms to answer", i+1)
 			}
-		case <-time.After(15 * time.Second):
-			t.Fatalf("login %d is still waiting for a hook that had 100ms to answer", i+1)
 		}
-	}
 
-	e.limits.login.mu.Lock()
-	state := e.limits.login.keys[limiterKey("login", addr, "bob")]
-	e.limits.login.mu.Unlock()
-	if state != nil {
-		t.Errorf("the limiter kept something of logins that were never checked: %+v", state)
-	}
+		e.limits.login.mu.Lock()
+		state := e.limits.login.keys[limiterKey("login", addr, "bob")]
+		e.limits.login.mu.Unlock()
+		if state != nil {
+			t.Errorf("the limiter kept something of logins that were never checked: %+v", state)
+		}
 
-	hook.recover()
-	if code, h := e.loginFrom(addr, "bob", fullEnvUserPassword); code != http.StatusOK {
-		t.Errorf("login once the hook answers again = %d (Retry-After %q), want 200", code, h.Get("Retry-After"))
-	}
+		hook.recover()
+		if code, h := e.loginFrom(addr, "bob", fullEnvUserPassword); code != http.StatusOK {
+			t.Errorf("login once the hook answers again = %d (Retry-After %q), want 200", code, h.Get("Retry-After"))
+		}
+	})
+
+	// Its client went away: the same hook, hanging the same way, with the
+	// time a hook has in production. It is the client that chose to give
+	// up on this login, and a client that could do so for free would give
+	// up on every login that is not accepted at once: see
+	// TestWrongGuessesAClientGivesUpOnBeforeASlowHookRefusesAreCounted.
+	// Each one is a failed attempt, and the address is turned away after as
+	// many as after wrong passwords.
+	t.Run("its client went away", func(t *testing.T) {
+		e := newFullEnv(t)
+		clock := e.useFakeClock()
+		hook := e.useHangingHook(0)
+		defer hook.release()
+
+		const addr = "198.51.100.41"
+		for i := 1; i <= limiterFreeFailures; i++ {
+			code, body := e.impatientLogin(addr, "bob", fullEnvUserPassword, func() bool { return hook.hung() >= i })
+			if code != 0 {
+				t.Fatalf("login %d with a hook that hangs = %d %q, want no answer before its client gave up", i, code, body)
+			}
+			e.loginsSettled(addr)
+			if n := e.loginFailures(addr, "bob"); n != i {
+				t.Fatalf("the limiter counted %d of %d logins whose client gave up on the hook", n, i)
+			}
+		}
+
+		// The hook answers again. The logins that were given up on are
+		// waited for like wrong passwords, and no longer.
+		hook.recover()
+		if code, _ := e.loginFrom(addr, "bob", fullEnvUserPassword); code != http.StatusTooManyRequests {
+			t.Errorf("login after %d that were given up on = %d, want 429", limiterFreeFailures, code)
+		}
+		clock.Advance(limiterBaseDelay)
+		if code, h := e.loginFrom(addr, "bob", fullEnvUserPassword); code != http.StatusOK {
+			t.Errorf("login once the wait is over = %d (Retry-After %q), want 200", code, h.Get("Retry-After"))
+		}
+	})
 }
 
 // A hook that takes a while, well within its time, is waited for as before.
